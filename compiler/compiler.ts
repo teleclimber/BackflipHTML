@@ -52,9 +52,11 @@ export function generateStringStack(in_str:string) :Promise<RootTNode> {
 
 		const rewriteStream = new RewritingStream();
 
+		const void_elements = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
+
 		const b_attrs = ['b-for', 'b-if', 'b-else-if', 'b-else'];
 
-		rewriteStream.on('startTag', (tag, raw) => {
+		rewriteStream.on('startTag', (tag, raw) => { try {
 			const b_as = tag.attrs.filter((attr) => b_attrs.includes(attr.name));
 			if( b_as.length >1 ) throw new Error("more than one b-attr");
 			if( b_as.length === 1 ) {
@@ -67,11 +69,13 @@ export function generateStringStack(in_str:string) :Promise<RootTNode> {
 
 					// make a node from the tag
 					let tag_str = `<${tag.tagName}`;
-					tag_str += tag.attrs.filter( (attr) => attr.name !== 'b-for').map( attr => `${attr.name}="${attr.value}"` ).join(' ');
+					const other_attrs = tag.attrs.filter( (attr) => attr.name !== 'b-for').map( attr => `${attr.name}="${attr.value}"` ).join(' ');
+					if( other_attrs ) tag_str += ' ' + other_attrs;
 					tag_str += '>';
 					// TODO figure ot how to deal with variable attributes! :abc="" and abc="{{}}" or whatever
 					
 					const pieces = b_a.value.split(" in ");
+					if( pieces.length !== 2 ) throw new Error(`b-for value must be in the form "item in items", got: "${b_a.value}"`);
 					const iterable_str = pieces[1].trim();
 					const iterable_parsed = interpretBackcode(iterable_str);
 					const value_name = pieces[0].trim();
@@ -95,7 +99,7 @@ export function generateStringStack(in_str:string) :Promise<RootTNode> {
 					cur_tnode.parent.tnodes.push(for_node);
 					cur_tnode = inner_tag;
 
-					if( !tag.selfClosing ) {	// if self-closint we got to handle this in a special way no?
+					if( !tag.selfClosing && !void_elements.has(tag.tagName) ) {	// if self-closing or void we skip
 						tag_stack.push({
 							tag: tag.tagName,
 							tnode: inner_tag
@@ -112,12 +116,12 @@ export function generateStringStack(in_str:string) :Promise<RootTNode> {
 				// OR check if current node is raw first
 				// if not close then create new raw node.
 				cur_tnode = pushRaw(cur_tnode, raw);
-				if( !tag.selfClosing ) {
+				if( !tag.selfClosing && !void_elements.has(tag.tagName) ) {
 					tag_stack.push({tag: tag.tagName});
 				}
 			}
-		});
-		rewriteStream.on('endTag', (tag, raw) => {
+		} catch(e) { reject(e); } });
+		rewriteStream.on('endTag', (tag, raw) => { try {
 			const matchTag = tag_stack.pop();
 			if( !matchTag ) throw new Error("popped the last tagMatcher prematurely");
 			if( matchTag.tag !== tag.tagName ) throw new Error(`mismatched start/end tags: ${matchTag.tag} ${tag.tagName} `);
@@ -129,25 +133,28 @@ export function generateStringStack(in_str:string) :Promise<RootTNode> {
 				if( !matchTag.tnode.parent ) throw new Error("expected a parent");
 				cur_tnode = matchTag.tnode.parent as TNode;
 			}
-		});
+		} catch(e) { reject(e); } });
 
-		rewriteStream.on('text', (_, raw:string) => {
+		rewriteStream.on('text', (_, raw:string) => { try {
 			cur_tnode = onText(cur_tnode, raw);
-		} );
+		} catch(e) { reject(e); } } );
 
 		s.pipe(rewriteStream);
 
 		s.on('error', (err) => {
-			console.error(err);
+			reject(err);
 		});
-		s.on('end', () => {
+		rewriteStream.on('error', (err) => {
+			reject(err);
+		});
+		rewriteStream.on('end', () => {
 			resolve(root_node);
 		});
 	});
 }
 
 
-const text_regex = new RegExp("({{[^({})]*}})", 'g');
+const text_regex = new RegExp("({{[^{}]*}})", 'g');
 export function onText(cur:TNode, raw :string) :TNode {
 	// later match string against {{ }}
 	const matches = raw.matchAll(text_regex);
@@ -158,6 +165,12 @@ export function onText(cur:TNode, raw :string) :TNode {
 			cur = pushRaw(cur, raw.substring(raw_it, m.index));
 		}
 		const code_str = m[0].substring(2, m[0].length -2).trim();
+		if( !code_str ) {
+			// empty {{ }}, treat as raw text
+			cur = pushRaw(cur, m[0]);
+			raw_it = m.index + m[0].length;
+			continue;
+		}
 		const code_parsed = interpretBackcode(code_str);
 
 		const print_node :TNode = {

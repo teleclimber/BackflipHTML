@@ -62,7 +62,7 @@ function getProgramExpression(prog :acorn.Program) :{expr: acorn.ExpressionState
 	const node = prog.body[0];
 	if( node.type !== 'ExpressionStatement' ) return {expr:undefined, err:'node is not expression statement. It is '+node.type};
 	if( prog.body.length > 1 ) return {expr:node, err:'body has more than one statement in it'};
-	return {expr:node, err:''};
+	return {expr:node, err:undefined};
 }
 
 function interpretNode(node:acorn.AnyNode, computed: boolean, errs: string[], vars: string[]) {
