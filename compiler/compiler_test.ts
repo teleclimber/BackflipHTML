@@ -1,6 +1,6 @@
 import { assertEquals } from "jsr:@std/assert";
 
-import type { RootTNode, RawTNode, ForTNode } from "./compiler.ts";
+import type { RootTNode, RawTNode, ForTNode, IfTNode } from "./compiler.ts";
 import { generateStringStack, onText, pushRaw } from "./compiler.ts";
 import { interpretBackcode } from "./backcode.ts";
 
@@ -192,4 +192,104 @@ Deno.test("b-for without 'in' keyword throws", async () => {
 		threw = true;
 	}
 	assertEquals(threw, true);
+});
+
+// b-if tests
+Deno.test("simple b-if", async () => {
+	const root = await generateStringStack('<div b-if="show">hello</div>');
+	assertEquals(root.tnodes.length, 2); // empty raw + if_node
+	const if_node = root.tnodes[1] as IfTNode;
+	assertEquals(if_node.type, 'if');
+	assertEquals(if_node.branches.length, 1);
+	assertEquals(if_node.branches[0].condition, interpretBackcode('show'));
+	const inner = if_node.branches[0].tnodes[0] as RawTNode;
+	assertEquals(inner.raw, '<div>hello</div>');
+});
+
+Deno.test("b-if + b-else", async () => {
+	const root = await generateStringStack('<div b-if="show">yes</div><div b-else>no</div>');
+	const if_node = root.tnodes[1] as IfTNode;
+	assertEquals(if_node.type, 'if');
+	assertEquals(if_node.branches.length, 2);
+	assertEquals(if_node.branches[0].condition, interpretBackcode('show'));
+	assertEquals(if_node.branches[1].condition, undefined);
+	const branch0 = if_node.branches[0].tnodes[0] as RawTNode;
+	assertEquals(branch0.raw, '<div>yes</div>');
+	const branch1 = if_node.branches[1].tnodes[0] as RawTNode;
+	assertEquals(branch1.raw, '<div>no</div>');
+});
+
+Deno.test("b-if + b-else-if + b-else", async () => {
+	const root = await generateStringStack('<p b-if="a">1</p><p b-else-if="b">2</p><p b-else>3</p>');
+	const if_node = root.tnodes[1] as IfTNode;
+	assertEquals(if_node.branches.length, 3);
+	assertEquals(if_node.branches[0].condition, interpretBackcode('a'));
+	assertEquals(if_node.branches[1].condition, interpretBackcode('b'));
+	assertEquals(if_node.branches[2].condition, undefined);
+});
+
+Deno.test("b-else without preceding b-if throws", async () => {
+	let threw = false;
+	try {
+		await generateStringStack('<div b-else>no</div>');
+	} catch (_e) {
+		threw = true;
+	}
+	assertEquals(threw, true);
+});
+
+Deno.test("b-else-if without preceding b-if throws", async () => {
+	let threw = false;
+	try {
+		await generateStringStack('<div b-else-if="x">no</div>');
+	} catch (_e) {
+		threw = true;
+	}
+	assertEquals(threw, true);
+});
+
+Deno.test("nested b-if inside b-if", async () => {
+	const root = await generateStringStack('<div b-if="a"><span b-if="b">inner</span></div>');
+	const outer = root.tnodes[1] as IfTNode;
+	assertEquals(outer.type, 'if');
+	assertEquals(outer.branches.length, 1);
+	assertEquals(outer.branches[0].condition, interpretBackcode('a'));
+	// branch tnodes: raw "<div>", inner IfTNode, raw "</div>"
+	assertEquals(outer.branches[0].tnodes.length, 3);
+	const inner_if = outer.branches[0].tnodes[1] as IfTNode;
+	assertEquals(inner_if.type, 'if');
+	assertEquals(inner_if.branches.length, 1);
+	assertEquals(inner_if.branches[0].condition, interpretBackcode('b'));
+	const inner_raw = inner_if.branches[0].tnodes[0] as RawTNode;
+	assertEquals(inner_raw.raw, '<span>inner</span>');
+});
+
+Deno.test("nested b-if with b-else inside b-if", async () => {
+	const root = await generateStringStack('<div b-if="a"><p b-if="b">yes</p><p b-else>no</p></div>');
+	const outer = root.tnodes[1] as IfTNode;
+	assertEquals(outer.branches.length, 1);
+	const inner_if = outer.branches[0].tnodes[1] as IfTNode;
+	assertEquals(inner_if.type, 'if');
+	assertEquals(inner_if.branches.length, 2);
+	assertEquals(inner_if.branches[0].condition, interpretBackcode('b'));
+	assertEquals(inner_if.branches[1].condition, undefined);
+});
+
+Deno.test("b-if nested inside b-for", async () => {
+	const root = await generateStringStack('<div b-for="item in items"><span b-if="item.show">hi</span></div>');
+	const for_node = root.tnodes[1] as ForTNode;
+	assertEquals(for_node.type, 'for');
+	// for tnodes: raw "<div>", IfTNode, raw "</div>"
+	assertEquals(for_node.tnodes.length, 3);
+	const inner_if = for_node.tnodes[1] as IfTNode;
+	assertEquals(inner_if.type, 'if');
+	assertEquals(inner_if.branches[0].condition, interpretBackcode('item.show'));
+});
+
+Deno.test("b-if with content after", async () => {
+	const root = await generateStringStack('<div b-if="show">hello</div><p>after</p>');
+	assertEquals(root.tnodes.length, 3); // empty raw, if_node, raw with <p>after</p>
+	assertEquals(root.tnodes[1].type, 'if');
+	const last = root.tnodes[2] as RawTNode;
+	assertEquals(last.raw, '<p>after</p>');
 });

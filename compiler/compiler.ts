@@ -25,9 +25,18 @@ export interface ForTNode extends ChildTNode {
 	valName: string,
 	tnodes: TNode[]
 }
+export interface IfBranch {
+	condition?: Parsed,
+	tnodes: TNode[],
+	ifNode: IfTNode
+}
+export interface IfTNode extends ChildTNode {
+	type: 'if',
+	branches: IfBranch[]
+}
 
-export type TNode = RawTNode | PrintTNode | ForTNode;
-export type ParentTNode = RootTNode | ForTNode;
+export type TNode = RawTNode | PrintTNode | ForTNode | IfTNode;
+export type ParentTNode = RootTNode | ForTNode | IfBranch;
 
 type TagMatcher = {
 	tag: string,
@@ -56,24 +65,37 @@ export function generateStringStack(in_str:string) :Promise<RootTNode> {
 
 		const b_attrs = ['b-for', 'b-if', 'b-else-if', 'b-else'];
 
+		function reconstructTag(tag: {tagName:string, attrs:{name:string,value:string}[]}, excludeAttr: string) :string {
+			let tag_str = `<${tag.tagName}`;
+			const other_attrs = tag.attrs.filter( (attr) => attr.name !== excludeAttr).map( attr => `${attr.name}="${attr.value}"` ).join(' ');
+			if( other_attrs ) tag_str += ' ' + other_attrs;
+			tag_str += '>';
+			return tag_str;
+		}
+
+		function findPrecedingIf(cur: TNode) :IfTNode {
+			if( cur.type === 'if' ) return cur;
+			// Check if the preceding sibling in the parent's tnodes is an IfTNode
+			if( cur.parent && 'tnodes' in cur.parent ) {
+				const siblings = cur.parent.tnodes;
+				for( let i = siblings.length - 1; i >= 0; i-- ) {
+					if( siblings[i].type === 'if' ) return siblings[i] as IfTNode;
+					// Only skip past whitespace-only raw nodes
+					if( siblings[i].type === 'raw' && (siblings[i] as RawTNode).raw.trim() === '' ) continue;
+					break;
+				}
+			}
+			throw new Error("b-else-if/b-else must follow a b-if block");
+		}
+
 		rewriteStream.on('startTag', (tag, raw) => { try {
 			const b_as = tag.attrs.filter((attr) => b_attrs.includes(attr.name));
 			if( b_as.length >1 ) throw new Error("more than one b-attr");
 			if( b_as.length === 1 ) {
 				const b_a = b_as[0];
 				if( b_a.name === 'b-for' ) {
-					// close current tnode.
-					// create a for node.
-					// create a raw node as part of child with rendered tag without b-for.
-					// make that the current node.
+					const tag_str = reconstructTag(tag, 'b-for');
 
-					// make a node from the tag
-					let tag_str = `<${tag.tagName}`;
-					const other_attrs = tag.attrs.filter( (attr) => attr.name !== 'b-for').map( attr => `${attr.name}="${attr.value}"` ).join(' ');
-					if( other_attrs ) tag_str += ' ' + other_attrs;
-					tag_str += '>';
-					// TODO figure ot how to deal with variable attributes! :abc="" and abc="{{}}" or whatever
-					
 					const pieces = b_a.value.split(" in ");
 					if( pieces.length !== 2 ) throw new Error(`b-for value must be in the form "item in items", got: "${b_a.value}"`);
 					const iterable_str = pieces[1].trim();
@@ -99,15 +121,77 @@ export function generateStringStack(in_str:string) :Promise<RootTNode> {
 					cur_tnode.parent.tnodes.push(for_node);
 					cur_tnode = inner_tag;
 
-					if( !tag.selfClosing && !void_elements.has(tag.tagName) ) {	// if self-closing or void we skip
+					if( !tag.selfClosing && !void_elements.has(tag.tagName) ) {
 						tag_stack.push({
 							tag: tag.tagName,
 							tnode: inner_tag
-						});	// actually push the directive node we create.
+						});
 					}
 				}
-				else {
-					throw new Error("not implemented yet: " + b_a.name);
+				else if( b_a.name === 'b-if' ) {
+					const tag_str = reconstructTag(tag, 'b-if');
+					const condition = interpretBackcode(b_a.value);
+
+					const if_node :IfTNode = {
+						type: 'if',
+						branches: [],
+						parent: cur_tnode.parent
+					};
+					const branch :IfBranch = {
+						condition,
+						tnodes: [],
+						ifNode: if_node
+					};
+					if_node.branches.push(branch);
+
+					const inner_tag :RawTNode = {
+						type: 'raw',
+						raw: tag_str,
+						parent: branch
+					};
+					branch.tnodes.push(inner_tag);
+
+					if( !cur_tnode.parent?.tnodes ) throw new Error("expected tnodes here");
+					cur_tnode.parent.tnodes.push(if_node);
+					cur_tnode = inner_tag;
+
+					if( !tag.selfClosing && !void_elements.has(tag.tagName) ) {
+						tag_stack.push({
+							tag: tag.tagName,
+							tnode: inner_tag
+						});
+					}
+				}
+				else if( b_a.name === 'b-else-if' || b_a.name === 'b-else' ) {
+					const if_node = findPrecedingIf(cur_tnode);
+
+					if( b_a.name === 'b-else' && b_a.value ) throw new Error("b-else should not have a value");
+
+					const condition = b_a.name === 'b-else-if' ? interpretBackcode(b_a.value) : undefined;
+					const tag_str = reconstructTag(tag, b_a.name);
+
+					const branch :IfBranch = {
+						condition,
+						tnodes: [],
+						ifNode: if_node
+					};
+					if_node.branches.push(branch);
+
+					const inner_tag :RawTNode = {
+						type: 'raw',
+						raw: tag_str,
+						parent: branch
+					};
+					branch.tnodes.push(inner_tag);
+
+					cur_tnode = inner_tag;
+
+					if( !tag.selfClosing && !void_elements.has(tag.tagName) ) {
+						tag_stack.push({
+							tag: tag.tagName,
+							tnode: inner_tag
+						});
+					}
 				}
 			}
 			else {
@@ -131,7 +215,12 @@ export function generateStringStack(in_str:string) :Promise<RootTNode> {
 			// if there is a TNode, that means we are at the end of this subtree.
 			if( matchTag.tnode ) {
 				if( !matchTag.tnode.parent ) throw new Error("expected a parent");
-				cur_tnode = matchTag.tnode.parent as TNode;
+				const parent = matchTag.tnode.parent;
+				if( 'ifNode' in parent ) {
+					cur_tnode = (parent as IfBranch).ifNode;  // IfBranch → IfTNode
+				} else {
+					cur_tnode = parent as TNode;
+				}
 			}
 		} catch(e) { reject(e); } });
 
