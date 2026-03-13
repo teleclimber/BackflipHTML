@@ -124,18 +124,16 @@ Deno.test("nodeToJsExport wraps in export", () => {
 Deno.test("nested for inside if", () => {
 	const root: RootTNode = { type: 'root', tnodes: [] };
 	const ifNode: IfTNode = { type: 'if', branches: [], parent: root };
+	const branch: IfBranch = { condition: makeParsed('show'), tnodes: [], ifNode };
 	const forNode: ForTNode = {
 		type: 'for',
 		iterable: makeParsed('items'),
 		valName: 'item',
-		tnodes: [{ type: 'raw', raw: '<li></li>', parent: ifNode } as RawTNode],
-		parent: ifNode
+		tnodes: [],
+		parent: branch
 	};
-	const branch: IfBranch = {
-		condition: makeParsed('show'),
-		tnodes: [forNode],
-		ifNode
-	};
+	forNode.tnodes.push({ type: 'raw', raw: '<li></li>', parent: forNode });
+	branch.tnodes.push(forNode);
 	ifNode.branches.push(branch);
 	root.tnodes.push(ifNode);
 
@@ -174,11 +172,9 @@ Deno.test("generated JS is valid JavaScript", async () => {
 	const raw: RawTNode = { type: 'raw', raw: '<p>hello</p>', parent: root };
 	const print: PrintTNode = { type: 'print', data: makeParsed('name'), parent: root };
 	const ifNode: IfTNode = { type: 'if', branches: [], parent: root };
-	ifNode.branches.push({
-		condition: makeParsed('show'),
-		tnodes: [{ type: 'raw', raw: 'yes', parent: ifNode } as RawTNode],
-		ifNode
-	});
+	const ifBranch: IfBranch = { condition: makeParsed('show'), tnodes: [], ifNode };
+	ifBranch.tnodes.push({ type: 'raw', raw: 'yes', parent: ifBranch });
+	ifNode.branches.push(ifBranch);
 	const forNode: ForTNode = {
 		type: 'for', iterable: makeParsed('items'), valName: 'item',
 		tnodes: [{ type: 'raw', raw: '<li></li>', parent: root } as RawTNode],
