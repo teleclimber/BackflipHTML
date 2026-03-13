@@ -14,11 +14,13 @@ It uses `parse5`'s streaming HTML parser under the hood, so it handles real HTML
 
 `backcode.ts` within this folder handles the expression language used in directives and `{{ }}` interpolations. It uses `acorn` to parse expressions as a subset of JavaScript, validates that only safe/allowed constructs are used (identifiers, literals, member access), and extracts the list of variable names the expression depends on.
 
-**Output:** an AST representation of the template that can be consumed in the following steps.
+**Generates** an AST representation of the template that can be consumed in the following steps.
 
 ---
 
-## `generatejs/`
+## `compiler/generate/*/`
+
+Generates code from the compiler output.
 
 `generatejs` turns the language-agnostic AST into one that can be consumed directly in JavaScript.
 
@@ -33,7 +35,7 @@ The output is a JS module (via `nodeToJsExport`) that can be loaded directly and
 
 ---
 
-## `renderjs/`
+## `runtime/*/`
 
 The runtime renderer (specifically for JS). It takes a tree structure where every expression is already a callable JS function — plus a **data context object**, and walks the tree to produce the final HTML string.
 
@@ -60,13 +62,13 @@ HTML template string
    RootTNode AST (expressions as parsed AST objects)
         │
         ▼
-  [ generatejs/ ] ─── converts TNode tree → JS source string
+  [ compiler/generate/js/ ] ─── converts TNode tree → JS source string
         │               with expressions compiled to real functions
         ▼
    Emitted JS module (RNode-shaped object literal)
         │
         ▼
-  [ renderjs/ ]  ──── walks RNode tree + data context → HTML string
+  [ runtime/js/ ]  ──── walks RNode tree + data context → HTML string
 ```
 
-The compile step (`compiler/` + `generatejs/`) only needs to run once per template. The resulting JS module can be cached and reused, with only the lightweight `renderjs` render pass running per request.
+The compile step (`compiler/` + `compiler/generate/js/`) only needs to run once per template. The resulting JS module can be cached and reused, with only the lightweight `runtime/js/` render pass running per request.
