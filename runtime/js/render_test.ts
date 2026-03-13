@@ -1,6 +1,6 @@
 import { assertEquals, assertThrows } from "jsr:@std/assert";
 
-import type { RootRNode, RawRNode, PrintRNode, ForRNode, IfRNode, rfn } from "./render.ts";
+import type { RootRNode, RawRNode, PrintRNode, ForRNode, IfRNode, SlotRNode, PartialRefRNode, rfn } from "./render.ts";
 import { render, renderRoot } from "./render.ts";
 
 function makeFn(code: string, vars: string[]): rfn {
@@ -187,4 +187,129 @@ Deno.test("for loop does not mutate outer context", () => {
 	const ctx = { items: ['a'], item: 'original' };
 	render(node, ctx);
 	assertEquals(ctx.item, 'original');
+});
+
+// partial-ref and slot tests
+
+const simplePartial = {
+	type: 'root' as const,
+	nodes: [{ type: 'raw' as const, raw: '<p>hello</p>' }]
+};
+
+Deno.test("partial-ref with no slots and no bindings", () => {
+	const node: PartialRefRNode = {
+		type: 'partial-ref',
+		partial: simplePartial,
+		wrapper: null,
+		slots: {},
+		bindings: []
+	};
+	assertEquals(render(node, {}), '<p>hello</p>');
+});
+
+Deno.test("partial-ref with wrapper", () => {
+	const node: PartialRefRNode = {
+		type: 'partial-ref',
+		partial: simplePartial,
+		wrapper: { open: '<div>', close: '</div>' },
+		slots: {},
+		bindings: []
+	};
+	assertEquals(render(node, {}), '<div><p>hello</p></div>');
+});
+
+Deno.test("partial-ref with binding makes variable available in partial", () => {
+	const partial = {
+		type: 'root' as const,
+		nodes: [{ type: 'print' as const, data: makeFn('mood', ['mood']) }]
+	};
+	const node: PartialRefRNode = {
+		type: 'partial-ref',
+		partial,
+		wrapper: null,
+		slots: {},
+		bindings: [{ name: 'mood', data: makeFn('user.mood', ['user']) }]
+	};
+	assertEquals(render(node, { user: { mood: 'happy' } }), 'happy');
+});
+
+Deno.test("partial-ref binding does not leak to parent context", () => {
+	const partial = {
+		type: 'root' as const,
+		nodes: [{ type: 'raw' as const, raw: 'x' }]
+	};
+	const node: PartialRefRNode = {
+		type: 'partial-ref',
+		partial,
+		wrapper: null,
+		slots: {},
+		bindings: [{ name: 'injected', data: makeFn('"val"', []) }]
+	};
+	const ctx: any = {};
+	render(node, ctx);
+	assertEquals(ctx['injected'], undefined);
+});
+
+Deno.test("partial-ref with default slot", () => {
+	const partial: RootRNode = {
+		type: 'root',
+		nodes: [
+			{ type: 'raw', raw: '<p>' },
+			{ type: 'slot', name: undefined },
+			{ type: 'raw', raw: '</p>' },
+		]
+	};
+	const node: PartialRefRNode = {
+		type: 'partial-ref',
+		partial,
+		wrapper: null,
+		slots: { default: [{ type: 'raw', raw: 'slot content' }] },
+		bindings: []
+	};
+	assertEquals(render(node, {}), '<p>slot content</p>');
+});
+
+Deno.test("partial-ref with named slot", () => {
+	const partial: RootRNode = {
+		type: 'root',
+		nodes: [
+			{ type: 'raw', raw: 'Notice! ' },
+			{ type: 'slot', name: 'message' },
+		]
+	};
+	const node: PartialRefRNode = {
+		type: 'partial-ref',
+		partial,
+		wrapper: null,
+		slots: { message: [{ type: 'raw', raw: 'hi there' }] },
+		bindings: []
+	};
+	assertEquals(render(node, {}), 'Notice! hi there');
+});
+
+Deno.test("slot renders empty when no content provided", () => {
+	const node: SlotRNode = { type: 'slot', name: undefined };
+	assertEquals(render(node, {}), '');
+});
+
+Deno.test("slot content is rendered in caller context not partial context", () => {
+	// The slot content has a {{ name }} expression.
+	// The partial context has name='partial-name', caller has name='caller-name'.
+	// Slot content should use caller's name.
+	const partial: RootRNode = {
+		type: 'root',
+		nodes: [{ type: 'slot', name: undefined }]
+	};
+	const node: PartialRefRNode = {
+		type: 'partial-ref',
+		partial: partial as any,
+		wrapper: null,
+		slots: {
+			default: [{ type: 'print', data: makeFn('name', ['name']) }]
+		},
+		bindings: [{ name: 'name', data: makeFn('"partial-name"', []) }]
+	};
+	// caller ctx has name='caller-name'; partial binding overrides to 'partial-name'
+	// but slot content should still see 'caller-name'
+	assertEquals(render(node, { name: 'caller-name' }), 'caller-name');
 });

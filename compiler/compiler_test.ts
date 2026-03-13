@@ -1,7 +1,7 @@
-import { assertEquals } from "jsr:@std/assert";
+import { assertEquals, assertRejects } from "jsr:@std/assert";
 
-import type { RootTNode, RawTNode, ForTNode, IfTNode } from "./compiler.ts";
-import { generateStringStack, onText, pushRaw } from "./compiler.ts";
+import type { RootTNode, RawTNode, ForTNode, IfTNode, SlotTNode, PartialRefTNode } from "./compiler.ts";
+import { generateStringStack, compileFile, onText, pushRaw } from "./compiler.ts";
 import { interpretBackcode } from "./backcode.ts";
 
 Deno.test( "pushRaw", () => {
@@ -292,4 +292,152 @@ Deno.test("b-if with content after", async () => {
 	assertEquals(root.tnodes[1].type, 'if');
 	const last = root.tnodes[2] as RawTNode;
 	assertEquals(last.raw, '<p>after</p>');
+});
+
+// ---- compileFile tests ----
+
+Deno.test("compileFile: single partial with b-name on a div", async () => {
+	const result = await compileFile('<div b-name="hero">Hello</div>');
+	assertEquals(result.partials.size, 1);
+	const root = result.partials.get("hero")!;
+	assertEquals(root.type, 'root');
+	// First tnode should be raw starting with '<div>'
+	const first = root.tnodes[0] as RawTNode;
+	assertEquals(first.type, 'raw');
+	assertEquals(first.raw.startsWith('<div>'), true);
+});
+
+Deno.test("compileFile: b-name on b-unwrap (partial without wrapper element)", async () => {
+	const result = await compileFile('<b-unwrap b-name="inner">content</b-unwrap>');
+	assertEquals(result.partials.size, 1);
+	const root = result.partials.get("inner")!;
+	assertEquals(root.type, 'root');
+	// Should have some raw content but no <b-unwrap> tag emitted
+	const allRaw = root.tnodes.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
+	assertEquals(allRaw.includes('b-unwrap'), false);
+	assertEquals(allRaw.includes('content'), true);
+});
+
+Deno.test("compileFile: b-name not at top level throws error", async () => {
+	await assertRejects(
+		() => compileFile('<div b-name="outer"><span b-name="inner">text</span></div>'),
+		Error,
+		"b-name is only allowed on top-level elements"
+	);
+});
+
+Deno.test("compileFile: multiple partials in one file", async () => {
+	const result = await compileFile('<div b-name="first">A</div><div b-name="second">B</div>');
+	assertEquals(result.partials.size, 2);
+	assertEquals(result.partials.has("first"), true);
+	assertEquals(result.partials.has("second"), true);
+});
+
+Deno.test("compileFile: b-part same-file reference creates PartialRefTNode with correct file=null and partialName", async () => {
+	const result = await compileFile('<div b-name="page"><div b-part="#hero"></div></div>');
+	const root = result.partials.get("page")!;
+	// Find the PartialRefTNode
+	const ref = root.tnodes.find(n => n.type === 'partial-ref') as PartialRefTNode | undefined;
+	// it might be nested inside the opening raw node; search all tnodes
+	const allNodes = root.tnodes;
+	let found: PartialRefTNode | undefined;
+	for (const n of allNodes) {
+		if (n.type === 'partial-ref') { found = n as PartialRefTNode; break; }
+	}
+	assertEquals(found !== undefined, true);
+	assertEquals(found!.file, null);
+	assertEquals(found!.partialName, "hero");
+});
+
+Deno.test("compileFile: b-part with b-unwrap creates wrapper=null", async () => {
+	const result = await compileFile('<div b-name="page"><b-unwrap b-part="#card"></b-unwrap></div>');
+	const root = result.partials.get("page")!;
+	let found: PartialRefTNode | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'partial-ref') { found = n as PartialRefTNode; break; }
+	}
+	assertEquals(found !== undefined, true);
+	assertEquals(found!.wrapper, null);
+});
+
+Deno.test("compileFile: b-part with regular element creates wrapper with open/close tags", async () => {
+	const result = await compileFile('<div b-name="page"><section class="x" b-part="#card"></section></div>');
+	const root = result.partials.get("page")!;
+	let found: PartialRefTNode | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'partial-ref') { found = n as PartialRefTNode; break; }
+	}
+	assertEquals(found !== undefined, true);
+	assertEquals(found!.wrapper !== null, true);
+	assertEquals(found!.wrapper!.open.includes('<section'), true);
+	assertEquals(found!.wrapper!.close, '</section>');
+	// b-part attr should NOT be in open tag
+	assertEquals(found!.wrapper!.open.includes('b-part'), false);
+});
+
+Deno.test("compileFile: b-slot creates SlotTNode", async () => {
+	const result = await compileFile('<div b-name="card"><b-unwrap b-slot="title"></b-unwrap></div>');
+	const root = result.partials.get("card")!;
+	let found: SlotTNode | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'slot') { found = n as SlotTNode; break; }
+	}
+	assertEquals(found !== undefined, true);
+	assertEquals(found!.name, "title");
+});
+
+Deno.test("compileFile: b-slot with no value creates SlotTNode with undefined name", async () => {
+	const result = await compileFile('<div b-name="card"><b-unwrap b-slot></b-unwrap></div>');
+	const root = result.partials.get("card")!;
+	let found: SlotTNode | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'slot') { found = n as SlotTNode; break; }
+	}
+	assertEquals(found !== undefined, true);
+	assertEquals(found!.name, undefined);
+});
+
+Deno.test("compileFile: default slot content captured", async () => {
+	const result = await compileFile('<div b-name="page"><b-unwrap b-part="#card"><p>default content</p></b-unwrap></div>');
+	const root = result.partials.get("page")!;
+	let ref: PartialRefTNode | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'partial-ref') { ref = n as PartialRefTNode; break; }
+	}
+	assertEquals(ref !== undefined, true);
+	const defaultSlot = ref!.slots['default'];
+	assertEquals(defaultSlot !== undefined, true);
+	// Should contain raw node with <p>default content</p>
+	const allRaw = defaultSlot.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
+	assertEquals(allRaw.includes('<p>'), true);
+	assertEquals(allRaw.includes('default content'), true);
+});
+
+Deno.test("compileFile: named slot with b-in", async () => {
+	const result = await compileFile(
+		'<div b-name="page"><b-unwrap b-part="#card"><b-unwrap b-in="header"><h1>Title</h1></b-unwrap></b-unwrap></div>'
+	);
+	const root = result.partials.get("page")!;
+	let ref: PartialRefTNode | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'partial-ref') { ref = n as PartialRefTNode; break; }
+	}
+	assertEquals(ref !== undefined, true);
+	const headerSlot = ref!.slots['header'];
+	assertEquals(headerSlot !== undefined, true);
+	const allRaw = headerSlot.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
+	assertEquals(allRaw.includes('Title'), true);
+});
+
+Deno.test("compileFile: b-data: creates bindings on PartialRefTNode", async () => {
+	const result = await compileFile('<div b-name="page"><b-unwrap b-part="#card" b-data:title="item.title"></b-unwrap></div>');
+	const root = result.partials.get("page")!;
+	let ref: PartialRefTNode | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'partial-ref') { ref = n as PartialRefTNode; break; }
+	}
+	assertEquals(ref !== undefined, true);
+	assertEquals(ref!.bindings.length, 1);
+	assertEquals(ref!.bindings[0].name, "title");
+	assertEquals(ref!.bindings[0].data.vars.includes("item"), true);
 });

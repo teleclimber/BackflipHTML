@@ -1,8 +1,8 @@
 import { assertEquals, assertMatch } from "jsr:@std/assert";
 
-import type { RootTNode, RawTNode, PrintTNode, ForTNode, IfTNode, IfBranch } from "../../compiler.ts";
+import type { RootTNode, RawTNode, PrintTNode, ForTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, CompiledFile } from "../../compiler.ts";
 import { interpretBackcode } from "../../backcode.ts";
-import { nodeToJS, nodeToJsExport } from "./nodes2js.ts";
+import { nodeToJS, nodeToJsExport, fileToJsModule, sanitizeName } from "./nodes2js.ts";
 
 function makeParsed(code: string) {
 	return interpretBackcode(code);
@@ -164,6 +164,162 @@ Deno.test("all TNode types are handled", () => {
 	assertEquals(typeof nodeToJS(ifNode), 'string');
 
 	assertEquals(typeof nodeToJS(root), 'string');
+});
+
+Deno.test("sanitizeName replaces hyphens and dots", () => {
+	assertEquals(sanitizeName('pie-chart'), 'pie_chart');
+	assertEquals(sanitizeName('my.partial'), 'my_partial');
+	assertEquals(sanitizeName('valid_name'), 'valid_name');
+});
+
+Deno.test("slot node with undefined name", () => {
+	const root = makeRoot();
+	const node: SlotTNode = { type: 'slot', name: undefined, parent: root };
+	const js = nodeToJS(node);
+	assertMatch(js, /type:\s*'slot'/);
+	assertMatch(js, /name:\s*undefined/);
+});
+
+Deno.test("slot node with named slot", () => {
+	const root = makeRoot();
+	const node: SlotTNode = { type: 'slot', name: 'message', parent: root };
+	const js = nodeToJS(node);
+	assertMatch(js, /name:\s*'message'/);
+});
+
+Deno.test("partial-ref node with same-file reference", () => {
+	const root = makeRoot();
+	const node: PartialRefTNode = {
+		type: 'partial-ref',
+		file: null,
+		partialName: 'notice',
+		wrapper: null,
+		slots: {},
+		bindings: [],
+		parent: root
+	};
+	const js = nodeToJS(node);
+	assertMatch(js, /type:\s*'partial-ref'/);
+	assertMatch(js, /partial:\s*notice/);
+	assertMatch(js, /wrapper:\s*null/);
+});
+
+Deno.test("partial-ref node with wrapper", () => {
+	const root = makeRoot();
+	const node: PartialRefTNode = {
+		type: 'partial-ref',
+		file: null,
+		partialName: 'notice',
+		wrapper: { open: '<div class="x">', close: '</div>' },
+		slots: {},
+		bindings: [],
+		parent: root
+	};
+	const js = nodeToJS(node);
+	assertMatch(js, /open:/);
+	assertMatch(js, /close:/);
+});
+
+Deno.test("partial-ref node with default slot content", () => {
+	const root = makeRoot();
+	const slotRaw: RawTNode = { type: 'raw', raw: 'slot content', parent: root };
+	const node: PartialRefTNode = {
+		type: 'partial-ref',
+		file: null,
+		partialName: 'notice',
+		wrapper: null,
+		slots: { default: [slotRaw] },
+		bindings: [],
+		parent: root
+	};
+	const js = nodeToJS(node);
+	assertMatch(js, /slots:/);
+	assertMatch(js, /'default':/);
+	assertMatch(js, /slot content/);
+});
+
+Deno.test("partial-ref node with binding", () => {
+	const root = makeRoot();
+	const node: PartialRefTNode = {
+		type: 'partial-ref',
+		file: null,
+		partialName: 'notice',
+		wrapper: null,
+		slots: {},
+		bindings: [{ name: 'mood', data: makeParsed('user.mood') }],
+		parent: root
+	};
+	const js = nodeToJS(node);
+	assertMatch(js, /bindings:/);
+	assertMatch(js, /name:\s*'mood'/);
+	assertMatch(js, /fn:/);
+});
+
+Deno.test("partial-ref with cross-file reference uses import alias", () => {
+	const root = makeRoot();
+	const node: PartialRefTNode = {
+		type: 'partial-ref',
+		file: 'graphics/charts.html',
+		partialName: 'pie-chart',
+		wrapper: null,
+		slots: {},
+		bindings: [],
+		parent: root
+	};
+	const js = nodeToJS(node);
+	// Should reference import alias, not the sanitized local name
+	assertMatch(js, /graphics_charts__pie_chart/);
+});
+
+Deno.test("fileToJsModule emits export for each partial", () => {
+	const root: RootTNode = { type: 'root', tnodes: [] };
+	root.tnodes.push({ type: 'raw', raw: '<p>hello</p>', parent: root });
+	const file: CompiledFile = {
+		partials: new Map([['notice', root]])
+	};
+	const js = fileToJsModule(file, 'blog/general.html');
+	assertMatch(js, /export const notice/);
+});
+
+Deno.test("fileToJsModule emits import for cross-file partial-ref", () => {
+	const root: RootTNode = { type: 'root', tnodes: [] };
+	const ref: PartialRefTNode = {
+		type: 'partial-ref',
+		file: 'graphics/charts.html',
+		partialName: 'pie-chart',
+		wrapper: null,
+		slots: {},
+		bindings: [],
+		parent: root
+	};
+	root.tnodes.push(ref);
+	const file: CompiledFile = {
+		partials: new Map([['post', root]])
+	};
+	const js = fileToJsModule(file, 'blog/general.html');
+	assertMatch(js, /import \{/);
+	assertMatch(js, /charts\.js/);
+});
+
+Deno.test("fileToJsModule same-file dep comes before dependent", () => {
+	// 'post' references 'notice', so 'notice' should appear first in output
+	const noticeRoot: RootTNode = { type: 'root', tnodes: [] };
+	noticeRoot.tnodes.push({ type: 'raw', raw: 'notice', parent: noticeRoot });
+
+	const postRoot: RootTNode = { type: 'root', tnodes: [] };
+	const ref: PartialRefTNode = {
+		type: 'partial-ref', file: null, partialName: 'notice',
+		wrapper: null, slots: {}, bindings: [], parent: postRoot
+	};
+	postRoot.tnodes.push(ref);
+
+	const file: CompiledFile = {
+		partials: new Map([['post', postRoot], ['notice', noticeRoot]])
+	};
+	const js = fileToJsModule(file, 'page.html');
+	const noticeIdx = js.indexOf('export const notice');
+	const postIdx = js.indexOf('export const post');
+	assertEquals(noticeIdx < postIdx, true);
 });
 
 Deno.test("generated JS is valid JavaScript", async () => {
