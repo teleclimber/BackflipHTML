@@ -10,7 +10,7 @@ The pipeline has three stages, each living in its own subfolder:
 
 The entry point for processing a template. It takes a raw HTML string as input and produces an **AST (abstract syntax tree)** — a structured language agnostic representation of the template.
 
-It uses `parse5`'s streaming HTML parser under the hood, so it handles real HTML (including void elements, self-closing tags, etc.) rather than doing naive string matching. As it walks the HTML, it recognizes the `b-for`, `b-if`, `b-else-if`, and `b-else` directive attributes and builds tree nodes for them. Anything that isn't a directive gets stored as a raw HTML string node.
+It uses `parse5`'s streaming HTML parser under the hood, so it handles real HTML (including void elements, self-closing tags, etc.) rather than doing naive string matching. As it walks the HTML, it recognizes the `b-for`, `b-if`, `b-else-if`, and `b-else` directive attributes and builds tree nodes for them. Anything that isn't a directive gets stored as a raw HTML string node. See [`docs/directives.md`](docs/directives.md) for a full reference.
 
 `backcode.ts` within this folder handles the expression language used in directives and `{{ }}` interpolations. It uses `acorn` to parse expressions as a subset of JavaScript, validates that only safe/allowed constructs are used (identifiers, literals, member access), and extracts the list of variable names the expression depends on.
 
