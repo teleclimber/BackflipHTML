@@ -1,7 +1,7 @@
 import { assertEquals, assertMatch } from "jsr:@std/assert";
 
-import type { RootTNode, RawTNode, PrintTNode, ForTNode, IfTNode, IfBranch } from "../compiler/compiler.ts";
-import { interpretBackcode } from "../compiler/backcode.ts";
+import type { RootTNode, RawTNode, PrintTNode, ForTNode, IfTNode, IfBranch } from "../../compiler.ts";
+import { interpretBackcode } from "../../backcode.ts";
 import { nodeToJS, nodeToJsExport } from "./nodes2js.ts";
 
 function makeParsed(code: string) {

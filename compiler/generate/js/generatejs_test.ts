@@ -1,6 +1,6 @@
 import { assertEquals } from "jsr:@std/assert";
 
-import { interpretBackcode } from "../compiler/backcode.ts";
+import { interpretBackcode } from "../../backcode.ts";
 import { generateStatement } from "./generatejs.ts";
 
 Deno.test( "simple accessor code", () => {

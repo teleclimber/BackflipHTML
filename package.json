@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "acorn": "^8.16.0",
+    "parse5-html-rewriting-stream": "^8.0.0"
+  }
+}

@@ -1,0 +1,11 @@
+{
+    "name": "@backflip/html",
+    "version": "0.1.0",
+    "nodeModulesDir": "auto",
+    "tasks": {
+        "test": "deno test --allow-read"
+    },
+    "imports": {
+        "@std/assert": "jsr:@std/assert"
+    }
+}

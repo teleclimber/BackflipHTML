@@ -1,4 +1,4 @@
-import type { Parsed } from './backcode.ts';
+import type { Parsed } from '../../backcode.ts';
 import * as acorn from 'npm:acorn';
 
 export function generateFunction(name:string, parsed :Parsed) :string {

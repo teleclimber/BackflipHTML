@@ -1,5 +1,5 @@
-import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, IfTNode, IfBranch } from '../compiler/compiler.ts';
-import type { Parsed } from '../compiler/backcode.ts';
+import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, IfTNode, IfBranch } from '../../compiler.ts';
+import type { Parsed } from '../../backcode.ts';
 import { generateFunction } from './generatejs.ts';
 
 // this file takes the compiler's output which is an AST of sorts, 

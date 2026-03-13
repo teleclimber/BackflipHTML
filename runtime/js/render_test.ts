@@ -4,7 +4,7 @@ import type { RootRNode, RawRNode, PrintRNode, ForRNode, IfRNode, rfn } from "./
 import { render, renderRoot } from "./render.ts";
 
 function makeFn(code: string, vars: string[]): rfn {
-	return { fn: new Function(...vars, `return ${code};`), vars };
+	return { fn: new Function(...vars, `return ${code};`) as (...args: any[]) => any, vars };
 }
 
 Deno.test("raw node", () => {
