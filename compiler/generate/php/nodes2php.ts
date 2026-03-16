@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, PartialBinding, CompiledFile } from '../../compiler.ts';
+import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, PartialBinding, AttrBindTNode, AttrBindEntry, CompiledFile } from '../../compiler.ts';
 import type { Parsed } from '../../backcode.ts';
 import { generatePhpFunction } from './generatephp.ts';
 
@@ -31,6 +31,9 @@ export function nodeToPhp(n: TNode | RootTNode): string {
 			break;
 		case 'partial-ref':
 			out = partialRefToPhp(n);
+			break;
+		case 'attr-bind':
+			out = attrBindToPhp(n);
 			break;
 		default:
 			throw new Error("unhandled node type");
@@ -109,6 +112,13 @@ function partialRefToPhp(n: PartialRefTNode): string {
     'slots' => [${slots ? ' ' + slots + ' ' : ''}],
     'bindings' => [${bindings ? '\n        ' + bindings + '\n    ' : ''}]
 ]`;
+}
+
+function attrBindToPhp(n: AttrBindTNode): string {
+	const bindings = n.bindings.map((b: AttrBindEntry) =>
+		`['name' => '${b.name}', 'expr' => ${backcodeToPhp(b.expr)}, 'isBoolean' => ${b.isBoolean ? 'true' : 'false'}]`
+	).join(',\n        ');
+	return `['type' => 'attr-bind', 'tagPrefix' => '${escapeStr(n.tagPrefix)}', 'bindings' => [\n        ${bindings}\n    ]]`;
 }
 
 function escapeStr(s: string): string {

@@ -228,3 +228,48 @@ Deno.test("php: cross-file: box partial in components.html renders slot content"
         "<div class=\"box\">content</div>"
     );
 });
+
+// ---------------------------------------------------------------------------
+// binds.html — :attr / b-bind:attr dynamic attribute binding
+// ---------------------------------------------------------------------------
+
+Deno.test("php: attr-bind: checkbox checked=true, disabled=false", async () => {
+    assertEquals(
+        normalize(await renderPhp("binds.html", "checkbox", { isChecked: true, isDisabled: false })),
+        `<div><input type="checkbox" checked></div>`
+    );
+});
+
+Deno.test("php: attr-bind: checkbox checked=false, disabled=true", async () => {
+    assertEquals(
+        normalize(await renderPhp("binds.html", "checkbox", { isChecked: false, isDisabled: true })),
+        `<div><input type="checkbox" disabled></div>`
+    );
+});
+
+Deno.test("php: attr-bind: link with url and cls=false omits class", async () => {
+    assertEquals(
+        normalize(await renderPhp("binds.html", "link", { url: "/about", cls: false })),
+        `<div><a href="/about">Link</a></div>`
+    );
+});
+
+Deno.test("php: attr-bind: link with url and cls string includes class", async () => {
+    assertEquals(
+        normalize(await renderPhp("binds.html", "link", { url: "/about", cls: "active" })),
+        `<div><a href="/about" class="active">Link</a></div>`
+    );
+});
+
+Deno.test("php: attr-bind: XSS in href is escaped", async () => {
+    const result = await renderPhp("binds.html", "link", { url: '"><script>alert(1)</script>', cls: false });
+    assertStringIncludes(result, "&quot;");
+    assertStringIncludes(result, "&lt;script&gt;");
+});
+
+Deno.test("php: attr-bind: ampersand in class is escaped", async () => {
+    assertStringIncludes(
+        await renderPhp("binds.html", "link", { url: "/", cls: "foo & bar" }),
+        `class="foo &amp; bar"`
+    );
+});

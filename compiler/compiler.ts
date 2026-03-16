@@ -60,7 +60,18 @@ export type PartialRegistry = Map<string, Set<string>>
 // key: relative file path e.g. "graphics/charts.html"
 // value: set of exported partial names in that file
 
-export type TNode = RawTNode | PrintTNode | ForTNode | IfTNode | SlotTNode | PartialRefTNode;
+export interface AttrBindEntry {
+	name: string        // attribute name, e.g. "checked"
+	expr: Parsed        // parsed expression
+	isBoolean: boolean  // true for HTML boolean attributes
+}
+export interface AttrBindTNode extends ChildTNode {
+	type: 'attr-bind'
+	tagPrefix: string   // e.g. `<input type="text"` (no trailing >)
+	bindings: AttrBindEntry[]
+}
+
+export type TNode = RawTNode | PrintTNode | ForTNode | IfTNode | SlotTNode | PartialRefTNode | AttrBindTNode;
 export type ParentTNode = RootTNode | ForTNode | IfBranch;
 
 type TagMatcher = {
@@ -70,6 +81,23 @@ type TagMatcher = {
 		partialRef: PartialRefTNode,
 		currentSlot: string   // 'default' or named
 	}
+}
+
+const BOOLEAN_ATTRS = new Set([
+	'allowfullscreen','async','autofocus','autoplay','checked','controls',
+	'default','defer','disabled','formnovalidate','hidden','ismap','loop',
+	'multiple','muted','nomodule','novalidate','open','readonly','required',
+	'reversed','selected'
+]);
+
+function isBindAttr(name: string): boolean {
+	return name.startsWith('b-bind:') || name.startsWith(':');
+}
+
+function getBindAttrName(name: string): string {
+	if (name.startsWith('b-bind:')) return name.slice('b-bind:'.length);
+	if (name.startsWith(':')) return name.slice(1);
+	throw new Error(`Not a bind attr: ${name}`);
 }
 
 export function generateStringStack(in_str:string) :Promise<RootTNode> {
@@ -346,16 +374,35 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 			}
 		}
 
-		// Helper: reconstruct tag string excluding certain attrs and all b-data: attrs
-		function reconstructTagExcluding(tag: {tagName:string, attrs:{name:string,value:string}[]}, excludeAttrs: string[]): string {
+		// Helper: build tag prefix (no closing >) excluding certain attrs, b-data:*, and bind attrs
+		function buildTagPrefix(tag: {tagName:string, attrs:{name:string,value:string}[]}, excludeAttrs: string[]): string {
 			let tag_str = `<${tag.tagName}`;
 			const other_attrs = tag.attrs
-				.filter(attr => !excludeAttrs.includes(attr.name) && !attr.name.startsWith('b-data:'))
+				.filter(attr => !excludeAttrs.includes(attr.name) && !attr.name.startsWith('b-data:') && !isBindAttr(attr.name))
 				.map(attr => `${attr.name}="${attr.value}"`)
 				.join(' ');
 			if (other_attrs) tag_str += ' ' + other_attrs;
-			tag_str += '>';
 			return tag_str;
+		}
+
+		// Helper: reconstruct tag string excluding certain attrs and all b-data: attrs
+		function reconstructTagExcluding(tag: {tagName:string, attrs:{name:string,value:string}[]}, excludeAttrs: string[]): string {
+			return buildTagPrefix(tag, excludeAttrs) + '>';
+		}
+
+		// Helper: make a RawTNode or AttrBindTNode for a tag's open element
+		function makeOpenTagNode(tag: {tagName:string, attrs:{name:string,value:string}[]}, excludeAttrs: string[], parent: ParentTNode): RawTNode | AttrBindTNode {
+			const bindAttrs = tag.attrs.filter(attr => isBindAttr(attr.name));
+			if (bindAttrs.length === 0) {
+				const raw = reconstructTagExcluding(tag, excludeAttrs);
+				return { type: 'raw', raw, parent };
+			}
+			const tagPrefix = buildTagPrefix(tag, excludeAttrs);
+			const bindings: AttrBindEntry[] = bindAttrs.map(attr => {
+				const name = getBindAttrName(attr.name);
+				return { name, expr: interpretBackcode(attr.value), isBoolean: BOOLEAN_ATTRS.has(name) };
+			});
+			return { type: 'attr-bind', tagPrefix, bindings, parent };
 		}
 
 		function findPrecedingIfInFile(cur: TNode): IfTNode {
@@ -536,7 +583,6 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 			if (b_as.length === 1) {
 				const b_a = b_as[0];
 				if (b_a.name === 'b-for') {
-					const tag_str = reconstructTagExcluding(tag, ['b-for']);
 					const pieces = b_a.value.split(" in ");
 					if (pieces.length !== 2) throw new Error(`b-for value must be in the form "item in items", got: "${b_a.value}"`);
 					const iterable_parsed = interpretBackcode(pieces[1].trim());
@@ -545,7 +591,7 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 
 					const parent = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
 					const for_node: ForTNode = { type: 'for', iterable: iterable_parsed, valName: value_name, tnodes: [], parent };
-					const inner_tag: RawTNode = { type: 'raw', raw: tag_str, parent: for_node };
+					const inner_tag = makeOpenTagNode(tag, ['b-for'], for_node);
 					for_node.tnodes.push(inner_tag);
 					parent.tnodes!.push(for_node);
 					cur_tnode = inner_tag;
@@ -554,12 +600,11 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 					}
 				}
 				else if (b_a.name === 'b-if') {
-					const tag_str = reconstructTagExcluding(tag, ['b-if']);
 					const parent = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
 					const if_node: IfTNode = { type: 'if', branches: [], parent };
 					const branch: IfBranch = { condition: interpretBackcode(b_a.value), tnodes: [], ifNode: if_node };
 					if_node.branches.push(branch);
-					const inner_tag: RawTNode = { type: 'raw', raw: tag_str, parent: branch };
+					const inner_tag = makeOpenTagNode(tag, ['b-if'], branch);
 					branch.tnodes.push(inner_tag);
 					parent.tnodes!.push(if_node);
 					cur_tnode = inner_tag;
@@ -572,10 +617,9 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 					const if_node = findPrecedingIfInFile(cur_tnode);
 					if (b_a.name === 'b-else' && b_a.value) throw new Error("b-else should not have a value");
 					const condition = b_a.name === 'b-else-if' ? interpretBackcode(b_a.value) : undefined;
-					const tag_str = reconstructTagExcluding(tag, [b_a.name]);
 					const branch: IfBranch = { condition, tnodes: [], ifNode: if_node };
 					if_node.branches.push(branch);
-					const inner_tag: RawTNode = { type: 'raw', raw: tag_str, parent: branch };
+					const inner_tag = makeOpenTagNode(tag, [b_a.name], branch);
 					branch.tnodes.push(inner_tag);
 					cur_tnode = inner_tag;
 					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
@@ -584,11 +628,22 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 				}
 			}
 			else {
-				// Regular tag
-				const new_cur = pushRawHere(raw);
-				if (cur_tnode !== null) cur_tnode = new_cur;
-				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-					tag_stack.push({ tag: tag.tagName });
+				// Regular tag — check for bind attrs
+				const bindAttrs = tag.attrs.filter(attr => isBindAttr(attr.name));
+				if (bindAttrs.length > 0) {
+					const parent: ParentTNode = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
+					const node = makeOpenTagNode(tag, [], parent);
+					pushNodeHere(node);
+					cur_tnode = node;
+					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+						tag_stack.push({ tag: tag.tagName });
+					}
+				} else {
+					const new_cur = pushRawHere(raw);
+					if (cur_tnode !== null) cur_tnode = new_cur;
+					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+						tag_stack.push({ tag: tag.tagName });
+					}
 				}
 			}
 		} catch(e) { reject(e); } });

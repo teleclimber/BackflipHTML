@@ -40,7 +40,13 @@ export interface PartialRefRNode {
 	bindings: { name: string, data: rfn }[]
 }
 
-export type RNode = RawRNode | PrintRNode | ForRNode | IfRNode | SlotRNode | PartialRefRNode;
+export interface AttrBindRNode {
+	type: 'attr-bind',
+	tagPrefix: string,
+	bindings: { name: string, expr: rfn, isBoolean: boolean }[]
+}
+
+export type RNode = RawRNode | PrintRNode | ForRNode | IfRNode | SlotRNode | PartialRefRNode | AttrBindRNode;
 
 export type SlotMap = { [name: string]: { nodes: RNode[], ctx: any } }
 
@@ -69,6 +75,9 @@ export function render(n :RNode, ctx:any, slots?: SlotMap) :string {
 			break;
 		case 'slot':
 			out = renderSlot(n, slots);
+			break;
+		case 'attr-bind':
+			out = renderAttrBind(n, ctx);
 			break;
 		default:
 			throw new Error("unhandled node type");
@@ -144,6 +153,21 @@ function renderSlot(node: SlotRNode, slots: SlotMap | undefined) :string {
 	if( !slotEntry ) return '';
 	// Render slot content in the caller's context, slots don't leak inward
 	return slotEntry.nodes.map( n => render(n, slotEntry.ctx, undefined) ).join('');
+}
+
+function renderAttrBind(n: AttrBindRNode, ctx: any): string {
+	let attrs = '';
+	for (const binding of n.bindings) {
+		const val = execFn(binding.expr, ctx);
+		if (binding.isBoolean) {
+			if (val) attrs += ` ${binding.name}`;
+		} else {
+			if (val !== null && val !== undefined && val !== false) {
+				attrs += ` ${binding.name}="${escapeHtml(String(val))}"`;
+			}
+		}
+	}
+	return n.tagPrefix + attrs + '>';
 }
 
 function execFn(fData :rfn, ctx: any) :any {

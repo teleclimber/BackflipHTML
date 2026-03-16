@@ -90,6 +90,7 @@ function backflip_render(array $node, array $ctx, array $slots = []): string
         'if'          => backflip_renderIf($node, $ctx, $slots),
         'partial-ref' => backflip_renderPartialRef($node, $ctx),
         'slot'        => backflip_renderSlot($node, $slots),
+        'attr-bind'   => backflip_renderAttrBind($node, $ctx),
         default       => throw new \RuntimeException(
             "backflip_render: unhandled node type: " . $node['type']
         ),
@@ -186,6 +187,30 @@ function backflip_renderPartialRef(array $node, array $ctx): string
     }
 
     return $rendered;
+}
+
+/**
+ * Render an attr-bind node.
+ *
+ * Evaluates each binding; boolean attrs rendered as ` attrname` when truthy,
+ * non-boolean attrs rendered as ` attrname="value"` when not null/false.
+ */
+function backflip_renderAttrBind(array $node, array $ctx): string
+{
+    $attrs = '';
+    foreach ($node['bindings'] as $binding) {
+        $val = backflip_execFn($binding['expr'], $ctx);
+        if ($binding['isBoolean']) {
+            if (backflip_isTruthy($val)) {
+                $attrs .= ' ' . $binding['name'];
+            }
+        } else {
+            if ($val !== null && $val !== false) {
+                $attrs .= ' ' . $binding['name'] . '="' . htmlspecialchars((string)$val, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '"';
+            }
+        }
+    }
+    return $node['tagPrefix'] . $attrs . '>';
 }
 
 /**

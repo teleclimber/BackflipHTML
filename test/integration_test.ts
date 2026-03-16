@@ -267,3 +267,54 @@ Deno.test("cross-file: box partial in components.html renders slot content", () 
         "<div class=\"box\">content</div>"
     );
 });
+
+// ---------------------------------------------------------------------------
+// binds.html — :attr / b-bind:attr dynamic attribute binding
+// ---------------------------------------------------------------------------
+
+Deno.test("attr-bind: checkbox checked=true, disabled=false", () => {
+    const mod = getModule("binds.html");
+    assertEquals(
+        normalize(renderRoot(mod.checkbox, { isChecked: true, isDisabled: false })),
+        `<div><input type="checkbox" checked></div>`
+    );
+});
+
+Deno.test("attr-bind: checkbox checked=false, disabled=true", () => {
+    const mod = getModule("binds.html");
+    assertEquals(
+        normalize(renderRoot(mod.checkbox, { isChecked: false, isDisabled: true })),
+        `<div><input type="checkbox" disabled></div>`
+    );
+});
+
+Deno.test("attr-bind: link with url and cls=false omits class", () => {
+    const mod = getModule("binds.html");
+    assertEquals(
+        normalize(renderRoot(mod.link, { url: "/about", cls: false })),
+        `<div><a href="/about">Link</a></div>`
+    );
+});
+
+Deno.test("attr-bind: link with url and cls string includes class", () => {
+    const mod = getModule("binds.html");
+    assertEquals(
+        normalize(renderRoot(mod.link, { url: "/about", cls: "active" })),
+        `<div><a href="/about" class="active">Link</a></div>`
+    );
+});
+
+Deno.test("attr-bind: XSS in href is escaped", () => {
+    const mod = getModule("binds.html");
+    const result = renderRoot(mod.link, { url: '"><script>alert(1)</script>', cls: false });
+    assertStringIncludes(result, "&quot;");
+    assertStringIncludes(result, "&lt;script&gt;");
+});
+
+Deno.test("attr-bind: ampersand in class is escaped", () => {
+    const mod = getModule("binds.html");
+    assertStringIncludes(
+        renderRoot(mod.link, { url: "/", cls: "foo & bar" }),
+        `class="foo &amp; bar"`
+    );
+});

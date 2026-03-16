@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, PartialBinding, CompiledFile } from '../../compiler.ts';
+import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, PartialBinding, AttrBindTNode, AttrBindEntry, CompiledFile } from '../../compiler.ts';
 import type { Parsed } from '../../backcode.ts';
 import { generateFunction } from './generatejs.ts';
 
@@ -35,6 +35,9 @@ export function nodeToJS(n :TNode|RootTNode) :string {
 			break;
 		case 'partial-ref':
 			out = partialRefToJS(n);
+			break;
+		case 'attr-bind':
+			out = attrBindToJS(n);
 			break;
 		default:
 			throw new Error("unhandled node type");
@@ -105,6 +108,13 @@ function partialRefToJS(n: PartialRefTNode) :string {
 	slots: { ${slots} },
 	bindings: [ ${bindings} ]
 }`;
+}
+
+function attrBindToJS(n: AttrBindTNode): string {
+	const bindings = n.bindings.map((b: AttrBindEntry) =>
+		`{ name: '${b.name}', expr: ${backcodeToJS(b.expr)}, isBoolean: ${b.isBoolean} }`
+	).join(',\n');
+	return `{ type: 'attr-bind', tagPrefix: '${escapeStr(n.tagPrefix)}', bindings: [\n${bindings}\n] }`;
 }
 
 function escapeStr(s: string): string {
