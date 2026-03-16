@@ -1,7 +1,7 @@
 import { assertEquals, assertThrows } from "jsr:@std/assert";
 
 import type { RootRNode, RawRNode, PrintRNode, ForRNode, IfRNode, SlotRNode, PartialRefRNode, rfn } from "./render.ts";
-import { render, renderRoot } from "./render.ts";
+import { render, renderRoot, escapeHtml } from "./render.ts";
 
 function makeFn(code: string, vars: string[]): rfn {
 	return { fn: new Function(...vars, `return ${code};`) as (...args: any[]) => any, vars };
@@ -312,4 +312,21 @@ Deno.test("slot content is rendered in caller context not partial context", () =
 	// caller ctx has name='caller-name'; partial binding overrides to 'partial-name'
 	// but slot content should still see 'caller-name'
 	assertEquals(render(node, { name: 'caller-name' }), 'caller-name');
+});
+
+// ---------------------------------------------------------------------------
+// escapeHtml unit tests
+// ---------------------------------------------------------------------------
+
+Deno.test("escapeHtml: escapes <", () => assertEquals(escapeHtml('<'), '&lt;'));
+Deno.test("escapeHtml: escapes >", () => assertEquals(escapeHtml('>'), '&gt;'));
+Deno.test("escapeHtml: escapes &", () => assertEquals(escapeHtml('&'), '&amp;'));
+Deno.test("escapeHtml: escapes \"", () => assertEquals(escapeHtml('"'), '&quot;'));
+Deno.test("escapeHtml: escapes '", () => assertEquals(escapeHtml("'"), '&#39;'));
+Deno.test("escapeHtml: leaves plain text alone", () => assertEquals(escapeHtml('hello world'), 'hello world'));
+Deno.test("escapeHtml: escapes multiple chars", () => assertEquals(escapeHtml('<b>"it\'s" & fun</b>'), '&lt;b&gt;&quot;it&#39;s&quot; &amp; fun&lt;/b&gt;'));
+
+Deno.test("print node escapes HTML", () => {
+	const node: PrintRNode = { type: 'print', data: makeFn('v', ['v']) };
+	assertEquals(render(node, { v: '<script>alert(1)</script>' }), '&lt;script&gt;alert(1)&lt;/script&gt;');
 });

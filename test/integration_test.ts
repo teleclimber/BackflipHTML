@@ -8,7 +8,7 @@
  * so that static `import` statements between modules resolve correctly.
  */
 
-import { assertEquals } from "jsr:@std/assert";
+import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { compileDirectory } from "../compiler/partials.ts";
@@ -86,6 +86,13 @@ Deno.test("greeting: renders <p> with interpolated name", () => {
     assertEquals(
         renderRoot(getModule("simple.html").greeting, { name: "World" }),
         "<p>Hello, World!</p>"
+    );
+});
+
+Deno.test("greeting: escapes HTML in interpolated value", () => {
+    assertStringIncludes(
+        renderRoot(getModule("simple.html").greeting, { name: "<script>alert(1)</script>" }),
+        "&lt;script&gt;alert(1)&lt;/script&gt;"
     );
 });
 

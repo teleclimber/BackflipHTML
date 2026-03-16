@@ -147,11 +147,12 @@ function backflip_renderIf(array $node, array $ctx, array $slots): string
 /**
  * Render a print (expression output) node.
  *
- * Note: no HTML escaping — matches JS runtime behavior.
+ * HTML-escapes the evaluated value to prevent XSS.
  */
 function backflip_renderPrint(array $node, array $ctx): string
 {
-    return (string) backflip_execFn($node['data'], $ctx);
+    $value = (string) backflip_execFn($node['data'], $ctx);
+    return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
 
 /**

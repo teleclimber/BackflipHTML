@@ -7,7 +7,7 @@
  * Mirrors integration_test.ts exactly: same templates, same contexts, same expected outputs.
  */
 
-import { assertEquals } from "jsr:@std/assert";
+import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { compileDirectory } from "../compiler/partials.ts";
@@ -102,6 +102,13 @@ Deno.test("php: greeting: renders <p> with interpolated name", async () => {
     assertEquals(
         await renderPhp("simple.html", "greeting", { name: "World" }),
         "<p>Hello, World!</p>"
+    );
+});
+
+Deno.test("php: greeting: escapes HTML in interpolated value", async () => {
+    assertStringIncludes(
+        await renderPhp("simple.html", "greeting", { name: "<script>alert(1)</script>" }),
+        "&lt;script&gt;alert(1)&lt;/script&gt;"
     );
 });
 

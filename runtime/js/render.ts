@@ -108,8 +108,17 @@ function renderIf(if_node: IfRNode, ctx:any, slots?: SlotMap) :string {
 	return '';
 }
 
+export function escapeHtml(s: string): string {
+	return s
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+		.replace(/"/g, '&quot;')
+		.replace(/'/g, '&#39;');
+}
+
 function renderPrint(print_node: PrintRNode, ctx:any) :string {
-	return execFn(print_node.data, ctx);
+	return escapeHtml(String(execFn(print_node.data, ctx)));
 }
 
 function renderPartialRef(node: PartialRefRNode, ctx: any) :string {
