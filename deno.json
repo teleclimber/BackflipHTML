@@ -1,11 +1,13 @@
 {
     "name": "@backflip/html",
     "version": "0.1.0",
+    "exports": "./mod.ts",
     "nodeModulesDir": "auto",
     "tasks": {
-        "test": "deno test --allow-read"
+        "test": "deno test --allow-read --allow-write --allow-run=php"
     },
     "imports": {
-        "@std/assert": "jsr:@std/assert"
+        "@std/assert": "jsr:@std/assert",
+        "@std/cli": "jsr:@std/cli@^1.0.28"
     }
 }
