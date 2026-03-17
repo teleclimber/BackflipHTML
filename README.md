@@ -1,6 +1,8 @@
 # BackflipHTML
 
-BackflipHTML is an HTML templating system that supports generating output from multiple languages. You write HTML with special `b-*` directive attributes and `{{ expression }}` interpolations using a subset of JavaScript, and the system compiles it into a language agnostic representation. It can then produce outputs for use in different environments, such as JS and PHP (Go not yet supported).
+BackflipHTML is an HTML templating system that supports generating output in multiple languages. You write HTML with special `b-*` directive attributes and `{{ expression }}` interpolations using a subset of JavaScript, and the system compiles it into JS or PHP files. A lightweight library generates HTML from these outputs.
+
+(For now only JS and PHP are supported. Go is coming later. Other languages can be supported fairly easily.)
 
 The pipeline has three stages, each living in its own subfolder:
 
@@ -14,7 +16,7 @@ It uses `parse5`'s streaming HTML parser under the hood, so it handles real HTML
 
 `backcode.ts` within this folder handles the expression language used in directives and `{{ }}` interpolations. It uses `acorn` to parse expressions as a subset of JavaScript, validates that only safe/allowed constructs are used (identifiers, literals, member access), and extracts the list of variable names the expression depends on.
 
-**Generates** an AST representation of the template that can be consumed in the following steps.
+The output of the compiler is an AST representation of the template that can be consumed in the following steps.
 
 ---
 
