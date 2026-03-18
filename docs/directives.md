@@ -67,6 +67,41 @@ All three directives compile to a single `IfTNode`. They can be nested freely in
 
 ---
 
+## `b-bind:` / `:` — attribute binding
+
+Syntax: `b-bind:attrname="expression"` or the shorthand `:attrname="expression"`
+
+Dynamically sets an HTML attribute value from an expression.
+
+```html
+<a :href="url">Link</a>
+<img :src="avatar" :alt="user.name">
+```
+
+Multiple bindings can appear on the same element:
+
+```html
+<input type="checkbox" :checked="isChecked" :disabled="isDisabled">
+```
+
+**Boolean attributes** (e.g. `checked`, `disabled`, `readonly`, `selected`) are treated specially: when the expression is truthy the attribute name is rendered with no value; when falsy the attribute is omitted entirely.
+
+```html
+<!-- isChecked=true  → <input type="checkbox" checked> -->
+<!-- isChecked=false → <input type="checkbox"> -->
+<input type="checkbox" :checked="isChecked">
+```
+
+**Non-boolean attributes** are omitted when the expression evaluates to `null`, `undefined`, or `false`; otherwise the value is HTML-escaped and rendered as `attrname="value"`.
+
+```html
+<!-- cls="active" → <div class="active"> -->
+<!-- cls=false    → <div> -->
+<div :class="cls"></div>
+```
+
+---
+
 ## `<b-unwrap>` — wrapper-free rendering
 
 `<b-unwrap>` is a special element that renders its children without itself. It is not a real HTML tag and never appears in the output.
