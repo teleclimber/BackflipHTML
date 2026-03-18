@@ -60,15 +60,14 @@ export type PartialRegistry = Map<string, Set<string>>
 // key: relative file path e.g. "graphics/charts.html"
 // value: set of exported partial names in that file
 
-export interface AttrBindEntry {
-	name: string        // attribute name, e.g. "checked"
-	expr: Parsed        // parsed expression
-	isBoolean: boolean  // true for HTML boolean attributes
-}
+export type AttrPart =
+	| { type: 'static'; raw: string }
+	| { type: 'dynamic'; name: string; expr: Parsed; isBoolean: boolean }
+
 export interface AttrBindTNode extends ChildTNode {
 	type: 'attr-bind'
-	tagPrefix: string   // e.g. `<input type="text"` (no trailing >)
-	bindings: AttrBindEntry[]
+	tagOpen: string   // e.g. `<a`
+	parts: AttrPart[]
 }
 
 export type TNode = RawTNode | PrintTNode | ForTNode | IfTNode | SlotTNode | PartialRefTNode | AttrBindTNode;
@@ -392,17 +391,25 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 
 		// Helper: make a RawTNode or AttrBindTNode for a tag's open element
 		function makeOpenTagNode(tag: {tagName:string, attrs:{name:string,value:string}[]}, excludeAttrs: string[], parent: ParentTNode): RawTNode | AttrBindTNode {
-			const bindAttrs = tag.attrs.filter(attr => isBindAttr(attr.name));
-			if (bindAttrs.length === 0) {
-				const raw = reconstructTagExcluding(tag, excludeAttrs);
-				return { type: 'raw', raw, parent };
+			const hasBind = tag.attrs.some(attr => isBindAttr(attr.name));
+			if (!hasBind) {
+				return { type: 'raw', raw: reconstructTagExcluding(tag, excludeAttrs), parent };
 			}
-			const tagPrefix = buildTagPrefix(tag, excludeAttrs);
-			const bindings: AttrBindEntry[] = bindAttrs.map(attr => {
-				const name = getBindAttrName(attr.name);
-				return { name, expr: interpretBackcode(attr.value), isBoolean: BOOLEAN_ATTRS.has(name) };
-			});
-			return { type: 'attr-bind', tagPrefix, bindings, parent };
+			const tagOpen = `<${tag.tagName}`;
+			const parts: AttrPart[] = [];
+			let staticBuf = '';
+			for (const attr of tag.attrs) {
+				if (excludeAttrs.includes(attr.name) || attr.name.startsWith('b-data:')) continue;
+				if (isBindAttr(attr.name)) {
+					if (staticBuf) { parts.push({ type: 'static', raw: staticBuf }); staticBuf = ''; }
+					const name = getBindAttrName(attr.name);
+					parts.push({ type: 'dynamic', name, expr: interpretBackcode(attr.value), isBoolean: BOOLEAN_ATTRS.has(name) });
+				} else {
+					staticBuf += ` ${attr.name}="${attr.value}"`;
+				}
+			}
+			if (staticBuf) parts.push({ type: 'static', raw: staticBuf });
+			return { type: 'attr-bind', tagOpen, parts, parent };
 		}
 
 		function findPrecedingIfInFile(cur: TNode): IfTNode {

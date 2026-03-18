@@ -318,3 +318,11 @@ Deno.test("attr-bind: ampersand in class is escaped", () => {
         `class="foo &amp; bar"`
     );
 });
+
+Deno.test("attr-bind: mixed static and dynamic attrs preserve source order", () => {
+    const mod = getModule("binds.html");
+    assertEquals(
+        normalize(renderRoot(mod.mixed, { url: "/about", cls: "active" })),
+        `<div><a href="/about" id="footer" class="active">Link</a></div>`
+    );
+});

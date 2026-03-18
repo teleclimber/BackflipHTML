@@ -192,25 +192,30 @@ function backflip_renderPartialRef(array $node, array $ctx): string
 /**
  * Render an attr-bind node.
  *
- * Evaluates each binding; boolean attrs rendered as ` attrname` when truthy,
+ * Iterates parts in source order; static parts are appended as-is, dynamic
+ * parts are evaluated: boolean attrs rendered as ` attrname` when truthy,
  * non-boolean attrs rendered as ` attrname="value"` when not null/false.
  */
 function backflip_renderAttrBind(array $node, array $ctx): string
 {
-    $attrs = '';
-    foreach ($node['bindings'] as $binding) {
-        $val = backflip_execFn($binding['expr'], $ctx);
-        if ($binding['isBoolean']) {
-            if (backflip_isTruthy($val)) {
-                $attrs .= ' ' . $binding['name'];
-            }
+    $out = $node['tagOpen'];
+    foreach ($node['parts'] as $p) {
+        if ($p['type'] === 'static') {
+            $out .= $p['raw'];
         } else {
-            if ($val !== null && $val !== false) {
-                $attrs .= ' ' . $binding['name'] . '="' . htmlspecialchars((string)$val, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '"';
+            $val = backflip_execFn($p['expr'], $ctx);
+            if ($p['isBoolean']) {
+                if (backflip_isTruthy($val)) {
+                    $out .= ' ' . $p['name'];
+                }
+            } else {
+                if ($val !== null && $val !== false) {
+                    $out .= ' ' . $p['name'] . '="' . htmlspecialchars((string)$val, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '"';
+                }
             }
         }
     }
-    return $node['tagPrefix'] . $attrs . '>';
+    return $out . '>';
 }
 
 /**

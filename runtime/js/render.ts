@@ -40,10 +40,14 @@ export interface PartialRefRNode {
 	bindings: { name: string, data: rfn }[]
 }
 
+export type AttrRPart =
+	| { type: 'static'; raw: string }
+	| { type: 'dynamic'; name: string; expr: rfn; isBoolean: boolean }
+
 export interface AttrBindRNode {
 	type: 'attr-bind',
-	tagPrefix: string,
-	bindings: { name: string, expr: rfn, isBoolean: boolean }[]
+	tagOpen: string,
+	parts: AttrRPart[]
 }
 
 export type RNode = RawRNode | PrintRNode | ForRNode | IfRNode | SlotRNode | PartialRefRNode | AttrBindRNode;
@@ -156,18 +160,22 @@ function renderSlot(node: SlotRNode, slots: SlotMap | undefined) :string {
 }
 
 function renderAttrBind(n: AttrBindRNode, ctx: any): string {
-	let attrs = '';
-	for (const binding of n.bindings) {
-		const val = execFn(binding.expr, ctx);
-		if (binding.isBoolean) {
-			if (val) attrs += ` ${binding.name}`;
+	let out = n.tagOpen;
+	for (const p of n.parts) {
+		if (p.type === 'static') {
+			out += p.raw;
 		} else {
-			if (val !== null && val !== undefined && val !== false) {
-				attrs += ` ${binding.name}="${escapeHtml(String(val))}"`;
+			const val = execFn(p.expr, ctx);
+			if (p.isBoolean) {
+				if (val) out += ` ${p.name}`;
+			} else {
+				if (val !== null && val !== undefined && val !== false) {
+					out += ` ${p.name}="${escapeHtml(String(val))}"`;
+				}
 			}
 		}
 	}
-	return n.tagPrefix + attrs + '>';
+	return out + '>';
 }
 
 function execFn(fData :rfn, ctx: any) :any {

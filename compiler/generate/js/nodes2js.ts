@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, PartialBinding, AttrBindTNode, AttrBindEntry, CompiledFile } from '../../compiler.ts';
+import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, PartialBinding, AttrBindTNode, CompiledFile } from '../../compiler.ts';
 import type { Parsed } from '../../backcode.ts';
 import { generateFunction } from './generatejs.ts';
 
@@ -111,10 +111,12 @@ function partialRefToJS(n: PartialRefTNode) :string {
 }
 
 function attrBindToJS(n: AttrBindTNode): string {
-	const bindings = n.bindings.map((b: AttrBindEntry) =>
-		`{ name: '${b.name}', expr: ${backcodeToJS(b.expr)}, isBoolean: ${b.isBoolean} }`
+	const parts = n.parts.map(p =>
+		p.type === 'static'
+			? `{ type: 'static', raw: '${escapeStr(p.raw)}' }`
+			: `{ type: 'dynamic', name: '${p.name}', expr: ${backcodeToJS(p.expr)}, isBoolean: ${p.isBoolean} }`
 	).join(',\n');
-	return `{ type: 'attr-bind', tagPrefix: '${escapeStr(n.tagPrefix)}', bindings: [\n${bindings}\n] }`;
+	return `{ type: 'attr-bind', tagOpen: '${escapeStr(n.tagOpen)}', parts: [\n${parts}\n] }`;
 }
 
 function escapeStr(s: string): string {

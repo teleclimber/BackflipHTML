@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, PartialBinding, AttrBindTNode, AttrBindEntry, CompiledFile } from '../../compiler.ts';
+import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, PartialBinding, AttrBindTNode, CompiledFile } from '../../compiler.ts';
 import type { Parsed } from '../../backcode.ts';
 import { generatePhpFunction } from './generatephp.ts';
 
@@ -115,10 +115,12 @@ function partialRefToPhp(n: PartialRefTNode): string {
 }
 
 function attrBindToPhp(n: AttrBindTNode): string {
-	const bindings = n.bindings.map((b: AttrBindEntry) =>
-		`['name' => '${b.name}', 'expr' => ${backcodeToPhp(b.expr)}, 'isBoolean' => ${b.isBoolean ? 'true' : 'false'}]`
+	const parts = n.parts.map(p =>
+		p.type === 'static'
+			? `['type' => 'static', 'raw' => '${escapeStr(p.raw)}']`
+			: `['type' => 'dynamic', 'name' => '${escapeStr(p.name)}', 'expr' => ${backcodeToPhp(p.expr)}, 'isBoolean' => ${p.isBoolean ? 'true' : 'false'}]`
 	).join(',\n        ');
-	return `['type' => 'attr-bind', 'tagPrefix' => '${escapeStr(n.tagPrefix)}', 'bindings' => [\n        ${bindings}\n    ]]`;
+	return `['type' => 'attr-bind', 'tagOpen' => '${escapeStr(n.tagOpen)}', 'parts' => [\n        ${parts}\n    ]]`;
 }
 
 function escapeStr(s: string): string {
