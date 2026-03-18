@@ -4,12 +4,22 @@ import stream from 'node:stream';
 import { interpretBackcode } from './backcode.ts';
 import type { Parsed } from './backcode.ts';
 
+export interface SourceLoc {
+	startLine: number;    // 1-based
+	startCol: number;     // 1-based
+	startOffset: number;  // 0-based char index into the source file
+	endLine: number;
+	endCol: number;
+	endOffset: number;    // points directly after the last character
+}
+
 export interface ChildTNode {
 	parent: ParentTNode
 }
 export interface RootTNode {
 	type: 'root',
-	tnodes: TNode[]
+	tnodes: TNode[],
+	loc?: SourceLoc
 }
 export interface RawTNode extends ChildTNode {
 	type: 'raw',
@@ -18,17 +28,20 @@ export interface RawTNode extends ChildTNode {
 export interface PrintTNode extends ChildTNode {	// for outputing {{ foo }} into HTML (do escaping)
 	type: 'print',
 	data: Parsed,
+	loc?: SourceLoc
 }
 export interface ForTNode extends ChildTNode {
 	type: 'for',
 	iterable: Parsed,
 	valName: string,
-	tnodes: TNode[]
+	tnodes: TNode[],
+	loc?: SourceLoc
 }
 export interface IfBranch {
 	condition?: Parsed,
 	tnodes: TNode[],
-	ifNode: IfTNode
+	ifNode: IfTNode,
+	loc?: SourceLoc
 }
 export interface IfTNode extends ChildTNode {
 	type: 'if',
@@ -37,7 +50,8 @@ export interface IfTNode extends ChildTNode {
 
 export interface SlotTNode extends ChildTNode {
 	type: 'slot',
-	name: string | undefined   // undefined = default slot
+	name: string | undefined,   // undefined = default slot
+	loc?: SourceLoc
 }
 export interface PartialBinding {
 	name: string,
@@ -49,7 +63,8 @@ export interface PartialRefTNode extends ChildTNode {
 	partialName: string,
 	wrapper: { open: string, close: string } | null,  // null if <b-unwrap b-part>
 	slots: { [slotName: string]: TNode[] },            // 'default' for unnamed
-	bindings: PartialBinding[]
+	bindings: PartialBinding[],
+	loc?: SourceLoc
 }
 
 export interface CompiledFile {
@@ -62,7 +77,7 @@ export type PartialRegistry = Map<string, Set<string>>
 
 export type AttrPart =
 	| { type: 'static'; raw: string }
-	| { type: 'dynamic'; name: string; expr: Parsed; isBoolean: boolean }
+	| { type: 'dynamic'; name: string; expr: Parsed; isBoolean: boolean; loc?: SourceLoc }
 
 export interface AttrBindTNode extends ChildTNode {
 	type: 'attr-bind'
@@ -97,6 +112,32 @@ function getBindAttrName(name: string): string {
 	if (name.startsWith('b-bind:')) return name.slice('b-bind:'.length);
 	if (name.startsWith(':')) return name.slice(1);
 	throw new Error(`Not a bind attr: ${name}`);
+}
+
+type LocAttrs = { attrs?: Record<string, { startLine: number; startCol: number; startOffset: number; endLine: number; endCol: number; endOffset: number }> };
+
+function attrLoc(tag: { sourceCodeLocation?: unknown }, attrName: string): SourceLoc | undefined {
+	const loc = tag.sourceCodeLocation as LocAttrs | null | undefined;
+	const a = loc?.attrs?.[attrName];
+	if (!a) return undefined;
+	return { startLine: a.startLine, startCol: a.startCol, startOffset: a.startOffset,
+	         endLine: a.endLine, endCol: a.endCol, endOffset: a.endOffset };
+}
+
+function interpolationLoc(
+	textLoc: { startLine: number; startCol: number; startOffset: number },
+	rawBefore: string,
+	matchStr: string
+): SourceLoc {
+	const startOffset = textLoc.startOffset + rawBefore.length;
+	const endOffset = startOffset + matchStr.length;
+	const newlinesBefore = (rawBefore.match(/\n/g) ?? []).length;
+	const lastNl = rawBefore.lastIndexOf('\n');
+	const startLine = textLoc.startLine + newlinesBefore;
+	const startCol = lastNl === -1 ? textLoc.startCol + rawBefore.length : rawBefore.length - lastNl;
+	const endLine = startLine;
+	const endCol = startCol + matchStr.length;
+	return { startLine, startCol, startOffset, endLine, endCol, endOffset };
 }
 
 export function generateStringStack(in_str:string) :Promise<RootTNode> {
@@ -166,6 +207,7 @@ export function generateStringStack(in_str:string) :Promise<RootTNode> {
 						tnodes: [],
 						parent: cur_tnode.parent
 					};
+					for_node.loc = attrLoc(tag, 'b-for');
 					const inner_tag:RawTNode = {
 						type: 'raw',
 						raw: tag_str,
@@ -198,6 +240,7 @@ export function generateStringStack(in_str:string) :Promise<RootTNode> {
 						tnodes: [],
 						ifNode: if_node
 					};
+					branch.loc = attrLoc(tag, 'b-if');
 					if_node.branches.push(branch);
 
 					const inner_tag :RawTNode = {
@@ -231,6 +274,7 @@ export function generateStringStack(in_str:string) :Promise<RootTNode> {
 						tnodes: [],
 						ifNode: if_node
 					};
+					branch.loc = attrLoc(tag, b_a.name);
 					if_node.branches.push(branch);
 
 					const inner_tag :RawTNode = {
@@ -280,8 +324,9 @@ export function generateStringStack(in_str:string) :Promise<RootTNode> {
 			}
 		} catch(e) { reject(e); } });
 
-		rewriteStream.on('text', (_, raw:string) => { try {
-			cur_tnode = onText(cur_tnode, raw);
+		rewriteStream.on('text', (textToken: {sourceCodeLocation?: {startLine:number;startCol:number;startOffset:number}|null}, raw:string) => { try {
+			const textLoc = textToken.sourceCodeLocation ?? undefined;
+			cur_tnode = onText(cur_tnode, raw, textLoc);
 		} catch(e) { reject(e); } } );
 
 		s.pipe(rewriteStream);
@@ -390,7 +435,7 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 		}
 
 		// Helper: make a RawTNode or AttrBindTNode for a tag's open element
-		function makeOpenTagNode(tag: {tagName:string, attrs:{name:string,value:string}[]}, excludeAttrs: string[], parent: ParentTNode): RawTNode | AttrBindTNode {
+		function makeOpenTagNode(tag: {tagName:string, attrs:{name:string,value:string}[], sourceCodeLocation?: unknown}, excludeAttrs: string[], parent: ParentTNode): RawTNode | AttrBindTNode {
 			const hasBind = tag.attrs.some(attr => isBindAttr(attr.name));
 			if (!hasBind) {
 				return { type: 'raw', raw: reconstructTagExcluding(tag, excludeAttrs), parent };
@@ -403,7 +448,7 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 				if (isBindAttr(attr.name)) {
 					if (staticBuf) { parts.push({ type: 'static', raw: staticBuf }); staticBuf = ''; }
 					const name = getBindAttrName(attr.name);
-					parts.push({ type: 'dynamic', name, expr: interpretBackcode(attr.value), isBoolean: BOOLEAN_ATTRS.has(name) });
+					parts.push({ type: 'dynamic', name, expr: interpretBackcode(attr.value), isBoolean: BOOLEAN_ATTRS.has(name), loc: attrLoc(tag, attr.name) });
 				} else {
 					staticBuf += ` ${attr.name}="${attr.value}"`;
 				}
@@ -438,6 +483,7 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 
 				const partialName = bNameAttr.value;
 				const partialRoot: RootTNode = { type: 'root', tnodes: [] };
+				partialRoot.loc = attrLoc(tag, 'b-name');
 				compiledFile.partials.set(partialName, partialRoot);
 
 				currentPartialRoot = partialRoot;
@@ -509,6 +555,7 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 					bindings,
 					parent
 				};
+				partialRef.loc = attrLoc(tag, 'b-part');
 
 				pushNodeHere(partialRef);
 				// After pushing, update cur_tnode so subsequent siblings work
@@ -535,6 +582,7 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 				const parent: ParentTNode = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
 
 				const slot_node: SlotTNode = { type: 'slot', name: slotName, parent };
+				slot_node.loc = attrLoc(tag, 'b-slot');
 
 				if (cur_tnode !== null) {
 					cur_tnode.parent.tnodes!.push(slot_node);
@@ -598,6 +646,7 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 
 					const parent = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
 					const for_node: ForTNode = { type: 'for', iterable: iterable_parsed, valName: value_name, tnodes: [], parent };
+					for_node.loc = attrLoc(tag, 'b-for');
 					const inner_tag = makeOpenTagNode(tag, ['b-for'], for_node);
 					for_node.tnodes.push(inner_tag);
 					parent.tnodes!.push(for_node);
@@ -610,6 +659,7 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 					const parent = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
 					const if_node: IfTNode = { type: 'if', branches: [], parent };
 					const branch: IfBranch = { condition: interpretBackcode(b_a.value), tnodes: [], ifNode: if_node };
+					branch.loc = attrLoc(tag, 'b-if');
 					if_node.branches.push(branch);
 					const inner_tag = makeOpenTagNode(tag, ['b-if'], branch);
 					branch.tnodes.push(inner_tag);
@@ -625,6 +675,7 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 					if (b_a.name === 'b-else' && b_a.value) throw new Error("b-else should not have a value");
 					const condition = b_a.name === 'b-else-if' ? interpretBackcode(b_a.value) : undefined;
 					const branch: IfBranch = { condition, tnodes: [], ifNode: if_node };
+					branch.loc = attrLoc(tag, b_a.name);
 					if_node.branches.push(branch);
 					const inner_tag = makeOpenTagNode(tag, [b_a.name], branch);
 					branch.tnodes.push(inner_tag);
@@ -704,8 +755,10 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 			}
 		} catch(e) { reject(e); } });
 
-		rewriteStream.on('text', (_, raw: string) => { try {
+		rewriteStream.on('text', (textToken: {sourceCodeLocation?: {startLine:number;startCol:number;startOffset:number}|null}, raw: string) => { try {
 			if (cur_tnode === null && currentPartialRoot === null) return; // outside any partial
+
+			const textLoc = textToken.sourceCodeLocation ?? undefined;
 
 			const sc = getSlotCollection();
 			if (sc) {
@@ -734,7 +787,9 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 						raw_it = m.index + m[0].length;
 						continue;
 					}
-					arr.push({ type: 'print', data: interpretBackcode(code_str), parent: dummyParent });
+					const print_node: PrintTNode = { type: 'print', data: interpretBackcode(code_str), parent: dummyParent };
+					if (textLoc) print_node.loc = interpolationLoc(textLoc, raw.substring(0, m.index), m[0]);
+					arr.push(print_node);
 					raw_it = m.index + m[0].length;
 				}
 				if (raw_it < raw.length) {
@@ -744,7 +799,7 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 					else { arr.push({ type: 'raw', raw: sub, parent: dummyParent }); }
 				}
 			} else if (cur_tnode !== null) {
-				cur_tnode = onText(cur_tnode, raw);
+				cur_tnode = onText(cur_tnode, raw, textLoc);
 			}
 		} catch(e) { reject(e); } });
 
@@ -758,10 +813,10 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 const cf_text_regex = new RegExp("({{[^{}]*}})", 'g');
 
 const text_regex = new RegExp("({{[^{}]*}})", 'g');
-export function onText(cur:TNode, raw :string) :TNode {
+export function onText(cur:TNode, raw :string, textLoc?: {startLine:number;startCol:number;startOffset:number}) :TNode {
 	// later match string against {{ }}
 	const matches = raw.matchAll(text_regex);
-	
+
 	let raw_it = 0;
 	for( const m of matches ) {
 		if( m.index > raw_it ) {
@@ -776,16 +831,16 @@ export function onText(cur:TNode, raw :string) :TNode {
 		}
 		const code_parsed = interpretBackcode(code_str);
 
-		const print_node :TNode = {
+		const print_node :PrintTNode = {
 			type: 'print',
 			data: code_parsed,
-			//func: new Function(`return ${code_str};`),
 			parent: cur.parent
 		};
+		if (textLoc) print_node.loc = interpolationLoc(textLoc, raw.substring(0, m.index), m[0]);
 		if( !cur.parent?.tnodes ) throw new Error("expected tnodes here");
 		cur.parent.tnodes.push(print_node);
 		cur = print_node;
-		
+
 		raw_it = m.index + m[0].length;
 	}
 

@@ -1,6 +1,6 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert";
 
-import type { RootTNode, RawTNode, ForTNode, IfTNode, SlotTNode, PartialRefTNode } from "./compiler.ts";
+import type { RootTNode, RawTNode, ForTNode, IfTNode, SlotTNode, PartialRefTNode, AttrBindTNode, SourceLoc } from "./compiler.ts";
 import { generateStringStack, compileFile, onText, pushRaw } from "./compiler.ts";
 import { interpretBackcode } from "./backcode.ts";
 
@@ -440,4 +440,222 @@ Deno.test("compileFile: b-data: creates bindings on PartialRefTNode", async () =
 	assertEquals(ref!.bindings.length, 1);
 	assertEquals(ref!.bindings[0].name, "title");
 	assertEquals(ref!.bindings[0].data.vars.includes("item"), true);
+});
+
+// ---- Source location tests ----
+
+function findPartialRef(root: RootTNode): PartialRefTNode {
+	for (const n of root.tnodes) {
+		if (n.type === 'partial-ref') return n as PartialRefTNode;
+	}
+	throw new Error("no partial-ref found");
+}
+
+function findForNode(root: RootTNode): ForTNode {
+	for (const n of root.tnodes) {
+		if (n.type === 'for') return n as ForTNode;
+	}
+	throw new Error("no for node found");
+}
+
+function findIfNode(root: RootTNode): IfTNode {
+	for (const n of root.tnodes) {
+		if (n.type === 'if') return n as IfTNode;
+	}
+	throw new Error("no if node found");
+}
+
+function findSlotNode(root: RootTNode): SlotTNode {
+	for (const n of root.tnodes) {
+		if (n.type === 'slot') return n as SlotTNode;
+	}
+	throw new Error("no slot node found");
+}
+
+Deno.test("loc: b-name attribute location on RootTNode", async () => {
+	const src = '<div b-name="hero">Hello</div>';
+	const result = await compileFile(src);
+	const root = result.partials.get("hero")!;
+	const loc = root.loc!;
+	assertEquals(loc !== undefined, true);
+	const expected = src.indexOf('b-name=');
+	assertEquals(loc.startOffset, expected);
+	assertEquals(loc.startLine, 1);
+	assertEquals(loc.startCol, expected + 1); // 1-based
+	// endOffset should point past the closing quote of b-name="hero"
+	const endExpected = src.indexOf('b-name=') + 'b-name="hero"'.length;
+	assertEquals(loc.endOffset, endExpected);
+});
+
+Deno.test("loc: b-part same-file PartialRefTNode location", async () => {
+	const src = '<div b-name="page"><div b-part="#hero"></div></div>';
+	const result = await compileFile(src);
+	const root = result.partials.get("page")!;
+	const ref = findPartialRef(root);
+	const loc = ref.loc!;
+	assertEquals(loc !== undefined, true);
+	const expected = src.indexOf('b-part=');
+	assertEquals(loc.startOffset, expected);
+	const endExpected = expected + 'b-part="#hero"'.length;
+	assertEquals(loc.endOffset, endExpected);
+});
+
+Deno.test("loc: b-part cross-file PartialRefTNode location", async () => {
+	const src = '<div b-name="page"><div b-part="other.html#bar"></div></div>';
+	const result = await compileFile(src);
+	const root = result.partials.get("page")!;
+	const ref = findPartialRef(root);
+	const loc = ref.loc!;
+	assertEquals(loc !== undefined, true);
+	const expected = src.indexOf('b-part=');
+	assertEquals(loc.startOffset, expected);
+	const endExpected = expected + 'b-part="other.html#bar"'.length;
+	assertEquals(loc.endOffset, endExpected);
+});
+
+Deno.test("loc: b-for attribute location on ForTNode", async () => {
+	const src = '<div b-name="page"><div b-for="item in items">hi</div></div>';
+	const result = await compileFile(src);
+	const root = result.partials.get("page")!;
+	const forNode = findForNode(root);
+	const loc = forNode.loc!;
+	assertEquals(loc !== undefined, true);
+	const expected = src.indexOf('b-for=');
+	assertEquals(loc.startOffset, expected);
+	const endExpected = expected + 'b-for="item in items"'.length;
+	assertEquals(loc.endOffset, endExpected);
+});
+
+Deno.test("loc: b-if attribute location on first IfBranch", async () => {
+	const src = '<div b-name="page"><div b-if="cond">yes</div></div>';
+	const result = await compileFile(src);
+	const root = result.partials.get("page")!;
+	const ifNode = findIfNode(root);
+	const loc = ifNode.branches[0].loc!;
+	assertEquals(loc !== undefined, true);
+	const expected = src.indexOf('b-if=');
+	assertEquals(loc.startOffset, expected);
+	const endExpected = expected + 'b-if="cond"'.length;
+	assertEquals(loc.endOffset, endExpected);
+});
+
+Deno.test("loc: b-else-if attribute location on second IfBranch", async () => {
+	const src = '<div b-name="page"><div b-if="cond">yes</div><div b-else-if="cond2">maybe</div></div>';
+	const result = await compileFile(src);
+	const root = result.partials.get("page")!;
+	const ifNode = findIfNode(root);
+	const loc = ifNode.branches[1].loc!;
+	assertEquals(loc !== undefined, true);
+	const expected = src.indexOf('b-else-if=');
+	assertEquals(loc.startOffset, expected);
+	const endExpected = expected + 'b-else-if="cond2"'.length;
+	assertEquals(loc.endOffset, endExpected);
+});
+
+Deno.test("loc: b-else attribute location on third IfBranch", async () => {
+	const src = '<div b-name="page"><div b-if="cond">yes</div><div b-else-if="cond2">maybe</div><div b-else>no</div></div>';
+	const result = await compileFile(src);
+	const root = result.partials.get("page")!;
+	const ifNode = findIfNode(root);
+	const loc = ifNode.branches[2].loc!;
+	assertEquals(loc !== undefined, true);
+	const expected = src.indexOf('b-else>');
+	assertEquals(loc.startOffset, expected);
+});
+
+Deno.test("loc: b-slot attribute location on SlotTNode", async () => {
+	const src = '<div b-name="card"><b-unwrap b-slot="title"></b-unwrap></div>';
+	const result = await compileFile(src);
+	const root = result.partials.get("card")!;
+	const slotNode = findSlotNode(root);
+	const loc = slotNode.loc!;
+	assertEquals(loc !== undefined, true);
+	const expected = src.indexOf('b-slot=');
+	assertEquals(loc.startOffset, expected);
+	const endExpected = expected + 'b-slot="title"'.length;
+	assertEquals(loc.endOffset, endExpected);
+});
+
+Deno.test("loc: b-slot with no value attribute location", async () => {
+	const src = '<div b-name="card"><b-unwrap b-slot></b-unwrap></div>';
+	const result = await compileFile(src);
+	const root = result.partials.get("card")!;
+	const slotNode = findSlotNode(root);
+	const loc = slotNode.loc!;
+	assertEquals(loc !== undefined, true);
+	const expected = src.indexOf('b-slot');
+	assertEquals(loc.startOffset, expected);
+});
+
+Deno.test("loc: {{ expr }} interpolation in text", async () => {
+	const src = '<div b-name="page">hello {{ myVar }} world</div>';
+	const result = await compileFile(src);
+	const root = result.partials.get("page")!;
+	// Find PrintTNode
+	let printNode: { type: string; loc?: SourceLoc } | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'print') { printNode = n; break; }
+	}
+	assertEquals(printNode !== undefined, true);
+	const loc = printNode!.loc!;
+	assertEquals(loc !== undefined, true);
+	const expected = src.indexOf('{{ myVar }}');
+	assertEquals(loc.startOffset, expected);
+	assertEquals(loc.endOffset, expected + '{{ myVar }}'.length);
+	assertEquals(loc.startLine, 1);
+});
+
+Deno.test("loc: {{ expr }} after newline increments line", async () => {
+	const src = '<div b-name="page">line1\n{{ myVar }}</div>';
+	const result = await compileFile(src);
+	const root = result.partials.get("page")!;
+	let printNode: { type: string; loc?: SourceLoc } | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'print') { printNode = n; break; }
+	}
+	assertEquals(printNode !== undefined, true);
+	const loc = printNode!.loc!;
+	assertEquals(loc !== undefined, true);
+	assertEquals(loc.startLine, 2);
+	assertEquals(loc.startCol, 1);
+	const expected = src.indexOf('{{ myVar }}');
+	assertEquals(loc.startOffset, expected);
+});
+
+Deno.test("loc: :href bind attr dynamic part location", async () => {
+	const src = '<div b-name="page"><a :href="url">link</a></div>';
+	const result = await compileFile(src);
+	const root = result.partials.get("page")!;
+	let attrBindNode: AttrBindTNode | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'attr-bind') { attrBindNode = n as AttrBindTNode; break; }
+	}
+	assertEquals(attrBindNode !== undefined, true);
+	const dynPart = attrBindNode!.parts.find(p => p.type === 'dynamic');
+	assertEquals(dynPart !== undefined, true);
+	const loc = (dynPart as { loc?: SourceLoc }).loc!;
+	assertEquals(loc !== undefined, true);
+	const expected = src.indexOf(':href=');
+	assertEquals(loc.startOffset, expected);
+	const endExpected = expected + ':href="url"'.length;
+	assertEquals(loc.endOffset, endExpected);
+});
+
+Deno.test("loc: b-bind:class bind attr dynamic part location", async () => {
+	const src = '<div b-name="page"><span b-bind:class="cls">text</span></div>';
+	const result = await compileFile(src);
+	const root = result.partials.get("page")!;
+	let attrBindNode: AttrBindTNode | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'attr-bind') { attrBindNode = n as AttrBindTNode; break; }
+	}
+	assertEquals(attrBindNode !== undefined, true);
+	const dynPart = attrBindNode!.parts.find(p => p.type === 'dynamic');
+	assertEquals(dynPart !== undefined, true);
+	const loc = (dynPart as { loc?: SourceLoc }).loc!;
+	assertEquals(loc !== undefined, true);
+	const expected = src.indexOf('b-bind:class=');
+	assertEquals(loc.startOffset, expected);
+	const endExpected = expected + 'b-bind:class="cls"'.length;
+	assertEquals(loc.endOffset, endExpected);
 });
