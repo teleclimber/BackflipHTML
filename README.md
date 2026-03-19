@@ -52,7 +52,16 @@ All expressions are compiled into PHP closures. This is done in two layers:
 
 ## `runtime/*/`
 
-The runtime renderer. It takes a tree structure where every expression is already a callable function — plus a **data context**, and walks the tree to produce the final HTML string.
+The runtime renderer. It takes a tree structure where every expression is already a callable function — plus a **data context**, and walks the tree to produce HTML.
+
+Internally, the renderer is **streaming-first**: all rendering is done via generators that `yield` string chunks as they walk the tree. This means HTML can be emitted incrementally — useful for large templates or server-sent responses.
+
+Two public APIs are provided in each language:
+
+- **`renderRoot`** — returns the complete HTML as a single string (wraps the streaming internals).
+- **`streamRenderRoot`** — returns a generator that yields string chunks incrementally.
+
+Node types handled:
 
 - `raw` nodes are passed through as-is
 - `print` nodes call their function with values pulled from the context and insert the result
@@ -64,7 +73,7 @@ The runtime renderer. It takes a tree structure where every expression is alread
 ### `runtime/js/`
 
 **Input:** an `RNode` tree (produced by evaluating `generatejs/`'s output) + a data context object
-**Output:** a rendered HTML string.
+**Output:** a rendered HTML string via `renderRoot`, or a `Generator<string>` via `streamRenderRoot`.
 
 ### `runtime/php/`
 
@@ -72,10 +81,10 @@ The runtime renderer. It takes a tree structure where every expression is alread
 
 - Truthiness follows **JavaScript semantics**, not PHP's: `"0"` and `[]` are truthy (use `backflip_isTruthy()` — never a bare PHP boolean cast).
 - `backflip_require($path)` loads generated PHP files with static caching, working around PHP's `require_once` returning `1` on repeat calls.
-- All `backflip_render*` functions return strings; callers choose whether to `echo`.
+- `backflip_renderRoot` returns a string; `backflip_streamRenderRoot` returns a `Generator` that yields string chunks.
 
 **Input:** a node tree array (produced by loading a `generatephp/`-emitted `.php` file) + a data context array
-**Output:** a rendered HTML string.
+**Output:** a rendered HTML string via `backflip_renderRoot`, or a `Generator` via `backflip_streamRenderRoot`.
 
 ---
 
@@ -104,7 +113,8 @@ HTML template string
         ▼                                 ▼
   [ runtime/js/ ]               [ runtime/php/ ]
   walks tree + JS context       walks tree + PHP array context
-  → HTML string                 → HTML string
+  → Generator<string> chunks    → Generator chunks
+    or collected HTML string      or collected HTML string
 ```
 
 The compile step (`compiler/` + `compiler/generate/*/`) only needs to run once per template. The resulting module can be cached and reused, with only the lightweight runtime render pass running per request.

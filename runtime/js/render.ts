@@ -55,54 +55,55 @@ export type RNode = RawRNode | PrintRNode | ForRNode | IfRNode | SlotRNode | Par
 export type SlotMap = { [name: string]: { nodes: RNode[], ctx: any } }
 
 export function renderRoot(n :RootRNode, ctx:any, slots?: SlotMap) :string {
-	return n.nodes.map( n => render(n, ctx, slots) ).join('');
+	return Array.from(streamRenderRoot(n, ctx, slots)).join('');
 }
-// all-at-once renderer. Change to streaming please.
-export function render(n :RNode, ctx:any, slots?: SlotMap) :string {
-	let out = '';
 
+export function* streamRenderRoot(n: RootRNode, ctx: any, slots?: SlotMap): Generator<string> {
+	for (const child of n.nodes) yield* streamRender(child, ctx, slots);
+}
+
+function* streamRender(n :RNode, ctx:any, slots?: SlotMap) :Generator<string> {
 	switch(n.type) {
 		case 'for':
-			out = renderFor(n, ctx, slots);
+			yield* streamRenderFor(n, ctx, slots);
 			break;
 		case 'if':
-			out = renderIf(n, ctx, slots);
+			yield* streamRenderIf(n, ctx, slots);
 			break;
 		case 'print':
-			out = renderPrint(n, ctx);
+			yield escapeHtml(String(execFn(n.data, ctx)));
 			break;
 		case 'raw':
-			out = n.raw;
+			yield n.raw;
 			break;
 		case 'partial-ref':
-			out = renderPartialRef(n, ctx);
+			yield* streamRenderPartialRef(n, ctx);
 			break;
 		case 'slot':
-			out = renderSlot(n, slots);
+			yield* streamRenderSlot(n, slots);
 			break;
 		case 'attr-bind':
-			out = renderAttrBind(n, ctx);
+			yield renderAttrBind(n, ctx);
 			break;
 		default:
 			throw new Error("unhandled node type");
 	}
-
-	return out;
 }
-function renderFor(for_node: ForRNode, ctx:any, slots?: SlotMap) :string {
+
+function* streamRenderFor(for_node: ForRNode, ctx:any, slots?: SlotMap) :Generator<string> {
 	const iterable = execFn(for_node.iterable, ctx);
 	if( !isIterable(iterable) ) throw new Error("iterable not iterable.");
 
-	let ret = '';
 	for( const it of iterable ) {
 		const val_ctx :any = {};
 		val_ctx[for_node.valName] = it;
 		const inner_ctx = Object.assign({}, ctx, val_ctx);
-		ret += for_node.nodes?.map( (nn) => render(nn, inner_ctx, slots) ).join('');
+		for (const nn of for_node.nodes) {
+			yield* streamRender(nn, inner_ctx, slots);
+		}
 	}
-
-	return ret;
 }
+
 // see https://stackoverflow.com/questions/18884249/checking-whether-something-is-iterable
 function isIterable(obj:any) {
 	// checks for null and undefined
@@ -112,13 +113,15 @@ function isIterable(obj:any) {
 	return typeof obj[Symbol.iterator] === 'function';
 }
 
-function renderIf(if_node: IfRNode, ctx:any, slots?: SlotMap) :string {
+function* streamRenderIf(if_node: IfRNode, ctx:any, slots?: SlotMap) :Generator<string> {
 	for( const branch of if_node.branches ) {
 		if( !branch.condition || execFn(branch.condition, ctx) ) {
-			return branch.nodes.map( n => render(n, ctx, slots) ).join('');
+			for (const n of branch.nodes) {
+				yield* streamRender(n, ctx, slots);
+			}
+			return;
 		}
 	}
-	return '';
 }
 
 export function escapeHtml(s: string): string {
@@ -130,11 +133,7 @@ export function escapeHtml(s: string): string {
 		.replace(/'/g, '&#39;');
 }
 
-function renderPrint(print_node: PrintRNode, ctx:any) :string {
-	return escapeHtml(String(execFn(print_node.data, ctx)));
-}
-
-function renderPartialRef(node: PartialRefRNode, ctx: any) :string {
+function* streamRenderPartialRef(node: PartialRefRNode, ctx: any) :Generator<string> {
 	// Evaluate bindings in caller ctx, build child ctx
 	let childCtx = { ...ctx };
 	for( const binding of node.bindings ) {
@@ -146,17 +145,23 @@ function renderPartialRef(node: PartialRefRNode, ctx: any) :string {
 		slotMap[name] = { nodes, ctx };  // caller's ctx, not childCtx
 	}
 	// Render the partial with child ctx and slot map
-	const rendered = renderRoot(node.partial, childCtx, slotMap);
-	// Apply wrapper if present
-	return node.wrapper ? node.wrapper.open + rendered + node.wrapper.close : rendered;
+	if (node.wrapper) {
+		yield node.wrapper.open;
+		yield* streamRenderRoot(node.partial, childCtx, slotMap);
+		yield node.wrapper.close;
+	} else {
+		yield* streamRenderRoot(node.partial, childCtx, slotMap);
+	}
 }
 
-function renderSlot(node: SlotRNode, slots: SlotMap | undefined) :string {
+function* streamRenderSlot(node: SlotRNode, slots: SlotMap | undefined) :Generator<string> {
 	const slotName = node.name ?? 'default';
 	const slotEntry = slots?.[slotName];
-	if( !slotEntry ) return '';
+	if( !slotEntry ) return;
 	// Render slot content in the caller's context, slots don't leak inward
-	return slotEntry.nodes.map( n => render(n, slotEntry.ctx, undefined) ).join('');
+	for (const n of slotEntry.nodes) {
+		yield* streamRender(n, slotEntry.ctx, undefined);
+	}
 }
 
 function renderAttrBind(n: AttrBindRNode, ctx: any): string {

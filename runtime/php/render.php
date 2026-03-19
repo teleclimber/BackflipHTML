@@ -71,78 +71,88 @@ function backflip_execFn(array $fnData, array $ctx): mixed
  */
 function backflip_renderRoot(array $node, array $ctx, array $slots = []): string
 {
-    $parts = array_map(
-        fn($child) => backflip_render($child, $ctx, $slots),
-        $node['nodes']
-    );
-    return implode('', $parts);
+    return implode('', iterator_to_array(backflip_streamRenderRoot($node, $ctx, $slots), false));
 }
 
 /**
- * Dispatch on $node['type']. Throws RuntimeException for unknown types.
+ * Streaming render of a root node. Yields string chunks.
  */
-function backflip_render(array $node, array $ctx, array $slots = []): string
+function backflip_streamRenderRoot(array $node, array $ctx, array $slots = []): Generator
 {
-    return match ($node['type']) {
-        'raw'         => $node['raw'],
-        'print'       => backflip_renderPrint($node, $ctx),
-        'for'         => backflip_renderFor($node, $ctx, $slots),
-        'if'          => backflip_renderIf($node, $ctx, $slots),
-        'partial-ref' => backflip_renderPartialRef($node, $ctx),
-        'slot'        => backflip_renderSlot($node, $slots),
-        'attr-bind'   => backflip_renderAttrBind($node, $ctx),
-        default       => throw new \RuntimeException(
-            "backflip_render: unhandled node type: " . $node['type']
-        ),
-    };
+    foreach ($node['nodes'] as $child) {
+        yield from backflip_streamRender($child, $ctx, $slots);
+    }
 }
 
 /**
- * Render a for-loop node.
- *
- * Evaluates the iterable expression, then renders child nodes once per item
- * with an inner context that adds the loop variable.
+ * Dispatch on $node['type']. Yields string chunks.
  */
-function backflip_renderFor(array $node, array $ctx, array $slots): string
+function backflip_streamRender(array $node, array $ctx, array $slots = []): Generator
+{
+    switch ($node['type']) {
+        case 'raw':
+            yield $node['raw'];
+            break;
+        case 'print':
+            yield backflip_renderPrint($node, $ctx);
+            break;
+        case 'for':
+            yield from backflip_streamRenderFor($node, $ctx, $slots);
+            break;
+        case 'if':
+            yield from backflip_streamRenderIf($node, $ctx, $slots);
+            break;
+        case 'partial-ref':
+            yield from backflip_streamRenderPartialRef($node, $ctx);
+            break;
+        case 'slot':
+            yield from backflip_streamRenderSlot($node, $slots);
+            break;
+        case 'attr-bind':
+            yield backflip_renderAttrBind($node, $ctx);
+            break;
+        default:
+            throw new \RuntimeException(
+                "backflip_streamRender: unhandled node type: " . $node['type']
+            );
+    }
+}
+
+/**
+ * Streaming render of a for-loop node.
+ */
+function backflip_streamRenderFor(array $node, array $ctx, array $slots): Generator
 {
     $iterable = backflip_execFn($node['iterable'], $ctx);
 
     if (!is_array($iterable) && !($iterable instanceof \Traversable)) {
         throw new \RuntimeException(
-            "backflip_renderFor: iterable is not an array or Traversable"
+            "backflip_streamRenderFor: iterable is not an array or Traversable"
         );
     }
 
-    $out = '';
     foreach ($iterable as $item) {
         $innerCtx = array_merge($ctx, [$node['valName'] => $item]);
         foreach ($node['nodes'] as $child) {
-            $out .= backflip_render($child, $innerCtx, $slots);
+            yield from backflip_streamRender($child, $innerCtx, $slots);
         }
     }
-
-    return $out;
 }
 
 /**
- * Render an if/elseif/else node.
- *
- * Iterates branches; the first branch whose condition is null (else) or
- * evaluates as JS-truthy is rendered and returned immediately.
+ * Streaming render of an if/elseif/else node.
  */
-function backflip_renderIf(array $node, array $ctx, array $slots): string
+function backflip_streamRenderIf(array $node, array $ctx, array $slots): Generator
 {
     foreach ($node['branches'] as $branch) {
         $condition = $branch['condition'] ?? null;
         if ($condition === null || backflip_isTruthy(backflip_execFn($condition, $ctx))) {
-            $parts = array_map(
-                fn($child) => backflip_render($child, $ctx, $slots),
-                $branch['nodes']
-            );
-            return implode('', $parts);
+            foreach ($branch['nodes'] as $child) {
+                yield from backflip_streamRender($child, $ctx, $slots);
+            }
+            return;
         }
     }
-    return '';
 }
 
 /**
@@ -157,14 +167,9 @@ function backflip_renderPrint(array $node, array $ctx): string
 }
 
 /**
- * Render a partial-ref node.
- *
- * 1. Build childCtx from caller ctx plus evaluated bindings.
- * 2. Build slotMap capturing nodes together with the CALLER's ctx (not childCtx).
- * 3. Render the partial root with childCtx and slotMap.
- * 4. Wrap with open/close tags if a wrapper is present.
+ * Streaming render of a partial-ref node.
  */
-function backflip_renderPartialRef(array $node, array $ctx): string
+function backflip_streamRenderPartialRef(array $node, array $ctx): Generator
 {
     // 1. Build child context: start with caller ctx, overlay bindings evaluated in caller ctx
     $childCtx = $ctx;
@@ -178,23 +183,18 @@ function backflip_renderPartialRef(array $node, array $ctx): string
         $slotMap[$slotName] = ['nodes' => $nodes, 'ctx' => $ctx];
     }
 
-    // 3. Render the partial
-    $rendered = backflip_renderRoot($node['partial'], $childCtx, $slotMap);
-
-    // 4. Apply wrapper if present
+    // 3. Render the partial, with wrapper if present
     if ($node['wrapper'] !== null) {
-        $rendered = $node['wrapper']['open'] . $rendered . $node['wrapper']['close'];
+        yield $node['wrapper']['open'];
+        yield from backflip_streamRenderRoot($node['partial'], $childCtx, $slotMap);
+        yield $node['wrapper']['close'];
+    } else {
+        yield from backflip_streamRenderRoot($node['partial'], $childCtx, $slotMap);
     }
-
-    return $rendered;
 }
 
 /**
- * Render an attr-bind node.
- *
- * Iterates parts in source order; static parts are appended as-is, dynamic
- * parts are evaluated: boolean attrs rendered as ` attrname` when truthy,
- * non-boolean attrs rendered as ` attrname="value"` when not null/false.
+ * Render an attr-bind node (returns string, not streaming — produces a single chunk).
  */
 function backflip_renderAttrBind(array $node, array $ctx): string
 {
@@ -219,24 +219,19 @@ function backflip_renderAttrBind(array $node, array $ctx): string
 }
 
 /**
- * Render a slot node.
- *
- * Uses the slot's captured ctx (the caller's ctx at the time the partial-ref
- * was invoked), not the current partial's ctx. Slots do not inherit inward.
+ * Streaming render of a slot node.
  */
-function backflip_renderSlot(array $node, array $slots): string
+function backflip_streamRenderSlot(array $node, array $slots): Generator
 {
     $slotName = $node['name'] ?? 'default';
 
     if (!isset($slots[$slotName])) {
-        return '';
+        return;
     }
 
     $slotEntry = $slots[$slotName];
-    $out = '';
     foreach ($slotEntry['nodes'] as $child) {
         // Render with the caller's ctx; pass empty slots so they don't leak inward
-        $out .= backflip_render($child, $slotEntry['ctx'], []);
+        yield from backflip_streamRender($child, $slotEntry['ctx'], []);
     }
-    return $out;
 }
