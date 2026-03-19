@@ -156,6 +156,30 @@ Deno.test("conditional: b-else false branch", () => {
 });
 
 // ---------------------------------------------------------------------------
+// blog.html — b-if / b-for on <b-unwrap>
+
+Deno.test("unwrap-if: b-if true on b-unwrap renders content without wrapper", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("blog.html").unwrap_if, { show: true })),
+        "Visible"
+    );
+});
+
+Deno.test("unwrap-if: b-else on b-unwrap renders fallback without wrapper", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("blog.html").unwrap_if, { show: false })),
+        "Fallback"
+    );
+});
+
+Deno.test("unwrap-for: b-for on b-unwrap renders items without wrapper", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("blog.html").unwrap_for, { items: ["a", "b", "c"] })),
+        "a,b,c,"
+    );
+});
+
+// ---------------------------------------------------------------------------
 // ui.html — default slot passing between same-file partials
 //
 // btn template (compact, no extra whitespace):

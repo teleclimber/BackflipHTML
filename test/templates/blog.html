@@ -8,3 +8,12 @@
     <p b-if="show">Shown</p>
     <p b-else>Hidden</p>
 </b-unwrap>
+
+<b-unwrap b-name="unwrap-if">
+    <b-unwrap b-if="show">Visible</b-unwrap>
+    <b-unwrap b-else>Fallback</b-unwrap>
+</b-unwrap>
+
+<b-unwrap b-name="unwrap-for">
+    <b-unwrap b-for="item in items">{{ item }},</b-unwrap>
+</b-unwrap>

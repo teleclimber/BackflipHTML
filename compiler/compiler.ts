@@ -510,6 +510,9 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 
 		// Helper: make a RawTNode or AttrBindTNode for a tag's open element
 		function makeOpenTagNode(tag: {tagName:string, attrs:{name:string,value:string}[], sourceCodeLocation?: unknown}, excludeAttrs: string[], parent: ParentTNode): RawTNode | AttrBindTNode {
+			if (tag.tagName === 'b-unwrap') {
+				return { type: 'raw', raw: '', parent };
+			}
 			const hasBind = tag.attrs.some(attr => isBindAttr(attr.name));
 			if (!hasBind) {
 				return { type: 'raw', raw: reconstructTagExcluding(tag, excludeAttrs), parent };
@@ -908,7 +911,7 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			// Regular closing
 			if (matchTag.tnode) {
 				// Close tag belongs to the structured node (b-for/b-if/b-slot), not the slot
-				if (cur_tnode !== null) {
+				if (cur_tnode !== null && tag.tagName !== 'b-unwrap') {
 					cur_tnode = pushRaw(cur_tnode, raw);
 				}
 			} else {
