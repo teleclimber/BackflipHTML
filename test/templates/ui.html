@@ -3,3 +3,15 @@
 <b-unwrap b-name="demo">
     <div b-part="#btn">Click me</div>
 </b-unwrap>
+
+<b-unwrap b-name="slot_interp">
+    <div b-part="#btn">{{ label }}</div>
+</b-unwrap>
+
+<b-unwrap b-name="slot_for">
+    <div b-part="#btn"><span b-for="x in items">{{ x }}</span></div>
+</b-unwrap>
+
+<b-unwrap b-name="slot_if">
+    <div b-part="#btn"><span b-if="show">yes</span><span b-else>no</span></div>
+</b-unwrap>

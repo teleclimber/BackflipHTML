@@ -430,13 +430,17 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 		let currentPartialRoot: RootTNode | null = null;
 		let cur_tnode: TNode | null = null;
 
-		// Helper: get current slot-collection context from innermost tag_stack entry
+		// Helper: get current slot-collection context from innermost tag_stack entry.
+		// Walks up the stack, stopping if a structural node (tnode) is found first —
+		// content inside b-for/b-if should flow into that node's tree, not the slot.
 		function getSlotCollection(): { partialRef: PartialRefTNode, currentSlot: string } | null {
 			for (let i = tag_stack.length - 1; i >= 0; i--) {
 				if (tag_stack[i].slotCollection) {
 					return tag_stack[i].slotCollection!;
 				}
-				break;
+				if (tag_stack[i].tnode) {
+					return null;
+				}
 			}
 			return null;
 		}
@@ -536,6 +540,15 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 					if (siblings[i].type === 'raw' && (siblings[i] as RawTNode).raw.trim() === '') continue;
 					break;
 				}
+			}
+			throw new BackflipError("b-else-if/b-else must follow a b-if block", loc);
+		}
+
+		function findPrecedingIfInSlot(arr: TNode[], loc?: { filename?: string, line?: number, col?: number }): IfTNode {
+			for (let i = arr.length - 1; i >= 0; i--) {
+				if (arr[i].type === 'if') return arr[i] as IfTNode;
+				if (arr[i].type === 'raw' && (arr[i] as RawTNode).raw.trim() === '') continue;
+				break;
 			}
 			throw new BackflipError("b-else-if/b-else must follow a b-if block", loc);
 		}
@@ -747,26 +760,36 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 						return;
 					}
 
-					const parent = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
+					const sc_for = getSlotCollection();
+					const parent: ParentTNode = sc_for ? sc_for.partialRef.parent : (cur_tnode ? cur_tnode.parent : currentPartialRoot!);
 					const for_node: ForTNode = { type: 'for', iterable: iterable_parsed, valName: value_name, tnodes: [], parent };
 					for_node.loc = attrLoc(tag, 'b-for');
 					const inner_tag = makeOpenTagNode(tag, ['b-for'], for_node);
 					for_node.tnodes.push(inner_tag);
-					parent.tnodes!.push(for_node);
+					if (sc_for) {
+						pushNodeHere(for_node);
+					} else {
+						parent.tnodes!.push(for_node);
+					}
 					cur_tnode = inner_tag;
 					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
 						tag_stack.push({ tag: tag.tagName, tnode: inner_tag });
 					}
 				}
 				else if (b_a.name === 'b-if') {
-					const parent = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
+					const sc_if = getSlotCollection();
+					const parent: ParentTNode = sc_if ? sc_if.partialRef.parent : (cur_tnode ? cur_tnode.parent : currentPartialRoot!);
 					const if_node: IfTNode = { type: 'if', branches: [], parent };
 					const branch: IfBranch = { condition: interpretBackcode(b_a.value), tnodes: [], ifNode: if_node };
 					branch.loc = attrLoc(tag, 'b-if');
 					if_node.branches.push(branch);
 					const inner_tag = makeOpenTagNode(tag, ['b-if'], branch);
 					branch.tnodes.push(inner_tag);
-					parent.tnodes!.push(if_node);
+					if (sc_if) {
+						pushNodeHere(if_node);
+					} else {
+						parent.tnodes!.push(if_node);
+					}
 					cur_tnode = inner_tag;
 					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
 						tag_stack.push({ tag: tag.tagName, tnode: inner_tag });
@@ -783,8 +806,15 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 						return;
 					}
 					let if_node: IfTNode;
+					const sc_else = getSlotCollection();
 					try {
-						if_node = findPrecedingIfInFile(cur_tnode, attrErrorLoc(tag, b_a.name, filename));
+						if (sc_else) {
+							const slotName = sc_else.currentSlot;
+							const arr = sc_else.partialRef.slots[slotName] || [];
+							if_node = findPrecedingIfInSlot(arr, attrErrorLoc(tag, b_a.name, filename));
+						} else {
+							if_node = findPrecedingIfInFile(cur_tnode, attrErrorLoc(tag, b_a.name, filename));
+						}
 					} catch (e) {
 						if (e instanceof BackflipError) {
 							errors.push(e);
@@ -876,11 +906,18 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			}
 
 			// Regular closing
-			const sc = getSlotCollection();
-			if (sc) {
-				pushRawHere(raw);
-			} else if (cur_tnode !== null) {
-				cur_tnode = pushRaw(cur_tnode, raw);
+			if (matchTag.tnode) {
+				// Close tag belongs to the structured node (b-for/b-if/b-slot), not the slot
+				if (cur_tnode !== null) {
+					cur_tnode = pushRaw(cur_tnode, raw);
+				}
+			} else {
+				const sc = getSlotCollection();
+				if (sc) {
+					pushRawHere(raw);
+				} else if (cur_tnode !== null) {
+					cur_tnode = pushRaw(cur_tnode, raw);
+				}
 			}
 
 			if (matchTag.tnode) {

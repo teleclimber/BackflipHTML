@@ -1,6 +1,6 @@
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
 
-import type { RootTNode, RawTNode, ForTNode, IfTNode, SlotTNode, PartialRefTNode, AttrBindTNode, SourceLoc } from "./compiler.ts";
+import type { RootTNode, RawTNode, PrintTNode, ForTNode, IfTNode, SlotTNode, PartialRefTNode, AttrBindTNode, SourceLoc } from "./compiler.ts";
 import { generateStringStack, compileFile, onText, pushRaw } from "./compiler.ts";
 import { interpretBackcode } from "./backcode.ts";
 
@@ -641,4 +641,53 @@ Deno.test("loc: b-bind:class bind attr dynamic part location", async () => {
 	assertEquals(loc.startOffset, expected);
 	const endExpected = expected + 'b-bind:class="cls"'.length;
 	assertEquals(loc.endOffset, endExpected);
+});
+
+Deno.test("compileFile: interpolation inside nested element within slot content produces PrintTNode in slot", async () => {
+	const { compiled: result } = await compileFile('<div b-name="page"><b-unwrap b-part="#card"><p>{{ name }}</p></b-unwrap></div>');
+	const root = result.partials.get("page")!;
+	let ref: PartialRefTNode | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'partial-ref') { ref = n as PartialRefTNode; break; }
+	}
+	assertEquals(ref !== undefined, true);
+	const defaultSlot = ref!.slots['default'];
+	assertEquals(defaultSlot !== undefined, true);
+	const hasPrint = defaultSlot.some(n => n.type === 'print');
+	assertEquals(hasPrint, true, "slot should contain a PrintTNode for the {{ name }} interpolation");
+});
+
+Deno.test("compileFile: b-for inside slot content produces ForTNode in slot array", async () => {
+	const { compiled: result, errors } = await compileFile('<div b-name="page"><b-unwrap b-part="#card"><p b-for="x in items">{{ x }}</p></b-unwrap></div>');
+	assertEquals(errors.length, 0);
+	const root = result.partials.get("page")!;
+	let ref: PartialRefTNode | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'partial-ref') { ref = n as PartialRefTNode; break; }
+	}
+	assertEquals(ref !== undefined, true);
+	const defaultSlot = ref!.slots['default'];
+	assertEquals(defaultSlot !== undefined, true);
+	const forNode = defaultSlot.find(n => n.type === 'for') as ForTNode | undefined;
+	assertEquals(forNode !== undefined, true, "slot should contain a ForTNode");
+	assertEquals(forNode!.valName, "x");
+	// The print node should be inside the for body, not a sibling in the slot array
+	const hasPrint = forNode!.tnodes.some(n => n.type === 'print');
+	assertEquals(hasPrint, true, "ForTNode should contain the {{ x }} PrintTNode");
+});
+
+Deno.test("compileFile: b-if/b-else inside slot content produces IfTNode in slot array", async () => {
+	const { compiled: result, errors } = await compileFile('<div b-name="page"><b-unwrap b-part="#card"><p b-if="show">yes</p><p b-else>no</p></b-unwrap></div>');
+	assertEquals(errors.length, 0);
+	const root = result.partials.get("page")!;
+	let ref: PartialRefTNode | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'partial-ref') { ref = n as PartialRefTNode; break; }
+	}
+	assertEquals(ref !== undefined, true);
+	const defaultSlot = ref!.slots['default'];
+	assertEquals(defaultSlot !== undefined, true);
+	const ifNode = defaultSlot.find(n => n.type === 'if') as IfTNode | undefined;
+	assertEquals(ifNode !== undefined, true, "slot should contain an IfTNode");
+	assertEquals(ifNode!.branches.length, 2, "IfTNode should have b-if and b-else branches");
 });

@@ -191,6 +191,52 @@ Deno.test("btn: renders empty button when no slot content provided", () => {
 });
 
 // ---------------------------------------------------------------------------
+// ui.html — slot_interp: interpolation inside nested element in slot content
+//
+// slot_interp template:
+//   <b-unwrap b-name="slot_interp">
+//       <div b-part="#btn">{{ label }}</div>
+//   </b-unwrap>
+//
+// Expected (normalized): <div><button>Go</button></div>
+// ---------------------------------------------------------------------------
+
+Deno.test("slot_interp: interpolated slot content rendered inside btn", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("ui.html").slot_interp, { label: "Go" })),
+        "<div><button>Go</button></div>"
+    );
+});
+
+Deno.test("slot_for: b-for inside slot content renders loop", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("ui.html").slot_for, { items: ["A", "B"] })),
+        "<div><button><span>A</span><span>B</span></button></div>"
+    );
+});
+
+Deno.test("slot_for: b-for with empty list renders nothing in slot", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("ui.html").slot_for, { items: [] })),
+        "<div><button></button></div>"
+    );
+});
+
+Deno.test("slot_if: b-if true branch inside slot content", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("ui.html").slot_if, { show: true })),
+        "<div><button><span>yes</span></button></div>"
+    );
+});
+
+Deno.test("slot_if: b-else branch inside slot content", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("ui.html").slot_if, { show: false })),
+        "<div><button><span>no</span></button></div>"
+    );
+});
+
+// ---------------------------------------------------------------------------
 // data.html — b-data: passes expressions to partials
 //
 // badge template:  <b-unwrap b-name="badge">{{ label }}</b-unwrap>
