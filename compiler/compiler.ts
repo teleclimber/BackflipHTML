@@ -3,6 +3,8 @@ import stream from 'node:stream';
 
 import { interpretBackcode } from './backcode.ts';
 import type { Parsed } from './backcode.ts';
+export { BackflipError } from './errors.ts';
+import { BackflipError } from './errors.ts';
 
 export interface SourceLoc {
 	startLine: number;    // 1-based
@@ -124,6 +126,23 @@ function attrLoc(tag: { sourceCodeLocation?: unknown }, attrName: string): Sourc
 	         endLine: a.endLine, endCol: a.endCol, endOffset: a.endOffset };
 }
 
+function tagLoc(tag: { sourceCodeLocation?: unknown }): { line?: number, col?: number } {
+	const loc = tag.sourceCodeLocation as { startLine?: number; startCol?: number } | null | undefined;
+	if (!loc) return {};
+	return { line: loc.startLine, col: loc.startCol };
+}
+
+function errorLoc(filename?: string, loc?: { line?: number, col?: number }): { filename?: string, line?: number, col?: number } | undefined {
+	if (!filename && !loc?.line) return undefined;
+	return { filename, line: loc?.line, col: loc?.col };
+}
+
+function attrErrorLoc(tag: { sourceCodeLocation?: unknown }, attrName: string, filename?: string): { filename?: string, line?: number, col?: number } | undefined {
+	const a = attrLoc(tag, attrName);
+	if (a) return { filename, line: a.startLine, col: a.startCol };
+	return errorLoc(filename, tagLoc(tag));
+}
+
 function interpolationLoc(
 	textLoc: { startLine: number; startCol: number; startOffset: number },
 	rawBefore: string,
@@ -140,7 +159,7 @@ function interpolationLoc(
 	return { startLine, startCol, startOffset, endLine, endCol, endOffset };
 }
 
-export function generateStringStack(in_str:string) :Promise<RootTNode> {
+export function generateStringStack(in_str:string, filename?:string) :Promise<RootTNode> {
 
 	return new Promise( (resolve, reject) => {
 
@@ -170,7 +189,7 @@ export function generateStringStack(in_str:string) :Promise<RootTNode> {
 			return tag_str;
 		}
 
-		function findPrecedingIf(cur: TNode) :IfTNode {
+		function findPrecedingIf(cur: TNode, loc?: { filename?: string, line?: number, col?: number }) :IfTNode {
 			if( cur.type === 'if' ) return cur;
 			// Check if the preceding sibling in the parent's tnodes is an IfTNode
 			if( cur.parent && 'tnodes' in cur.parent ) {
@@ -182,23 +201,23 @@ export function generateStringStack(in_str:string) :Promise<RootTNode> {
 					break;
 				}
 			}
-			throw new Error("b-else-if/b-else must follow a b-if block");
+			throw new BackflipError("b-else-if/b-else must follow a b-if block", loc);
 		}
 
 		rewriteStream.on('startTag', (tag, raw) => { try {
 			const b_as = tag.attrs.filter((attr) => b_attrs.includes(attr.name));
-			if( b_as.length >1 ) throw new Error("more than one b-attr");
+			if( b_as.length >1 ) throw new BackflipError("more than one b-attr", errorLoc(filename, tagLoc(tag)));
 			if( b_as.length === 1 ) {
 				const b_a = b_as[0];
 				if( b_a.name === 'b-for' ) {
 					const tag_str = reconstructTag(tag, 'b-for');
 
 					const pieces = b_a.value.split(" in ");
-					if( pieces.length !== 2 ) throw new Error(`b-for value must be in the form "item in items", got: "${b_a.value}"`);
+					if( pieces.length !== 2 ) throw new BackflipError(`b-for value must be in the form "item in items", got: "${b_a.value}"`, attrErrorLoc(tag, 'b-for', filename));
 					const iterable_str = pieces[1].trim();
 					const iterable_parsed = interpretBackcode(iterable_str);
 					const value_name = pieces[0].trim();
-					if( !value_name ) throw new Error(`got bad iter value name: ${value_name}`);
+					if( !value_name ) throw new BackflipError(`got bad iter value name: ${value_name}`, attrErrorLoc(tag, 'b-for', filename));
 
 					const for_node :ForTNode = {
 						type:'for',
@@ -215,7 +234,7 @@ export function generateStringStack(in_str:string) :Promise<RootTNode> {
 					}
 					for_node.tnodes.push(inner_tag);
 
-					if( !cur_tnode.parent?.tnodes ) throw new Error("expected tnodes here");
+					if( !cur_tnode.parent?.tnodes ) throw new BackflipError("expected tnodes here");
 					cur_tnode.parent.tnodes.push(for_node);
 					cur_tnode = inner_tag;
 
@@ -250,7 +269,7 @@ export function generateStringStack(in_str:string) :Promise<RootTNode> {
 					};
 					branch.tnodes.push(inner_tag);
 
-					if( !cur_tnode.parent?.tnodes ) throw new Error("expected tnodes here");
+					if( !cur_tnode.parent?.tnodes ) throw new BackflipError("expected tnodes here");
 					cur_tnode.parent.tnodes.push(if_node);
 					cur_tnode = inner_tag;
 
@@ -262,9 +281,9 @@ export function generateStringStack(in_str:string) :Promise<RootTNode> {
 					}
 				}
 				else if( b_a.name === 'b-else-if' || b_a.name === 'b-else' ) {
-					const if_node = findPrecedingIf(cur_tnode);
+					const if_node = findPrecedingIf(cur_tnode, attrErrorLoc(tag, b_a.name, filename));
 
-					if( b_a.name === 'b-else' && b_a.value ) throw new Error("b-else should not have a value");
+					if( b_a.name === 'b-else' && b_a.value ) throw new BackflipError("b-else should not have a value", attrErrorLoc(tag, 'b-else', filename));
 
 					const condition = b_a.name === 'b-else-if' ? interpretBackcode(b_a.value) : undefined;
 					const tag_str = reconstructTag(tag, b_a.name);
@@ -307,14 +326,14 @@ export function generateStringStack(in_str:string) :Promise<RootTNode> {
 		} catch(e) { reject(e); } });
 		rewriteStream.on('endTag', (tag, raw) => { try {
 			const matchTag = tag_stack.pop();
-			if( !matchTag ) throw new Error("popped the last tagMatcher prematurely");
-			if( matchTag.tag !== tag.tagName ) throw new Error(`mismatched start/end tags: ${matchTag.tag} ${tag.tagName} `);
+			if( !matchTag ) throw new BackflipError("popped the last tagMatcher prematurely", errorLoc(filename, tagLoc(tag)));
+			if( matchTag.tag !== tag.tagName ) throw new BackflipError(`mismatched start/end tags: ${matchTag.tag} ${tag.tagName} `, errorLoc(filename, tagLoc(tag)));
 
 			cur_tnode = pushRaw(cur_tnode, raw);
 
 			// if there is a TNode, that means we are at the end of this subtree.
 			if( matchTag.tnode ) {
-				if( !matchTag.tnode.parent ) throw new Error("expected a parent");
+				if( !matchTag.tnode.parent ) throw new BackflipError("expected a parent");
 				const parent = matchTag.tnode.parent;
 				if( 'ifNode' in parent ) {
 					cur_tnode = (parent as IfBranch).ifNode;  // IfBranch → IfTNode
@@ -344,7 +363,7 @@ export function generateStringStack(in_str:string) :Promise<RootTNode> {
 }
 
 
-export function compileFile(html: string, _registry?: PartialRegistry): Promise<CompiledFile> {
+export function compileFile(html: string, _registry?: PartialRegistry, filename?: string): Promise<CompiledFile> {
 
 	return new Promise((resolve, reject) => {
 
@@ -457,7 +476,7 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 			return { type: 'attr-bind', tagOpen, parts, parent };
 		}
 
-		function findPrecedingIfInFile(cur: TNode): IfTNode {
+		function findPrecedingIfInFile(cur: TNode, loc?: { filename?: string, line?: number, col?: number }): IfTNode {
 			if (cur.type === 'if') return cur;
 			if (cur.parent && 'tnodes' in cur.parent) {
 				const siblings = cur.parent.tnodes;
@@ -467,7 +486,7 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 					break;
 				}
 			}
-			throw new Error("b-else-if/b-else must follow a b-if block");
+			throw new BackflipError("b-else-if/b-else must follow a b-if block", loc);
 		}
 
 		const void_elements = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
@@ -479,7 +498,7 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 			// --- b-name ---
 			const bNameAttr = tag.attrs.find(a => a.name === 'b-name');
 			if (bNameAttr !== undefined) {
-				if (tag_stack.length > 0) throw new Error("b-name is only allowed on top-level elements");
+				if (tag_stack.length > 0) throw new BackflipError("b-name is only allowed on top-level elements", attrErrorLoc(tag, 'b-name', filename));
 
 				const partialName = bNameAttr.value;
 				const partialRoot: RootTNode = { type: 'root', tnodes: [] };
@@ -633,16 +652,16 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 
 			// --- standard b-for / b-if / b-else-if / b-else ---
 			const b_as = tag.attrs.filter(attr => ['b-for', 'b-if', 'b-else-if', 'b-else'].includes(attr.name));
-			if (b_as.length > 1) throw new Error("more than one b-attr");
+			if (b_as.length > 1) throw new BackflipError("more than one b-attr", errorLoc(filename, tagLoc(tag)));
 
 			if (b_as.length === 1) {
 				const b_a = b_as[0];
 				if (b_a.name === 'b-for') {
 					const pieces = b_a.value.split(" in ");
-					if (pieces.length !== 2) throw new Error(`b-for value must be in the form "item in items", got: "${b_a.value}"`);
+					if (pieces.length !== 2) throw new BackflipError(`b-for value must be in the form "item in items", got: "${b_a.value}"`, attrErrorLoc(tag, 'b-for', filename));
 					const iterable_parsed = interpretBackcode(pieces[1].trim());
 					const value_name = pieces[0].trim();
-					if (!value_name) throw new Error(`got bad iter value name: ${value_name}`);
+					if (!value_name) throw new BackflipError(`got bad iter value name: ${value_name}`, attrErrorLoc(tag, 'b-for', filename));
 
 					const parent = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
 					const for_node: ForTNode = { type: 'for', iterable: iterable_parsed, valName: value_name, tnodes: [], parent };
@@ -670,9 +689,9 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 					}
 				}
 				else if (b_a.name === 'b-else-if' || b_a.name === 'b-else') {
-					if (!cur_tnode) throw new Error("b-else-if/b-else must follow a b-if block");
-					const if_node = findPrecedingIfInFile(cur_tnode);
-					if (b_a.name === 'b-else' && b_a.value) throw new Error("b-else should not have a value");
+					if (!cur_tnode) throw new BackflipError("b-else-if/b-else must follow a b-if block", attrErrorLoc(tag, b_a.name, filename));
+					const if_node = findPrecedingIfInFile(cur_tnode, attrErrorLoc(tag, b_a.name, filename));
+					if (b_a.name === 'b-else' && b_a.value) throw new BackflipError("b-else should not have a value", attrErrorLoc(tag, 'b-else', filename));
 					const condition = b_a.name === 'b-else-if' ? interpretBackcode(b_a.value) : undefined;
 					const branch: IfBranch = { condition, tnodes: [], ifNode: if_node };
 					branch.loc = attrLoc(tag, b_a.name);
@@ -708,8 +727,8 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 
 		rewriteStream.on('endTag', (tag, raw) => { try {
 			const matchTag = tag_stack.pop();
-			if (!matchTag) throw new Error("popped the last tagMatcher prematurely");
-			if (matchTag.tag !== tag.tagName) throw new Error(`mismatched start/end tags: ${matchTag.tag} ${tag.tagName}`);
+			if (!matchTag) throw new BackflipError("popped the last tagMatcher prematurely", errorLoc(filename, tagLoc(tag)));
+			if (matchTag.tag !== tag.tagName) throw new BackflipError(`mismatched start/end tags: ${matchTag.tag} ${tag.tagName}`, errorLoc(filename, tagLoc(tag)));
 
 			// If we just closed the partial's top-level element
 			if (tag_stack.length === 0 && currentPartialRoot !== null) {
@@ -745,7 +764,7 @@ export function compileFile(html: string, _registry?: PartialRegistry): Promise<
 			}
 
 			if (matchTag.tnode) {
-				if (!matchTag.tnode.parent) throw new Error("expected a parent");
+				if (!matchTag.tnode.parent) throw new BackflipError("expected a parent");
 				const parent = matchTag.tnode.parent;
 				if ('ifNode' in parent) {
 					cur_tnode = (parent as IfBranch).ifNode as unknown as TNode;
@@ -837,7 +856,7 @@ export function onText(cur:TNode, raw :string, textLoc?: {startLine:number;start
 			parent: cur.parent
 		};
 		if (textLoc) print_node.loc = interpolationLoc(textLoc, raw.substring(0, m.index), m[0]);
-		if( !cur.parent?.tnodes ) throw new Error("expected tnodes here");
+		if( !cur.parent?.tnodes ) throw new BackflipError("expected tnodes here");
 		cur.parent.tnodes.push(print_node);
 		cur = print_node;
 
@@ -861,7 +880,7 @@ export function pushRaw(cur_tnode: TNode, raw :string) :TNode {
 			raw: raw,
 			parent: cur_tnode.parent
 		};
-		if( !cur_tnode.parent?.tnodes ) throw new Error("expected tnodes here");
+		if( !cur_tnode.parent?.tnodes ) throw new BackflipError("expected tnodes here");
 		cur_tnode.parent.tnodes.push(raw_node);
 		cur_tnode = raw_node;
 	}

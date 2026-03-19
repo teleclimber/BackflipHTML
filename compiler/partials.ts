@@ -216,7 +216,7 @@ export async function compileDirectory(dir: string): Promise<CompiledDirectory> 
     const compiledPairs = await Promise.all(
         relPaths.map(async (relPath): Promise<[string, CompiledFile]> => {
             const html = fileContents.get(relPath)!;
-            const compiled = await compileFile(html, registry);
+            const compiled = await compileFile(html, registry, relPath);
             return [relPath, compiled];
         })
     );
