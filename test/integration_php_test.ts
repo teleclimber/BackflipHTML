@@ -18,7 +18,7 @@ const TMPDIR = "/tmp/claude-1000/integration-php-test-output";
 const RENDER_PHP = new URL("../runtime/php/render.php", import.meta.url).pathname;
 
 // Compile once for all tests
-const compiled = await compileDirectory(TEMPLATES_DIR);
+const { directory: compiled } = await compileDirectory(TEMPLATES_DIR);
 
 // Write all generated PHP files to TMPDIR once
 await fs.mkdir(TMPDIR, { recursive: true });

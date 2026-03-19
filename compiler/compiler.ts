@@ -159,9 +159,11 @@ function interpolationLoc(
 	return { startLine, startCol, startOffset, endLine, endCol, endOffset };
 }
 
-export function generateStringStack(in_str:string, filename?:string) :Promise<RootTNode> {
+export function generateStringStack(in_str:string, filename?:string) :Promise<{ root: RootTNode, errors: BackflipError[] }> {
 
 	return new Promise( (resolve, reject) => {
+
+		const errors: BackflipError[] = [];
 
 		const s = new stream.Readable({encoding: 'utf8'});
 		s.push(in_str);
@@ -206,18 +208,39 @@ export function generateStringStack(in_str:string, filename?:string) :Promise<Ro
 
 		rewriteStream.on('startTag', (tag, raw) => { try {
 			const b_as = tag.attrs.filter((attr) => b_attrs.includes(attr.name));
-			if( b_as.length >1 ) throw new BackflipError("more than one b-attr", errorLoc(filename, tagLoc(tag)));
+			if( b_as.length >1 ) {
+				errors.push(new BackflipError("more than one b-attr", errorLoc(filename, tagLoc(tag))));
+				cur_tnode = pushRaw(cur_tnode, raw);
+				if( !tag.selfClosing && !void_elements.has(tag.tagName) ) {
+					tag_stack.push({tag: tag.tagName});
+				}
+				return;
+			}
 			if( b_as.length === 1 ) {
 				const b_a = b_as[0];
 				if( b_a.name === 'b-for' ) {
 					const tag_str = reconstructTag(tag, 'b-for');
 
 					const pieces = b_a.value.split(" in ");
-					if( pieces.length !== 2 ) throw new BackflipError(`b-for value must be in the form "item in items", got: "${b_a.value}"`, attrErrorLoc(tag, 'b-for', filename));
+					if( pieces.length !== 2 ) {
+						errors.push(new BackflipError(`b-for value must be in the form "item in items", got: "${b_a.value}"`, attrErrorLoc(tag, 'b-for', filename)));
+						cur_tnode = pushRaw(cur_tnode, raw);
+						if( !tag.selfClosing && !void_elements.has(tag.tagName) ) {
+							tag_stack.push({tag: tag.tagName});
+						}
+						return;
+					}
 					const iterable_str = pieces[1].trim();
 					const iterable_parsed = interpretBackcode(iterable_str);
 					const value_name = pieces[0].trim();
-					if( !value_name ) throw new BackflipError(`got bad iter value name: ${value_name}`, attrErrorLoc(tag, 'b-for', filename));
+					if( !value_name ) {
+						errors.push(new BackflipError(`got bad iter value name: ${value_name}`, attrErrorLoc(tag, 'b-for', filename)));
+						cur_tnode = pushRaw(cur_tnode, raw);
+						if( !tag.selfClosing && !void_elements.has(tag.tagName) ) {
+							tag_stack.push({tag: tag.tagName});
+						}
+						return;
+					}
 
 					const for_node :ForTNode = {
 						type:'for',
@@ -281,9 +304,25 @@ export function generateStringStack(in_str:string, filename?:string) :Promise<Ro
 					}
 				}
 				else if( b_a.name === 'b-else-if' || b_a.name === 'b-else' ) {
-					const if_node = findPrecedingIf(cur_tnode, attrErrorLoc(tag, b_a.name, filename));
+					let if_node: IfTNode;
+					try {
+						if_node = findPrecedingIf(cur_tnode, attrErrorLoc(tag, b_a.name, filename));
+					} catch(e) {
+						if (e instanceof BackflipError) {
+							errors.push(e);
+							cur_tnode = pushRaw(cur_tnode, raw);
+							if( !tag.selfClosing && !void_elements.has(tag.tagName) ) {
+								tag_stack.push({tag: tag.tagName});
+							}
+							return;
+						}
+						throw e;
+					}
 
-					if( b_a.name === 'b-else' && b_a.value ) throw new BackflipError("b-else should not have a value", attrErrorLoc(tag, 'b-else', filename));
+					if( b_a.name === 'b-else' && b_a.value ) {
+						errors.push(new BackflipError("b-else should not have a value", attrErrorLoc(tag, 'b-else', filename)));
+						// Still process as b-else (parsing state stays correct)
+					}
 
 					const condition = b_a.name === 'b-else-if' ? interpretBackcode(b_a.value) : undefined;
 					const tag_str = reconstructTag(tag, b_a.name);
@@ -323,11 +362,21 @@ export function generateStringStack(in_str:string, filename?:string) :Promise<Ro
 					tag_stack.push({tag: tag.tagName});
 				}
 			}
-		} catch(e) { reject(e); } });
+		} catch(e) { if (e instanceof BackflipError) { errors.push(e); } else { reject(e); } } });
 		rewriteStream.on('endTag', (tag, raw) => { try {
 			const matchTag = tag_stack.pop();
-			if( !matchTag ) throw new BackflipError("popped the last tagMatcher prematurely", errorLoc(filename, tagLoc(tag)));
-			if( matchTag.tag !== tag.tagName ) throw new BackflipError(`mismatched start/end tags: ${matchTag.tag} ${tag.tagName} `, errorLoc(filename, tagLoc(tag)));
+			if( !matchTag ) {
+				errors.push(new BackflipError("popped the last tagMatcher prematurely", errorLoc(filename, tagLoc(tag))));
+				cur_tnode = pushRaw(cur_tnode, raw);
+				return;
+			}
+			if( matchTag.tag !== tag.tagName ) {
+				errors.push(new BackflipError(`mismatched start/end tags: ${matchTag.tag} ${tag.tagName} `, errorLoc(filename, tagLoc(tag))));
+				// Push the mismatched tag back so we don't corrupt the stack
+				tag_stack.push(matchTag);
+				cur_tnode = pushRaw(cur_tnode, raw);
+				return;
+			}
 
 			cur_tnode = pushRaw(cur_tnode, raw);
 
@@ -341,12 +390,12 @@ export function generateStringStack(in_str:string, filename?:string) :Promise<Ro
 					cur_tnode = parent as TNode;
 				}
 			}
-		} catch(e) { reject(e); } });
+		} catch(e) { if (e instanceof BackflipError) { errors.push(e); } else { reject(e); } } });
 
 		rewriteStream.on('text', (textToken: {sourceCodeLocation?: {startLine:number;startCol:number;startOffset:number}|null}, raw:string) => { try {
 			const textLoc = textToken.sourceCodeLocation ?? undefined;
 			cur_tnode = onText(cur_tnode, raw, textLoc);
-		} catch(e) { reject(e); } } );
+		} catch(e) { if (e instanceof BackflipError) { errors.push(e); } else { reject(e); } } } );
 
 		s.pipe(rewriteStream);
 
@@ -357,15 +406,17 @@ export function generateStringStack(in_str:string, filename?:string) :Promise<Ro
 			reject(err);
 		});
 		rewriteStream.on('end', () => {
-			resolve(root_node);
+			resolve({ root: root_node, errors });
 		});
 	});
 }
 
 
-export function compileFile(html: string, _registry?: PartialRegistry, filename?: string): Promise<CompiledFile> {
+export function compileFile(html: string, _registry?: PartialRegistry, filename?: string): Promise<{ compiled: CompiledFile, errors: BackflipError[] }> {
 
 	return new Promise((resolve, reject) => {
+
+		const errors: BackflipError[] = [];
 
 		const s = new stream.Readable({encoding: 'utf8'});
 		s.push(html);
@@ -498,7 +549,16 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			// --- b-name ---
 			const bNameAttr = tag.attrs.find(a => a.name === 'b-name');
 			if (bNameAttr !== undefined) {
-				if (tag_stack.length > 0) throw new BackflipError("b-name is only allowed on top-level elements", attrErrorLoc(tag, 'b-name', filename));
+				if (tag_stack.length > 0) {
+					errors.push(new BackflipError("b-name is only allowed on top-level elements", attrErrorLoc(tag, 'b-name', filename)));
+					// Treat as raw tag within current partial
+					const new_cur = pushRawHere(raw);
+					if (cur_tnode !== null) cur_tnode = new_cur;
+					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+						tag_stack.push({ tag: tag.tagName });
+					}
+					return;
+				}
 
 				const partialName = bNameAttr.value;
 				const partialRoot: RootTNode = { type: 'root', tnodes: [] };
@@ -652,16 +712,40 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 
 			// --- standard b-for / b-if / b-else-if / b-else ---
 			const b_as = tag.attrs.filter(attr => ['b-for', 'b-if', 'b-else-if', 'b-else'].includes(attr.name));
-			if (b_as.length > 1) throw new BackflipError("more than one b-attr", errorLoc(filename, tagLoc(tag)));
+			if (b_as.length > 1) {
+				errors.push(new BackflipError("more than one b-attr", errorLoc(filename, tagLoc(tag))));
+				const new_cur = pushRawHere(raw);
+				if (cur_tnode !== null) cur_tnode = new_cur;
+				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+					tag_stack.push({ tag: tag.tagName });
+				}
+				return;
+			}
 
 			if (b_as.length === 1) {
 				const b_a = b_as[0];
 				if (b_a.name === 'b-for') {
 					const pieces = b_a.value.split(" in ");
-					if (pieces.length !== 2) throw new BackflipError(`b-for value must be in the form "item in items", got: "${b_a.value}"`, attrErrorLoc(tag, 'b-for', filename));
+					if (pieces.length !== 2) {
+						errors.push(new BackflipError(`b-for value must be in the form "item in items", got: "${b_a.value}"`, attrErrorLoc(tag, 'b-for', filename)));
+						const new_cur = pushRawHere(raw);
+						if (cur_tnode !== null) cur_tnode = new_cur;
+						if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+							tag_stack.push({ tag: tag.tagName });
+						}
+						return;
+					}
 					const iterable_parsed = interpretBackcode(pieces[1].trim());
 					const value_name = pieces[0].trim();
-					if (!value_name) throw new BackflipError(`got bad iter value name: ${value_name}`, attrErrorLoc(tag, 'b-for', filename));
+					if (!value_name) {
+						errors.push(new BackflipError(`got bad iter value name: ${value_name}`, attrErrorLoc(tag, 'b-for', filename)));
+						const new_cur = pushRawHere(raw);
+						if (cur_tnode !== null) cur_tnode = new_cur;
+						if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+							tag_stack.push({ tag: tag.tagName });
+						}
+						return;
+					}
 
 					const parent = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
 					const for_node: ForTNode = { type: 'for', iterable: iterable_parsed, valName: value_name, tnodes: [], parent };
@@ -689,9 +773,34 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 					}
 				}
 				else if (b_a.name === 'b-else-if' || b_a.name === 'b-else') {
-					if (!cur_tnode) throw new BackflipError("b-else-if/b-else must follow a b-if block", attrErrorLoc(tag, b_a.name, filename));
-					const if_node = findPrecedingIfInFile(cur_tnode, attrErrorLoc(tag, b_a.name, filename));
-					if (b_a.name === 'b-else' && b_a.value) throw new BackflipError("b-else should not have a value", attrErrorLoc(tag, 'b-else', filename));
+					if (!cur_tnode) {
+						errors.push(new BackflipError("b-else-if/b-else must follow a b-if block", attrErrorLoc(tag, b_a.name, filename)));
+						const new_cur = pushRawHere(raw);
+						if (cur_tnode !== null) cur_tnode = new_cur;
+						if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+							tag_stack.push({ tag: tag.tagName });
+						}
+						return;
+					}
+					let if_node: IfTNode;
+					try {
+						if_node = findPrecedingIfInFile(cur_tnode, attrErrorLoc(tag, b_a.name, filename));
+					} catch (e) {
+						if (e instanceof BackflipError) {
+							errors.push(e);
+							const new_cur = pushRawHere(raw);
+							if (cur_tnode !== null) cur_tnode = new_cur;
+							if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+								tag_stack.push({ tag: tag.tagName });
+							}
+							return;
+						}
+						throw e;
+					}
+					if (b_a.name === 'b-else' && b_a.value) {
+						errors.push(new BackflipError("b-else should not have a value", attrErrorLoc(tag, 'b-else', filename)));
+						// Still process as b-else (parsing state stays correct)
+					}
 					const condition = b_a.name === 'b-else-if' ? interpretBackcode(b_a.value) : undefined;
 					const branch: IfBranch = { condition, tnodes: [], ifNode: if_node };
 					branch.loc = attrLoc(tag, b_a.name);
@@ -723,12 +832,23 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 					}
 				}
 			}
-		} catch(e) { reject(e); } });
+		} catch(e) { if (e instanceof BackflipError) { errors.push(e); } else { reject(e); } } });
 
 		rewriteStream.on('endTag', (tag, raw) => { try {
 			const matchTag = tag_stack.pop();
-			if (!matchTag) throw new BackflipError("popped the last tagMatcher prematurely", errorLoc(filename, tagLoc(tag)));
-			if (matchTag.tag !== tag.tagName) throw new BackflipError(`mismatched start/end tags: ${matchTag.tag} ${tag.tagName}`, errorLoc(filename, tagLoc(tag)));
+			if (!matchTag) {
+				errors.push(new BackflipError("popped the last tagMatcher prematurely", errorLoc(filename, tagLoc(tag))));
+				if (cur_tnode !== null) cur_tnode = pushRaw(cur_tnode, raw);
+				else pushRawHere(raw);
+				return;
+			}
+			if (matchTag.tag !== tag.tagName) {
+				errors.push(new BackflipError(`mismatched start/end tags: ${matchTag.tag} ${tag.tagName}`, errorLoc(filename, tagLoc(tag))));
+				tag_stack.push(matchTag);
+				if (cur_tnode !== null) cur_tnode = pushRaw(cur_tnode, raw);
+				else pushRawHere(raw);
+				return;
+			}
 
 			// If we just closed the partial's top-level element
 			if (tag_stack.length === 0 && currentPartialRoot !== null) {
@@ -772,7 +892,7 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 					cur_tnode = parent as TNode;
 				}
 			}
-		} catch(e) { reject(e); } });
+		} catch(e) { if (e instanceof BackflipError) { errors.push(e); } else { reject(e); } } });
 
 		rewriteStream.on('text', (textToken: {sourceCodeLocation?: {startLine:number;startCol:number;startOffset:number}|null}, raw: string) => { try {
 			if (cur_tnode === null && currentPartialRoot === null) return; // outside any partial
@@ -820,12 +940,12 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			} else if (cur_tnode !== null) {
 				cur_tnode = onText(cur_tnode, raw, textLoc);
 			}
-		} catch(e) { reject(e); } });
+		} catch(e) { if (e instanceof BackflipError) { errors.push(e); } else { reject(e); } } });
 
 		s.pipe(rewriteStream);
 		s.on('error', (err) => { reject(err); });
 		rewriteStream.on('error', (err) => { reject(err); });
-		rewriteStream.on('end', () => { resolve(compiledFile); });
+		rewriteStream.on('end', () => { resolve({ compiled: compiledFile, errors }); });
 	});
 }
 

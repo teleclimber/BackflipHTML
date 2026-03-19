@@ -2,7 +2,7 @@
 // creates temporary HTML files in $TMPDIR.
 // Run with: deno test --allow-read --allow-write --allow-env compiler/partials_test.ts
 
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { compileDirectory } from './partials.ts';
@@ -40,7 +40,7 @@ Deno.test("compileDirectory - single file with two partials", async () => {
         </div>
     `);
 
-    const result = await compileDirectory(dir);
+    const { directory: result } = await compileDirectory(dir);
 
     assertEquals(result.files.size, 1);
     const compiled = result.files.get("components.html");
@@ -68,7 +68,7 @@ Deno.test("compileDirectory - cross-file reference with b-export", async () => {
         </div>
     `);
 
-    const result = await compileDirectory(dir);
+    const { directory: result } = await compileDirectory(dir);
 
     assertEquals(result.files.size, 2);
     assertEquals(result.files.has("provider.html"), true);
@@ -78,8 +78,8 @@ Deno.test("compileDirectory - cross-file reference with b-export", async () => {
     assertEquals(consumer.partials.has("page"), true);
 });
 
-// Test: throws when a referenced file does not exist in the registry
-Deno.test("compileDirectory - throws when referenced file does not exist", async () => {
+// Test: reports error when a referenced file does not exist in the registry
+Deno.test("compileDirectory - reports error when referenced file does not exist", async () => {
     const dir = await makeTempDir("missingfile");
 
     await writeFile(path.join(dir, "consumer.html"), `
@@ -88,15 +88,13 @@ Deno.test("compileDirectory - throws when referenced file does not exist", async
         </div>
     `);
 
-    await assertRejects(
-        () => compileDirectory(dir),
-        Error,
-        'nonexistent.html'
-    );
+    const { errors } = await compileDirectory(dir);
+    assertEquals(errors.length > 0, true);
+    assertStringIncludes(errors[0].message, 'nonexistent.html');
 });
 
-// Test: throws when a referenced partial exists in a file but is not b-exported
-Deno.test("compileDirectory - throws when referenced partial is not b-exported", async () => {
+// Test: reports error when a referenced partial exists in a file but is not b-exported
+Deno.test("compileDirectory - reports error when referenced partial is not b-exported", async () => {
     const dir = await makeTempDir("notexported");
 
     // provider.html has "card" partial but WITHOUT b-export
@@ -113,15 +111,13 @@ Deno.test("compileDirectory - throws when referenced partial is not b-exported",
         </div>
     `);
 
-    await assertRejects(
-        () => compileDirectory(dir),
-        Error,
-        'b-export'
-    );
+    const { errors } = await compileDirectory(dir);
+    assertEquals(errors.length > 0, true);
+    assertStringIncludes(errors[0].message, 'b-export');
 });
 
-// Test: throws on circular cross-file dependency (A references B which references A)
-Deno.test("compileDirectory - throws on circular cross-file dependency", async () => {
+// Test: reports error on circular cross-file dependency (A references B which references A)
+Deno.test("compileDirectory - reports error on circular cross-file dependency", async () => {
     const dir = await makeTempDir("circular");
 
     // a.html references b.html
@@ -138,9 +134,7 @@ Deno.test("compileDirectory - throws on circular cross-file dependency", async (
         </div>
     `);
 
-    await assertRejects(
-        () => compileDirectory(dir),
-        Error,
-        'Circular dependency'
-    );
+    const { errors } = await compileDirectory(dir);
+    assertEquals(errors.length > 0, true);
+    assertStringIncludes(errors[0].message, 'Circular dependency');
 });

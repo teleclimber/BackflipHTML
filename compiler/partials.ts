@@ -1,6 +1,6 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { compileFile, type CompiledFile, type PartialRegistry, type PartialRefTNode } from './compiler.ts';
+import { compileFile, type CompiledFile, type PartialRegistry, type PartialRefTNode, BackflipError } from './compiler.ts';
 
 export interface CompiledDirectory {
     files: Map<string, CompiledFile>  // key: relative file path e.g. "blog/general.html"
@@ -117,60 +117,65 @@ function findCycle(graph: Map<string, Set<string>>): string[] | null {
 
 /**
  * Validate cross-file PartialRefTNode references in a compiled file.
- * Throws with a descriptive message if a reference is invalid.
+ * Returns an array of errors found.
  */
 function validateRefs(
     compiledFile: CompiledFile,
     sourceRelPath: string,
     registry: PartialRegistry
-): void {
+): BackflipError[] {
+    const errors: BackflipError[] = [];
     for (const [, root] of compiledFile.partials) {
-        validateRootTNode(root, sourceRelPath, registry);
+        validateRootTNode(root, sourceRelPath, registry, errors);
     }
+    return errors;
 }
 
 function validateRootTNode(
     node: { tnodes: import('./compiler.ts').TNode[] },
     sourceRelPath: string,
-    registry: PartialRegistry
+    registry: PartialRegistry,
+    errors: BackflipError[]
 ): void {
     for (const tnode of node.tnodes) {
-        validateTNode(tnode, sourceRelPath, registry);
+        validateTNode(tnode, sourceRelPath, registry, errors);
     }
 }
 
 function validateTNode(
     tnode: import('./compiler.ts').TNode,
     sourceRelPath: string,
-    registry: PartialRegistry
+    registry: PartialRegistry,
+    errors: BackflipError[]
 ): void {
     if (tnode.type === 'partial-ref') {
         const ref = tnode as PartialRefTNode;
         if (ref.file !== null) {
             // Cross-file reference: validate registry
             if (!registry.has(ref.file)) {
-                throw new Error(
+                errors.push(new BackflipError(
                     `In "${sourceRelPath}": b-part references file "${ref.file}" which does not exist in the directory`
-                );
-            }
-            const exportedNames = registry.get(ref.file)!;
-            if (!exportedNames.has(ref.partialName)) {
-                throw new Error(
-                    `In "${sourceRelPath}": b-part references partial "${ref.partialName}" in file "${ref.file}", but that partial is not exported (missing b-export)`
-                );
+                ));
+            } else {
+                const exportedNames = registry.get(ref.file)!;
+                if (!exportedNames.has(ref.partialName)) {
+                    errors.push(new BackflipError(
+                        `In "${sourceRelPath}": b-part references partial "${ref.partialName}" in file "${ref.file}", but that partial is not exported (missing b-export)`
+                    ));
+                }
             }
         }
         // Validate slot contents
         for (const slotNodes of Object.values(ref.slots)) {
             for (const slotTNode of slotNodes) {
-                validateTNode(slotTNode, sourceRelPath, registry);
+                validateTNode(slotTNode, sourceRelPath, registry, errors);
             }
         }
     } else if (tnode.type === 'for') {
-        validateRootTNode(tnode, sourceRelPath, registry);
+        validateRootTNode(tnode, sourceRelPath, registry, errors);
     } else if (tnode.type === 'if') {
         for (const branch of tnode.branches) {
-            validateRootTNode(branch, sourceRelPath, registry);
+            validateRootTNode(branch, sourceRelPath, registry, errors);
         }
     }
 }
@@ -182,7 +187,9 @@ function validateTNode(
  * Cycle check: Build dependency graph and detect circular cross-file references.
  * Pass 2: Compile each file in parallel with the full registry, then validate cross-file refs.
  */
-export async function compileDirectory(dir: string): Promise<CompiledDirectory> {
+export async function compileDirectory(dir: string): Promise<{ directory: CompiledDirectory, errors: BackflipError[] }> {
+    const allErrors: BackflipError[] = [];
+
     // Pass 1: collect files and build registry
     const relPaths = await collectHtmlFiles(dir);
 
@@ -207,25 +214,27 @@ export async function compileDirectory(dir: string): Promise<CompiledDirectory> 
 
     const cycle = findCycle(depGraph);
     if (cycle !== null) {
-        throw new Error(
+        allErrors.push(new BackflipError(
             `Circular dependency detected: ${cycle.join(' -> ')}`
-        );
+        ));
     }
 
     // Pass 2: compile all files in parallel
     const compiledPairs = await Promise.all(
         relPaths.map(async (relPath): Promise<[string, CompiledFile]> => {
             const html = fileContents.get(relPath)!;
-            const compiled = await compileFile(html, registry, relPath);
+            const { compiled, errors } = await compileFile(html, registry, relPath);
+            allErrors.push(...errors);
             return [relPath, compiled];
         })
     );
 
     // Validate cross-file references
     for (const [relPath, compiled] of compiledPairs) {
-        validateRefs(compiled, relPath, registry);
+        const refErrors = validateRefs(compiled, relPath, registry);
+        allErrors.push(...refErrors);
     }
 
     const files = new Map<string, CompiledFile>(compiledPairs);
-    return { files };
+    return { directory: { files }, errors: allErrors };
 }

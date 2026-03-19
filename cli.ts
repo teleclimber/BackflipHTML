@@ -50,18 +50,13 @@ if (args.check) {
         printUsageAndExit('--check mode does not accept <output-dir> or --lang');
     }
 
-    let errors: string[] = [];
-    try {
-        await compileDirectory(inputDir);
-    } catch (e) {
-        errors = [e instanceof Error ? e.message : String(e)];
-    }
+    const { errors } = await compileDirectory(inputDir);
 
     if (args.json) {
-        console.log(JSON.stringify({ errors }));
+        console.log(JSON.stringify({ errors: errors.map(e => e.message) }));
     } else {
         for (const err of errors) {
-            console.error(err);
+            console.error(err.message);
         }
     }
 
@@ -89,11 +84,12 @@ if (args.check) {
         Deno.exit(1);
     }
 
-    let result;
-    try {
-        result = await compileDirectory(inputDir);
-    } catch (e) {
-        console.error(e instanceof Error ? e.message : String(e));
+    const { directory: result, errors } = await compileDirectory(inputDir);
+
+    if (errors.length > 0) {
+        for (const err of errors) {
+            console.error(err.message);
+        }
         Deno.exit(1);
     }
 

@@ -1,105 +1,112 @@
 /**
- * Integration tests for compiler error messages with source locations.
+ * Integration tests for compiler error collection with source locations.
  *
- * Each test compiles an .html file from templates-error/ that contains a single
- * known error and verifies the error message includes the correct filename,
- * line number, and a descriptive message.
- *
- * The compiler aborts on the first error, so each error case lives in its own
- * file / partial.
+ * Compiles the templates-error/ directory (which contains multiple files, each
+ * with multiple errors) via compileDirectory and verifies that every expected
+ * error is reported with the correct filename, line number, and message.
  */
 
-import { assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert";
-import { compileFile, BackflipError } from "../compiler/compiler.ts";
+import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
+import { compileDirectory } from "../compiler/partials.ts";
+import { BackflipError } from "../compiler/compiler.ts";
 
 const ERROR_DIR = new URL("./templates-error", import.meta.url).pathname;
 
-async function compileErrorFile(filename: string): Promise<BackflipError> {
-    const html = await Deno.readTextFile(`${ERROR_DIR}/${filename}`);
-    return await assertRejects(() => compileFile(html, undefined, filename), BackflipError);
+const { errors } = await compileDirectory(ERROR_DIR);
+
+/** Find all errors whose filename matches the given name. */
+function errorsFor(filename: string): BackflipError[] {
+    return errors.filter(e => e.filename === filename);
+}
+
+/** Find the error matching a filename and a message substring. */
+function findError(filename: string, messagePart: string): BackflipError {
+    const match = errors.find(
+        e => e.filename === filename && e.message.includes(messagePart)
+    );
+    if (!match) {
+        const available = errorsFor(filename).map(e => e.message).join("\n  ");
+        throw new Error(
+            `No error in "${filename}" matching "${messagePart}".\nAvailable errors:\n  ${available || "(none)"}`
+        );
+    }
+    return match;
 }
 
 // ---------------------------------------------------------------------------
-// bad-for.html — b-for with invalid format
-//   line 2: <p b-for="bad format">
+// for-errors.html
+//   line 2: <p b-for="bad format">       — bad b-for syntax
+//   line 3: <p b-for=" in items">        — empty iter variable
 // ---------------------------------------------------------------------------
 
-Deno.test("error: b-for with invalid format", async () => {
-    const err = await compileErrorFile("bad-for.html");
-    assertStringIncludes(err.message, "bad-for.html");
-    assertStringIncludes(err.message, 'b-for value must be in the form "item in items"');
+Deno.test("for-errors.html: reports 2 errors", () => {
+    assertEquals(errorsFor("for-errors.html").length, 2);
+});
+
+Deno.test("for-errors.html: bad b-for syntax at line 2", () => {
+    const err = findError("for-errors.html", 'b-for value must be in the form "item in items"');
     assertEquals(err.line, 2);
 });
 
-// ---------------------------------------------------------------------------
-// stray-else.html — b-else without a preceding b-if
-//   line 2: <p b-else>
-// ---------------------------------------------------------------------------
-
-Deno.test("error: stray b-else without b-if", async () => {
-    const err = await compileErrorFile("stray-else.html");
-    assertStringIncludes(err.message, "stray-else.html");
-    assertStringIncludes(err.message, "b-else");
-    assertStringIncludes(err.message, "must follow a b-if");
-    assertEquals(err.line, 2);
-});
-
-// ---------------------------------------------------------------------------
-// stray-else-if.html — b-else-if without a preceding b-if
-//   line 2: <p b-else-if="y">
-// ---------------------------------------------------------------------------
-
-Deno.test("error: stray b-else-if without b-if", async () => {
-    const err = await compileErrorFile("stray-else-if.html");
-    assertStringIncludes(err.message, "stray-else-if.html");
-    assertStringIncludes(err.message, "must follow a b-if");
-    assertEquals(err.line, 2);
-});
-
-// ---------------------------------------------------------------------------
-// else-with-value.html — b-else="y" is not allowed
-//   line 3: <p b-else="y">
-// ---------------------------------------------------------------------------
-
-Deno.test("error: b-else with a value", async () => {
-    const err = await compileErrorFile("else-with-value.html");
-    assertStringIncludes(err.message, "else-with-value.html");
-    assertStringIncludes(err.message, "b-else should not have a value");
+Deno.test("for-errors.html: empty iter variable at line 3", () => {
+    const err = findError("for-errors.html", "bad iter value name");
     assertEquals(err.line, 3);
 });
 
 // ---------------------------------------------------------------------------
-// nested-name.html — b-name inside another b-name
-//   line 2: <span b-name="inner">
+// conditional-errors.html
+//   line 2: <p b-else>                   — stray b-else
+//   line 3: <p b-else-if="y">            — stray b-else-if
+//   line 5: <p b-else="y">               — b-else with a value
 // ---------------------------------------------------------------------------
 
-Deno.test("error: nested b-name", async () => {
-    const err = await compileErrorFile("nested-name.html");
-    assertStringIncludes(err.message, "nested-name.html");
-    assertStringIncludes(err.message, "b-name is only allowed on top-level elements");
+Deno.test("conditional-errors.html: reports 3 errors", () => {
+    assertEquals(errorsFor("conditional-errors.html").length, 3);
+});
+
+Deno.test("conditional-errors.html: stray b-else at line 2", () => {
+    const err = findError("conditional-errors.html", "must follow a b-if");
     assertEquals(err.line, 2);
+    assertStringIncludes(err.message, "b-else");
+});
+
+Deno.test("conditional-errors.html: stray b-else-if at line 3", () => {
+    const errs = errorsFor("conditional-errors.html").filter(
+        e => e.message.includes("must follow a b-if")
+    );
+    const elseIf = errs.find(e => e.line === 3);
+    assertEquals(elseIf !== undefined, true, "expected stray b-else-if error at line 3");
+});
+
+Deno.test("conditional-errors.html: b-else with value at line 5", () => {
+    const err = findError("conditional-errors.html", "b-else should not have a value");
+    assertEquals(err.line, 5);
 });
 
 // ---------------------------------------------------------------------------
-// multiple-b-attrs.html — b-for and b-if on the same element
-//   line 2: <p b-for="x in xs" b-if="x">
+// structural-errors.html
+//   line 2: <span b-name="inner">        — nested b-name
+//   line 3: <p b-for="x in xs" b-if="x"> — multiple b-attrs
 // ---------------------------------------------------------------------------
 
-Deno.test("error: multiple b-attrs on same element", async () => {
-    const err = await compileErrorFile("multiple-b-attrs.html");
-    assertStringIncludes(err.message, "multiple-b-attrs.html");
-    assertStringIncludes(err.message, "more than one b-attr");
+Deno.test("structural-errors.html: reports 2 errors", () => {
+    assertEquals(errorsFor("structural-errors.html").length, 2);
+});
+
+Deno.test("structural-errors.html: nested b-name at line 2", () => {
+    const err = findError("structural-errors.html", "b-name is only allowed on top-level elements");
     assertEquals(err.line, 2);
 });
 
+Deno.test("structural-errors.html: multiple b-attrs at line 3", () => {
+    const err = findError("structural-errors.html", "more than one b-attr");
+    assertEquals(err.line, 3);
+});
+
 // ---------------------------------------------------------------------------
-// empty-for-var.html — b-for=" in items" (empty iterator variable)
-//   line 2: <p b-for=" in items">
+// All files combined: verify total error count across the directory
 // ---------------------------------------------------------------------------
 
-Deno.test("error: empty b-for variable name", async () => {
-    const err = await compileErrorFile("empty-for-var.html");
-    assertStringIncludes(err.message, "empty-for-var.html");
-    assertStringIncludes(err.message, "bad iter value name");
-    assertEquals(err.line, 2);
+Deno.test("total errors across all files", () => {
+    assertEquals(errors.length, 7);
 });

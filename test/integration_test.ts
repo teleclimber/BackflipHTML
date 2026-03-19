@@ -20,7 +20,7 @@ const TEMPLATES_DIR = new URL("./templates", import.meta.url).pathname;
 const TMPDIR = "/tmp/claude-1000/integration-test-output";
 
 // Compile once for all tests
-const compiled = await compileDirectory(TEMPLATES_DIR);
+const { directory: compiled } = await compileDirectory(TEMPLATES_DIR);
 
 /**
  * Normalize rendered HTML for comparison: collapse whitespace-only gaps between
