@@ -396,3 +396,19 @@ Deno.test("attr-bind: mixed static and dynamic attrs preserve source order", () 
         `<div><a href="/about" id="footer" class="active">Link</a></div>`
     );
 });
+
+Deno.test("attr-bind: bind attr on b-name root element renders dynamically", () => {
+    const mod = getModule("binds.html");
+    assertEquals(
+        normalize(renderRoot(mod.root_bind, { cls: "active" })),
+        `<div class="active"><span>Content</span></div>`
+    );
+});
+
+Deno.test("attr-bind: bind attr on b-name root element omits attr when false", () => {
+    const mod = getModule("binds.html");
+    assertEquals(
+        normalize(renderRoot(mod.root_bind, { cls: false })),
+        `<div><span>Content</span></div>`
+    );
+});

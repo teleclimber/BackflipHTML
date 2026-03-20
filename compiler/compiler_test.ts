@@ -691,3 +691,29 @@ Deno.test("compileFile: b-if/b-else inside slot content produces IfTNode in slot
 	assertEquals(ifNode !== undefined, true, "slot should contain an IfTNode");
 	assertEquals(ifNode!.branches.length, 2, "IfTNode should have b-if and b-else branches");
 });
+
+Deno.test("compileFile: bind attr on b-name root element produces AttrBindTNode", async () => {
+	const { compiled: result, errors } = await compileFile('<div b-name="card" :class="cls">Hello</div>');
+	assertEquals(errors.length, 0);
+	const root = result.partials.get("card")!;
+	const first = root.tnodes[0];
+	assertEquals(first.type, 'attr-bind', "root element with :class should produce an attr-bind node, not raw");
+	const ab = first as AttrBindTNode;
+	assertEquals(ab.tagOpen, '<div');
+	const dynamicPart = ab.parts.find(p => p.type === 'dynamic');
+	assertEquals(dynamicPart !== undefined, true, "should have a dynamic part for :class");
+	assertEquals(dynamicPart!.name, 'class');
+});
+
+Deno.test("compileFile: bind attr on b-name root element excludes b-name and b-export attrs", async () => {
+	const { compiled: result, errors } = await compileFile('<div b-name="card" b-export :class="cls" id="x">Hello</div>');
+	assertEquals(errors.length, 0);
+	const root = result.partials.get("card")!;
+	const first = root.tnodes[0] as AttrBindTNode;
+	assertEquals(first.type, 'attr-bind');
+	// b-name and b-export should not appear in parts
+	const allStatic = first.parts.filter(p => p.type === 'static').map(p => p.raw).join('');
+	assertEquals(allStatic.includes('b-name'), false, "b-name should be excluded");
+	assertEquals(allStatic.includes('b-export'), false, "b-export should be excluded");
+	assertEquals(allStatic.includes('id="x"'), true, "static attrs should be preserved");
+});

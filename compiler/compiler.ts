@@ -592,10 +592,9 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 						tag_stack.push({ tag: tag.tagName });
 					}
 				} else {
-					const tag_str = reconstructTagExcluding(tag, ['b-name', 'b-export']);
-					const init_raw: RawTNode = { type: 'raw', raw: tag_str, parent: partialRoot };
-					partialRoot.tnodes.push(init_raw);
-					cur_tnode = init_raw;
+					const openNode = makeOpenTagNode(tag, ['b-name', 'b-export'], partialRoot);
+					partialRoot.tnodes.push(openNode);
+					cur_tnode = openNode.type === 'raw' ? openNode : null;
 					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
 						tag_stack.push({ tag: tag.tagName });
 					}
