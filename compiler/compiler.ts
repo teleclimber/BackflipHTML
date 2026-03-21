@@ -446,7 +446,7 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 		}
 
 		// Helper: push a raw string into the right place (slot or normal)
-		function pushRawHere(raw: string): TNode {
+		function pushRawHere(raw: string): TNode | null {
 			const sc = getSlotCollection();
 			if (sc) {
 				const slotName = sc.currentSlot;
@@ -465,8 +465,9 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 				}
 			} else {
 				if (cur_tnode === null) {
-					const raw_node: RawTNode = { type: 'raw', raw, parent: currentPartialRoot! };
-					currentPartialRoot!.tnodes.push(raw_node);
+					if (currentPartialRoot === null) return null;
+					const raw_node: RawTNode = { type: 'raw', raw, parent: currentPartialRoot };
+					currentPartialRoot.tnodes.push(raw_node);
 					cur_tnode = raw_node;
 					return raw_node;
 				}
@@ -605,6 +606,13 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			// --- b-part ---
 			const bPartAttr = tag.attrs.find(a => a.name === 'b-part');
 			if (bPartAttr !== undefined) {
+				// b-part outside any b-name partial is ignored
+				if (cur_tnode === null && currentPartialRoot === null) {
+					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+						tag_stack.push({ tag: tag.tagName });
+					}
+					return;
+				}
 				const partValue = bPartAttr.value;
 				let file: string | null;
 				let partialName: string;
@@ -672,6 +680,13 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			// --- b-slot ---
 			const bSlotAttr = tag.attrs.find(a => a.name === 'b-slot');
 			if (bSlotAttr !== undefined) {
+				// b-slot outside any b-name partial is ignored
+				if (cur_tnode === null && currentPartialRoot === null) {
+					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+						tag_stack.push({ tag: tag.tagName });
+					}
+					return;
+				}
 				const slotName = bSlotAttr.value !== '' ? bSlotAttr.value : undefined;
 				const parent: ParentTNode = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
 
@@ -871,14 +886,14 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			if (!matchTag) {
 				errors.push(new BackflipError("popped the last tagMatcher prematurely", errorLoc(filename, tagLoc(tag))));
 				if (cur_tnode !== null) cur_tnode = pushRaw(cur_tnode, raw);
-				else pushRawHere(raw);
+				else if (currentPartialRoot !== null) pushRawHere(raw);
 				return;
 			}
 			if (matchTag.tag !== tag.tagName) {
 				errors.push(new BackflipError(`mismatched start/end tags: ${matchTag.tag} ${tag.tagName}`, errorLoc(filename, tagLoc(tag))));
 				tag_stack.push(matchTag);
 				if (cur_tnode !== null) cur_tnode = pushRaw(cur_tnode, raw);
-				else pushRawHere(raw);
+				else if (currentPartialRoot !== null) pushRawHere(raw);
 				return;
 			}
 

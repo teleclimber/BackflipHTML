@@ -10,13 +10,14 @@ import {
 let client: LanguageClient;
 
 export function activate(context: ExtensionContext): void {
+	// Server is bundled inside the extension at server/server.js
 	const serverModule = context.asAbsolutePath(
-		path.join('..', 'lsp', 'dist', 'server.js')
+		path.join('server', 'server.js')
 	);
 
 	const serverOptions: ServerOptions = {
-		run: { module: serverModule, transport: TransportKind.stdio },
-		debug: { module: serverModule, transport: TransportKind.stdio },
+		run: { module: serverModule, transport: TransportKind.ipc },
+		debug: { module: serverModule, transport: TransportKind.ipc },
 	};
 
 	const clientOptions: LanguageClientOptions = {

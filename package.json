@@ -4,7 +4,8 @@
   "exports": "./dist/mod.js",
   "types": "./dist/mod.d.ts",
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "build:extension": "npm run build && cd lsp && npm run build && cd ../vscode-backflip && npm run build && vsce package --no-dependencies"
   },
   "files": [
     "dist"
