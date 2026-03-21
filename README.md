@@ -118,3 +118,51 @@ HTML template string
 ```
 
 The compile step (`compiler/` + `compiler/generate/*/`) only needs to run once per template. The resulting module can be cached and reused, with only the lightweight runtime render pass running per request.
+
+---
+
+## Dual-Runtime Support
+
+The compiler, generators, and runtime are importable from both **Deno** and **Node.js**.
+
+- **Deno**: import directly from `mod.ts` — bare specifiers like `acorn` and `parse5-html-rewriting-stream` are mapped via `deno.json` import maps.
+- **Node.js**: run `npm run build` to compile to `dist/`, then import from `dist/mod.js`. The `package.json` exports field points here.
+
+```bash
+# Deno
+deno test --allow-read --allow-write --allow-run=php
+
+# Node.js
+npm install && npm run build
+node -e "import('./dist/mod.js').then(m => console.log(Object.keys(m)))"
+```
+
+---
+
+## `lsp/`
+
+A **Language Server Protocol** implementation (Node.js) that provides IDE features for BackflipHTML templates:
+
+- **Diagnostics** — red underlines for template compilation errors
+- **Go to Definition** — click a `b-part` reference to jump to the `b-name` definition
+- **Find All References** — from a `b-name` definition, find all `b-part` usages
+- **Document Symbols** — lists partials in the editor outline/breadcrumbs
+
+The server reuses the compiler's AST and source location tracking. On file open/save, it runs `compileDirectory()` on the workspace root and builds a project index of partial definitions and references.
+
+```bash
+cd lsp && npm install && npm run build
+```
+
+---
+
+## `vscode-backflip/`
+
+A **VSCode extension** that launches the BackflipHTML language server and provides:
+
+- TextMate grammar injection for `b-*` directive highlighting and `{{ }}` interpolation
+- Language configuration for bracket matching and auto-closing pairs
+
+```bash
+cd vscode-backflip && npm install && npm run build
+```

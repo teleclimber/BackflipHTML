@@ -1,0 +1,43 @@
+{
+  "name": "vscode-backflip",
+  "displayName": "BackflipHTML",
+  "description": "Language support for BackflipHTML templates",
+  "version": "0.1.0",
+  "publisher": "backflip",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Programming Languages"],
+  "activationEvents": [
+    "onLanguage:html",
+    "workspaceContains:**/*.html"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "html",
+        "extensions": [".html"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "scopeName": "backflip.injection",
+        "path": "./syntaxes/backflip.tmLanguage.json",
+        "injectTo": ["text.html.basic"]
+      }
+    ]
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.9.3"
+  }
+}
