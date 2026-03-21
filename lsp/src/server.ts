@@ -17,6 +17,7 @@ import { errorsToDiagnostics } from './diagnostics.js';
 import { findDefinition } from './definition.js';
 import { findReferences } from './references.js';
 import { getDocumentSymbols } from './symbols.js';
+import { parseBPartValue } from './parse-bpart.js';
 import * as path from 'node:path';
 
 const connection = createConnection(ProposedFeatures.all);
@@ -28,6 +29,7 @@ let recompileTimer: ReturnType<typeof setTimeout> | null = null;
 
 connection.onInitialize((params: InitializeParams): InitializeResult => {
 	workspaceRoot = params.workspaceFolders?.[0]?.uri?.replace('file://', '') ?? '';
+	connection.console.log(`[backflip] initialize: workspaceRoot=${workspaceRoot}`);
 
 	return {
 		capabilities: {
@@ -51,6 +53,7 @@ async function recompile(): Promise<void> {
 	try {
 		const { directory, errors } = await compileDirectory(workspaceRoot);
 		projectIndex = buildIndex(directory);
+		connection.console.log(`[backflip] recompile: ${directory.files.size} files, ${errors.length} errors, ${projectIndex.partialDefs.size} partials, ${projectIndex.partialRefs.length} refs`);
 
 		// Publish diagnostics
 		const diagsByFile = errorsToDiagnostics(errors as BackflipError[]);
@@ -74,7 +77,7 @@ async function recompile(): Promise<void> {
 			});
 		}
 	} catch (err) {
-		connection.console.error(`Recompile failed: ${err}`);
+		connection.console.error(`[backflip] recompile failed: ${err instanceof Error ? err.stack : err}`);
 	}
 }
 
@@ -126,18 +129,7 @@ connection.onDefinition((params: DefinitionParams) => {
 	const filePath = uri.replace('file://', '');
 	const relPath = path.relative(workspaceRoot, filePath);
 
-	let targetFile: string | null = null;
-	let partialName: string;
-
-	if (value.includes('#')) {
-		const hashIdx = value.indexOf('#');
-		targetFile = value.slice(0, hashIdx);
-		partialName = value.slice(hashIdx + 1);
-	} else if (value.startsWith('#')) {
-		partialName = value.slice(1);
-	} else {
-		partialName = value;
-	}
+	const { partialName, targetFile } = parseBPartValue(value);
 
 	return findDefinition(partialName, targetFile, relPath, projectIndex, workspaceRoot);
 });

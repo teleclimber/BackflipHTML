@@ -13,7 +13,7 @@ export function errorsToDiagnostics(errors: BackflipError[]): Map<string, Diagno
 			severity: DiagnosticSeverity.Error,
 			range: {
 				start: { line, character: col },
-				end: { line, character: col },
+				end: { line, character: col + 1 },
 			},
 			message: err.message,
 			source: 'backflip',

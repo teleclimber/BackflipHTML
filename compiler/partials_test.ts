@@ -138,3 +138,249 @@ Deno.test("compileDirectory - reports error on circular cross-file dependency", 
     assertEquals(errors.length > 0, true);
     assertStringIncludes(errors[0].message, 'Circular dependency');
 });
+
+// Test: plain HTML file with no backflip directives
+Deno.test("compileDirectory - plain HTML file with no directives", async () => {
+    const dir = await makeTempDir("plain");
+    await writeFile(path.join(dir, "index.html"), `
+        <!DOCTYPE html>
+        <html>
+        <head><title>Plain Page</title></head>
+        <body><h1>Hello World</h1><p>No backflip here.</p></body>
+        </html>
+    `);
+
+    const { directory, errors } = await compileDirectory(dir);
+    assertEquals(directory.files.size, 1);
+    const compiled = directory.files.get("index.html")!;
+    assertEquals(compiled.partials.size, 0);
+});
+
+// Test: empty HTML file
+Deno.test("compileDirectory - empty HTML file", async () => {
+    const dir = await makeTempDir("empty");
+    await writeFile(path.join(dir, "empty.html"), "");
+
+    const { directory, errors } = await compileDirectory(dir);
+    assertEquals(directory.files.size, 1);
+    const compiled = directory.files.get("empty.html")!;
+    assertEquals(compiled.partials.size, 0);
+});
+
+// Test: HTML file with directives but no b-name (top-level b-for, b-if)
+Deno.test("compileDirectory - directives without b-name", async () => {
+    const dir = await makeTempDir("no_bname");
+    await writeFile(path.join(dir, "page.html"), `
+        <ul>
+            <li b-for="item of items">{{ item }}</li>
+        </ul>
+        <div b-if="show">Visible</div>
+    `);
+
+    const { directory } = await compileDirectory(dir);
+    assertEquals(directory.files.size, 1);
+    const compiled = directory.files.get("page.html")!;
+    assertEquals(compiled.partials.size, 0);
+});
+
+// Test: mix of backflip template and plain HTML files
+Deno.test("compileDirectory - mixed backflip and plain HTML files", async () => {
+    const dir = await makeTempDir("mixed");
+    await writeFile(path.join(dir, "template.html"), `
+        <div b-name="card" b-export>
+            <div class="card">{{ title }}</div>
+        </div>
+    `);
+    await writeFile(path.join(dir, "plain.html"), `
+        <!DOCTYPE html>
+        <html><body><p>Just a static page</p></body></html>
+    `);
+
+    const { directory } = await compileDirectory(dir);
+    assertEquals(directory.files.size, 2);
+    assertEquals(directory.files.get("template.html")!.partials.size, 1);
+    assertEquals(directory.files.get("plain.html")!.partials.size, 0);
+});
+
+// Test: malformed/incomplete HTML
+Deno.test("compileDirectory - malformed HTML", async () => {
+    const dir = await makeTempDir("malformed");
+    await writeFile(path.join(dir, "broken.html"), `
+        <div b-name="widget" b-export>
+            <p>Unclosed paragraph
+            <span>Unclosed span
+            <img src="test.png">
+        </div>
+    `);
+
+    const { directory } = await compileDirectory(dir);
+    assertEquals(directory.files.size, 1);
+    assertEquals(directory.files.get("broken.html")!.partials.has("widget"), true);
+});
+
+// Test: b-part at top level (outside any b-name partial)
+Deno.test("compileDirectory - b-part at top level without b-name", async () => {
+    const dir = await makeTempDir("toplevel_bpart");
+    await writeFile(path.join(dir, "page.html"), `
+        <div b-part="card"></div>
+    `);
+
+    const { directory } = await compileDirectory(dir);
+    assertEquals(directory.files.size, 1);
+});
+
+// Test: b-part with content at top level (endTag fires outside partial)
+Deno.test("compileDirectory - b-part with content at top level", async () => {
+    const dir = await makeTempDir("toplevel_bpart_content");
+    await writeFile(path.join(dir, "page.html"), `
+        <div b-part="card">
+            <p>Some content inside b-part</p>
+        </div>
+        <p>After b-part</p>
+    `);
+
+    const { directory } = await compileDirectory(dir);
+    assertEquals(directory.files.size, 1);
+});
+
+// Test: regular HTML elements around b-name partials
+Deno.test("compileDirectory - regular HTML around partials", async () => {
+    const dir = await makeTempDir("html_around");
+    await writeFile(path.join(dir, "page.html"), `
+        <header>Site Header</header>
+        <div b-name="card">
+            <p>{{ title }}</p>
+        </div>
+        <footer>Site Footer</footer>
+    `);
+
+    const { directory } = await compileDirectory(dir);
+    assertEquals(directory.files.size, 1);
+    assertEquals(directory.files.get("page.html")!.partials.size, 1);
+});
+
+// Test: nested b-name (b-name inside another b-name)
+Deno.test("compileDirectory - nested b-name", async () => {
+    const dir = await makeTempDir("nested_bname");
+    await writeFile(path.join(dir, "page.html"), `
+        <div b-name="outer">
+            <div b-name="inner">
+                <p>Nested</p>
+            </div>
+        </div>
+    `);
+
+    const { directory, errors } = await compileDirectory(dir);
+    assertEquals(directory.files.size, 1);
+});
+
+// Test: b-for and b-if at top level (outside b-name)
+Deno.test("compileDirectory - structural directives at top level", async () => {
+    const dir = await makeTempDir("toplevel_struct");
+    await writeFile(path.join(dir, "page.html"), `
+        <div b-for="item of items">
+            <p>{{ item }}</p>
+        </div>
+        <div b-if="show">
+            <span>Shown</span>
+        </div>
+    `);
+
+    const { directory } = await compileDirectory(dir);
+    assertEquals(directory.files.size, 1);
+});
+
+// Test: HTML with non-HTML files in directory (should be ignored)
+Deno.test("compileDirectory - ignores non-HTML files", async () => {
+    const dir = await makeTempDir("nonhtml");
+    await writeFile(path.join(dir, "style.css"), "body { color: red; }");
+    await writeFile(path.join(dir, "script.js"), "console.log('hello');");
+    await writeFile(path.join(dir, "data.json"), '{"key": "value"}');
+    await writeFile(path.join(dir, "page.html"), `
+        <div b-name="page"><p>Content</p></div>
+    `);
+
+    const { directory } = await compileDirectory(dir);
+    assertEquals(directory.files.size, 1);
+    assertEquals(directory.files.has("page.html"), true);
+});
+
+// Test: HTML with expressions but no b-name wrapper
+Deno.test("compileDirectory - expressions at top level without b-name", async () => {
+    const dir = await makeTempDir("toplevel_expr");
+    await writeFile(path.join(dir, "page.html"), `
+        <h1>{{ title }}</h1>
+        <p>{{ description }}</p>
+    `);
+
+    const { directory } = await compileDirectory(dir);
+    assertEquals(directory.files.size, 1);
+});
+
+// Test: b-slot without enclosing b-part
+Deno.test("compileDirectory - b-slot without b-part context", async () => {
+    const dir = await makeTempDir("orphan_slot");
+    await writeFile(path.join(dir, "page.html"), `
+        <div b-name="widget">
+            <div b-slot="content">Fallback</div>
+        </div>
+    `);
+
+    const { directory } = await compileDirectory(dir);
+    assertEquals(directory.files.size, 1);
+});
+
+// Test: HTML files in subdirectories
+Deno.test("compileDirectory - files in subdirectories", async () => {
+    const dir = await makeTempDir("subdirs");
+    await writeFile(path.join(dir, "components", "card.html"), `
+        <div b-name="card" b-export><p>{{ title }}</p></div>
+    `);
+    await writeFile(path.join(dir, "pages", "index.html"), `
+        <div b-name="page">
+            <div b-part="components/card.html#card" b-data:title="myTitle"></div>
+        </div>
+    `);
+
+    const { directory } = await compileDirectory(dir);
+    assertEquals(directory.files.size, 2);
+});
+
+// Test: HTML files in node_modules should be ignored
+Deno.test("compileDirectory - ignores node_modules directory", async () => {
+    const dir = await makeTempDir("skip_node_modules");
+    await writeFile(path.join(dir, "page.html"), `
+        <div b-name="page"><p>Hello</p></div>
+    `);
+    await writeFile(path.join(dir, "node_modules", "some-pkg", "index.html"), `
+        <div>Not a backflip file</div>
+    `);
+    await writeFile(path.join(dir, ".git", "info", "exclude.html"), `
+        <div>Not a backflip file</div>
+    `);
+
+    const { directory, errors } = await compileDirectory(dir);
+    assertEquals(directory.files.size, 1);
+    assertEquals(directory.files.has("page.html"), true);
+    assertEquals(errors.length, 0);
+});
+
+// Test: same-file b-part reference
+Deno.test("compileDirectory - same-file b-part reference", async () => {
+    const dir = await makeTempDir("samefile");
+    await writeFile(path.join(dir, "page.html"), `
+        <div b-name="card">
+            <div class="card">{{ title }}</div>
+        </div>
+        <div b-name="page">
+            <div b-part="card" b-data:title="myTitle"></div>
+        </div>
+    `);
+
+    const { directory } = await compileDirectory(dir);
+    assertEquals(directory.files.size, 1);
+    const compiled = directory.files.get("page.html")!;
+    assertEquals(compiled.partials.size, 2);
+    assertEquals(compiled.partials.has("card"), true);
+    assertEquals(compiled.partials.has("page"), true);
+});

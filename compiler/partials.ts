@@ -9,12 +9,15 @@ export interface CompiledDirectory {
 /**
  * Recursively collect all .html files under `dir`, returning relative paths.
  */
+const SKIP_DIRS = new Set(['node_modules', '.git', 'dist']);
+
 async function collectHtmlFiles(dir: string, base: string = dir): Promise<string[]> {
     const entries = await fs.readdir(dir, { withFileTypes: true });
     const results: string[] = [];
     for (const entry of entries) {
         const fullPath = path.join(dir, entry.name);
         if (entry.isDirectory()) {
+            if (SKIP_DIRS.has(entry.name)) continue;
             const sub = await collectHtmlFiles(fullPath, base);
             results.push(...sub);
         } else if (entry.isFile() && entry.name.endsWith('.html')) {
