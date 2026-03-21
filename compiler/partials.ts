@@ -1,6 +1,6 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { compileFile, type CompiledFile, type PartialRegistry, type PartialRefTNode, BackflipError } from './compiler.ts';
+import { compileFile, type CompiledFile, type PartialRegistry, type PartialRefTNode, BackflipError } from './compiler.js';
 
 export interface CompiledDirectory {
     files: Map<string, CompiledFile>  // key: relative file path e.g. "blog/general.html"

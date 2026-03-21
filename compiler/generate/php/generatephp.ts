@@ -1,5 +1,5 @@
-import type { Parsed } from '../../backcode.ts';
-import * as acorn from 'npm:acorn';
+import type { Parsed } from '../../backcode.js';
+import * as acorn from 'acorn';
 
 export function generatePhpFunction(name: string, parsed: Parsed): string {
 	const params = parsed.vars.map(v => `$${v}`).join(', ');

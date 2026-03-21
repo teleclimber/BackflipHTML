@@ -3,10 +3,13 @@
     "version": "0.1.0",
     "exports": "./mod.ts",
     "nodeModulesDir": "auto",
+    "unstable": ["sloppy-imports"],
     "tasks": {
         "test": "deno test --allow-read --allow-write --allow-run=php"
     },
     "imports": {
+        "acorn": "npm:acorn",
+        "parse5-html-rewriting-stream": "npm:parse5-html-rewriting-stream",
         "@std/assert": "jsr:@std/assert",
         "@std/cli": "jsr:@std/cli@^1.0.28"
     }

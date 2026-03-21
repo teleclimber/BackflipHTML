@@ -63,7 +63,9 @@
   "workspace": {
     "dependencies": [
       "jsr:@std/assert@*",
-      "jsr:@std/cli@^1.0.28"
+      "jsr:@std/cli@^1.0.28",
+      "npm:acorn@*",
+      "npm:parse5-html-rewriting-stream@*"
     ],
     "packageJson": {
       "dependencies": [

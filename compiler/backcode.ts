@@ -1,4 +1,4 @@
-import * as acorn from 'npm:acorn';
+import * as acorn from 'acorn';
 //import * as walk from 'npm:acorn-walk';
 
 // what we need to support at a minimum:

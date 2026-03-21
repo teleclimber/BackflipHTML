@@ -1,10 +1,10 @@
-import {RewritingStream} from 'npm:parse5-html-rewriting-stream';
+import {RewritingStream} from 'parse5-html-rewriting-stream';
 import stream from 'node:stream';
 
-import { interpretBackcode } from './backcode.ts';
-import type { Parsed } from './backcode.ts';
-export { BackflipError } from './errors.ts';
-import { BackflipError } from './errors.ts';
+import { interpretBackcode } from './backcode.js';
+import type { Parsed } from './backcode.js';
+export { BackflipError } from './errors.js';
+import { BackflipError } from './errors.js';
 
 export interface SourceLoc {
 	startLine: number;    // 1-based

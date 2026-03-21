@@ -1,7 +1,7 @@
 import * as path from 'node:path';
-import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, PartialBinding, AttrBindTNode, CompiledFile } from '../../compiler.ts';
-import type { Parsed } from '../../backcode.ts';
-import { generatePhpFunction } from './generatephp.ts';
+import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, PartialBinding, AttrBindTNode, CompiledFile } from '../../compiler.js';
+import type { Parsed } from '../../backcode.js';
+import { generatePhpFunction } from './generatephp.js';
 
 export function sanitizeName(name: string): string {
 	return name.replace(/[^a-zA-Z0-9_$]/g, '_');
