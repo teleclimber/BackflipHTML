@@ -76,10 +76,21 @@ function interpretNode(node:acorn.AnyNode, computed: boolean, errs: string[], va
 		case 'MemberExpression':
 			interpretMemberExpression(node, computed, errs, vars);
 			break;
+		case 'UnaryExpression':
+			interpretUnaryExpression(node, computed, errs, vars);
+			break;
 		default:
 			errs.push(`invalid node: ${node.type}`);
 			break;
 	}
+}
+
+function interpretUnaryExpression(node:acorn.UnaryExpression, computed:boolean, errs: string[], vars: string[]) {
+	if (node.operator !== '!' && node.operator !== '+' && node.operator !== '-') {
+		errs.push(`unsupported unary operator: ${node.operator}`);
+		return;
+	}
+	interpretNode(node.argument, computed, errs, vars);
 }
 
 function interpretMemberExpression(node:acorn.MemberExpression, computed:boolean, errs: string[], vars: string[]) {

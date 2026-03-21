@@ -273,3 +273,91 @@ Deno.test("php: attr-bind: ampersand in class is escaped", async () => {
         `class="foo &amp; bar"`
     );
 });
+
+// ---------------------------------------------------------------------------
+// unary.html — unary operators: !, -, +
+// ---------------------------------------------------------------------------
+
+Deno.test("php: unary: !hidden=false shows Visible", async () => {
+    assertEquals(
+        normalize(await renderPhp("unary.html", "negated_if", { hidden: false })),
+        "<p>Visible</p>"
+    );
+});
+
+Deno.test("php: unary: !hidden=true shows Hidden", async () => {
+    assertEquals(
+        normalize(await renderPhp("unary.html", "negated_if", { hidden: true })),
+        "<p>Hidden</p>"
+    );
+});
+
+Deno.test("php: unary: !hidden with truthy string shows Hidden", async () => {
+    assertEquals(
+        normalize(await renderPhp("unary.html", "negated_if", { hidden: "yes" })),
+        "<p>Hidden</p>"
+    );
+});
+
+Deno.test("php: unary: !hidden with empty string shows Visible", async () => {
+    assertEquals(
+        normalize(await renderPhp("unary.html", "negated_if", { hidden: "" })),
+        "<p>Visible</p>"
+    );
+});
+
+Deno.test("php: unary: !hidden with 0 shows Visible", async () => {
+    assertEquals(
+        normalize(await renderPhp("unary.html", "negated_if", { hidden: 0 })),
+        "<p>Visible</p>"
+    );
+});
+
+Deno.test("php: unary: !hidden with null shows Visible", async () => {
+    assertEquals(
+        normalize(await renderPhp("unary.html", "negated_if", { hidden: null })),
+        "<p>Visible</p>"
+    );
+});
+
+Deno.test("php: unary: !user.blocked member access negation", async () => {
+    assertEquals(
+        normalize(await renderPhp("unary.html", "neg_member", { user: { blocked: false } })),
+        "<p>Allowed</p>"
+    );
+});
+
+Deno.test("php: unary: !user.blocked=true shows Blocked", async () => {
+    assertEquals(
+        normalize(await renderPhp("unary.html", "neg_member", { user: { blocked: true } })),
+        "<p>Blocked</p>"
+    );
+});
+
+Deno.test("php: unary: !!active double negation with truthy value", async () => {
+    assertEquals(
+        normalize(await renderPhp("unary.html", "double_neg", { active: "yes" })),
+        "<p>Active</p>"
+    );
+});
+
+Deno.test("php: unary: !!active double negation with falsy value", async () => {
+    assertEquals(
+        normalize(await renderPhp("unary.html", "double_neg", { active: 0 })),
+        "<p>Inactive</p>"
+    );
+});
+
+Deno.test("php: unary: -offset negates a number", async () => {
+    assertEquals(
+        normalize(await renderPhp("unary.html", "minus_print", { offset: 5 })),
+        "<span>-5</span>"
+    );
+});
+
+Deno.test("php: unary: +value coerces string to number", async () => {
+    assertEquals(
+        normalize(await renderPhp("unary.html", "plus_print", { value: "42" })),
+        "<span>42</span>"
+    );
+});

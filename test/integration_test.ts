@@ -412,3 +412,91 @@ Deno.test("attr-bind: bind attr on b-name root element omits attr when false", (
         `<div><span>Content</span></div>`
     );
 });
+
+// ---------------------------------------------------------------------------
+// unary.html — unary operators: !, -, +
+// ---------------------------------------------------------------------------
+
+Deno.test("unary: !hidden=false shows Visible", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("unary.html").negated_if, { hidden: false })),
+        "<p>Visible</p>"
+    );
+});
+
+Deno.test("unary: !hidden=true shows Hidden", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("unary.html").negated_if, { hidden: true })),
+        "<p>Hidden</p>"
+    );
+});
+
+Deno.test("unary: !hidden with truthy string shows Hidden", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("unary.html").negated_if, { hidden: "yes" })),
+        "<p>Hidden</p>"
+    );
+});
+
+Deno.test("unary: !hidden with empty string shows Visible", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("unary.html").negated_if, { hidden: "" })),
+        "<p>Visible</p>"
+    );
+});
+
+Deno.test("unary: !hidden with 0 shows Visible", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("unary.html").negated_if, { hidden: 0 })),
+        "<p>Visible</p>"
+    );
+});
+
+Deno.test("unary: !hidden with null shows Visible", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("unary.html").negated_if, { hidden: null })),
+        "<p>Visible</p>"
+    );
+});
+
+Deno.test("unary: !user.blocked member access negation", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("unary.html").neg_member, { user: { blocked: false } })),
+        "<p>Allowed</p>"
+    );
+});
+
+Deno.test("unary: !user.blocked=true shows Blocked", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("unary.html").neg_member, { user: { blocked: true } })),
+        "<p>Blocked</p>"
+    );
+});
+
+Deno.test("unary: !!active double negation with truthy value", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("unary.html").double_neg, { active: "yes" })),
+        "<p>Active</p>"
+    );
+});
+
+Deno.test("unary: !!active double negation with falsy value", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("unary.html").double_neg, { active: 0 })),
+        "<p>Inactive</p>"
+    );
+});
+
+Deno.test("unary: -offset negates a number", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("unary.html").minus_print, { offset: 5 })),
+        "<span>-5</span>"
+    );
+});
+
+Deno.test("unary: +value coerces string to number", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("unary.html").plus_print, { value: "42" })),
+        "<span>42</span>"
+    );
+});

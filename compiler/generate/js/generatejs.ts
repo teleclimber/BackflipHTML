@@ -16,6 +16,8 @@ function generateNode(node:acorn.AnyNode) :string {
 			return node.raw!;	// there should be a raw!
 		case 'MemberExpression':
 			return generateMemberExpression(node);
+		case 'UnaryExpression':
+			return node.operator + generateNode(node.argument);
 		default:
 			throw new Error(`invalid node: ${node.type}`);
 	}

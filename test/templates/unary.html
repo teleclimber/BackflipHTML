@@ -1,0 +1,22 @@
+<b-unwrap b-name="negated-if">
+    <p b-if="!hidden">Visible</p>
+    <p b-else>Hidden</p>
+</b-unwrap>
+
+<b-unwrap b-name="neg-member">
+    <p b-if="!user.blocked">Allowed</p>
+    <p b-else>Blocked</p>
+</b-unwrap>
+
+<b-unwrap b-name="double-neg">
+    <p b-if="!!active">Active</p>
+    <p b-else>Inactive</p>
+</b-unwrap>
+
+<b-unwrap b-name="minus-print">
+    <span>{{ -offset }}</span>
+</b-unwrap>
+
+<b-unwrap b-name="plus-print">
+    <span>{{ +value }}</span>
+</b-unwrap>

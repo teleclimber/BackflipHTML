@@ -717,3 +717,17 @@ Deno.test("compileFile: bind attr on b-name root element excludes b-name and b-e
 	assertEquals(allStatic.includes('b-export'), false, "b-export should be excluded");
 	assertEquals(allStatic.includes('id="x"'), true, "static attrs should be preserved");
 });
+
+Deno.test("allowed unary operators produce no errors", () => {
+	["!abc", "-abc", "+abc", "!!abc", "!abc.def"].forEach(s => {
+		const result = interpretBackcode(s);
+		assertEquals(result.errs, [], `expected no errors for: ${s}`);
+	});
+});
+
+Deno.test("disallowed unary operators produce errors", () => {
+	["typeof abc", "void abc", "delete abc"].forEach(s => {
+		const result = interpretBackcode(s);
+		assertEquals(result.errs.length > 0, true, `expected error for: ${s}`);
+	});
+});

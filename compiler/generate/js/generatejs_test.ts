@@ -22,3 +22,18 @@ Deno.test( "simple accessor code", () => {
 		assertEquals(s, generated);
 	})
 });
+
+Deno.test( "unary expressions JS", () => {
+	[
+		"!abc",
+		"-abc",
+		"+abc",
+		"!abc.def",
+		"!!abc",
+	].forEach( s => {
+		const result = interpretBackcode(s);
+		assertEquals(result.errs, []);
+		const generated = generateStatement(result.expr!);
+		assertEquals(s, generated);
+	})
+});

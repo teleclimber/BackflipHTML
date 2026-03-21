@@ -26,6 +26,22 @@ Deno.test("simple accessor code PHP", () => {
 	});
 });
 
+Deno.test("unary expressions PHP", () => {
+	const cases: [string, string][] = [
+		["!abc",      "!$abc"],
+		["-abc",      "-$abc"],
+		["+abc",      "+$abc"],
+		["!abc.def",  "!$abc['def']"],
+	];
+
+	cases.forEach(([input, expected]) => {
+		const result = interpretBackcode(input);
+		assertEquals(result.errs, []);
+		const generated = generatePhpStatement(result.expr!);
+		assertEquals(generated, expected);
+	});
+});
+
 Deno.test("generatePhpFunction", () => {
 	assertEquals(
 		generatePhpFunction('', interpretBackcode('user.name')),
