@@ -11,7 +11,7 @@ import {
 	DocumentSymbolParams,
 } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { compileDirectory, type BackflipError } from '@backflip/html';
+import { compileDirectory, loadConfig, resolveConfigRoot, CONFIG_FILENAME, type BackflipError } from '@backflip/html';
 import { buildIndex, type ProjectIndex } from './index.js';
 import { errorsToDiagnostics } from './diagnostics.js';
 import { findDefinition } from './definition.js';
@@ -24,8 +24,10 @@ const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
 
 let workspaceRoot = '';
+let templateRoot: string | null = null;
 let projectIndex: ProjectIndex = { partialDefs: new Map(), partialRefs: [] };
 let recompileTimer: ReturnType<typeof setTimeout> | null = null;
+let knownFiles: Set<string> = new Set();
 
 connection.onInitialize((params: InitializeParams): InitializeResult => {
 	workspaceRoot = params.workspaceFolders?.[0]?.uri?.replace('file://', '') ?? '';
@@ -43,24 +45,63 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
 
 connection.onInitialized(async () => {
 	if (workspaceRoot) {
-		await recompile();
+		await loadAndApplyConfig();
 	}
 });
 
+async function loadAndApplyConfig(): Promise<void> {
+	try {
+		const config = await loadConfig(workspaceRoot);
+		if (!config) {
+			connection.console.log(`[backflip] no ${CONFIG_FILENAME} found in ${workspaceRoot}, staying inactive`);
+			templateRoot = null;
+			clearAllDiagnostics();
+			projectIndex = { partialDefs: new Map(), partialRefs: [] };
+			return;
+		}
+		templateRoot = resolveConfigRoot(workspaceRoot, config);
+		connection.console.log(`[backflip] config loaded, template root: ${templateRoot}`);
+		await recompile();
+	} catch (err) {
+		connection.console.error(`[backflip] config error: ${err instanceof Error ? err.message : err}`);
+		templateRoot = null;
+		clearAllDiagnostics();
+		projectIndex = { partialDefs: new Map(), partialRefs: [] };
+	}
+}
+
+function clearAllDiagnostics(): void {
+	for (const filePath of knownFiles) {
+		const uri = `file://${templateRoot ?? workspaceRoot}/${filePath}`;
+		connection.sendDiagnostics({ uri, diagnostics: [] });
+	}
+	knownFiles = new Set();
+}
+
 async function recompile(): Promise<void> {
-	if (!workspaceRoot) return;
+	if (!templateRoot) return;
 
 	try {
-		const { directory, errors } = await compileDirectory(workspaceRoot);
+		const { directory, errors } = await compileDirectory(templateRoot);
 		projectIndex = buildIndex(directory);
 		connection.console.log(`[backflip] recompile: ${directory.files.size} files, ${errors.length} errors, ${projectIndex.partialDefs.size} partials, ${projectIndex.partialRefs.length} refs`);
 
 		// Publish diagnostics
 		const diagsByFile = errorsToDiagnostics(errors as BackflipError[]);
 
-		// Clear all diagnostics first, then publish new ones
+		// Clear diagnostics for files no longer present
+		for (const filePath of knownFiles) {
+			if (!directory.files.has(filePath)) {
+				const uri = `file://${templateRoot}/${filePath}`;
+				connection.sendDiagnostics({ uri, diagnostics: [] });
+			}
+		}
+
+		// Track known files and publish diagnostics
+		knownFiles = new Set();
 		for (const [filePath] of directory.files) {
-			const uri = `file://${workspaceRoot}/${filePath}`;
+			knownFiles.add(filePath);
+			const uri = `file://${templateRoot}/${filePath}`;
 			connection.sendDiagnostics({
 				uri,
 				diagnostics: diagsByFile.get(filePath) ?? [],
@@ -70,9 +111,8 @@ async function recompile(): Promise<void> {
 		// Also publish diagnostics for files without a specific file path
 		const globalDiags = diagsByFile.get('');
 		if (globalDiags && globalDiags.length > 0) {
-			// Attach global errors to the workspace root
 			connection.sendDiagnostics({
-				uri: `file://${workspaceRoot}`,
+				uri: `file://${templateRoot}`,
 				diagnostics: globalDiags,
 			});
 		}
@@ -91,9 +131,16 @@ function scheduleRecompile(): void {
 	}, 300);
 }
 
-// Recompile on save
-connection.onDidSaveTextDocument((_params: DidSaveTextDocumentParams) => {
-	scheduleRecompile();
+// Recompile on save (or reload config if backflip.json changed)
+connection.onDidSaveTextDocument((params: DidSaveTextDocumentParams) => {
+	const filePath = params.textDocument.uri.replace('file://', '');
+	const fileName = path.basename(filePath);
+
+	if (fileName === CONFIG_FILENAME) {
+		loadAndApplyConfig();
+	} else {
+		scheduleRecompile();
+	}
 });
 
 // Also recompile when documents are opened
@@ -103,6 +150,8 @@ documents.onDidOpen(() => {
 
 // Go to Definition: b-part → b-name
 connection.onDefinition((params: DefinitionParams) => {
+	if (!templateRoot) return null;
+
 	const uri = params.textDocument.uri;
 	const doc = documents.get(uri);
 	if (!doc) return null;
@@ -127,15 +176,17 @@ connection.onDefinition((params: DefinitionParams) => {
 
 	const value = bPartMatch[1];
 	const filePath = uri.replace('file://', '');
-	const relPath = path.relative(workspaceRoot, filePath);
+	const relPath = path.relative(templateRoot, filePath);
 
 	const { partialName, targetFile } = parseBPartValue(value);
 
-	return findDefinition(partialName, targetFile, relPath, projectIndex, workspaceRoot);
+	return findDefinition(partialName, targetFile, relPath, projectIndex, templateRoot);
 });
 
 // Find References: b-name → all b-part usages
 connection.onReferences((params: ReferenceParams) => {
+	if (!templateRoot) return null;
+
 	const uri = params.textDocument.uri;
 	const doc = documents.get(uri);
 	if (!doc) return null;
@@ -159,16 +210,18 @@ connection.onReferences((params: ReferenceParams) => {
 
 	const partialName = bNameMatch[1];
 	const filePath = uri.replace('file://', '');
-	const relPath = path.relative(workspaceRoot, filePath);
+	const relPath = path.relative(templateRoot, filePath);
 
-	return findReferences(partialName, relPath, projectIndex, workspaceRoot);
+	return findReferences(partialName, relPath, projectIndex, templateRoot);
 });
 
 // Document Symbols: list partials in file
 connection.onDocumentSymbol((params: DocumentSymbolParams) => {
+	if (!templateRoot) return null;
+
 	const uri = params.textDocument.uri;
 	const filePath = uri.replace('file://', '');
-	const relPath = path.relative(workspaceRoot, filePath);
+	const relPath = path.relative(templateRoot, filePath);
 
 	return getDocumentSymbols(relPath, projectIndex);
 });
