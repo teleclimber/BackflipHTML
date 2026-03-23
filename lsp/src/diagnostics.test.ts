@@ -65,4 +65,36 @@ describe('errorsToDiagnostics', () => {
 			(diag.range.end.line === diag.range.start.line && diag.range.end.character > diag.range.start.character);
 		strictEqual(endIsAfterStart, true);
 	});
+
+	it('uses endLine/endCol for full-width range when provided', () => {
+		const err = new BackflipError('bad b-part');
+		err.filename = 'page.html';
+		err.line = 3;
+		err.col = 5;
+		err.endLine = 3;
+		err.endCol = 25;
+
+		const result = errorsToDiagnostics([err]);
+		const diag = result.get('page.html')![0];
+		deepStrictEqual(diag.range, {
+			start: { line: 2, character: 4 },
+			end: { line: 2, character: 24 },
+		});
+	});
+
+	it('uses endLine/endCol spanning multiple lines', () => {
+		const err = new BackflipError('multiline');
+		err.filename = 'page.html';
+		err.line = 3;
+		err.col = 5;
+		err.endLine = 4;
+		err.endCol = 10;
+
+		const result = errorsToDiagnostics([err]);
+		const diag = result.get('page.html')![0];
+		deepStrictEqual(diag.range, {
+			start: { line: 2, character: 4 },
+			end: { line: 3, character: 9 },
+		});
+	});
 });

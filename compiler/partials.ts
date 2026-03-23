@@ -154,9 +154,9 @@ function validateRootTNode(
     }
 }
 
-function errorLoc(filename: string, loc?: import('./compiler.ts').SourceLoc): { filename: string, line?: number, col?: number } | undefined {
+function errorLoc(filename: string, loc?: import('./compiler.ts').SourceLoc): { filename: string, line?: number, col?: number, endLine?: number, endCol?: number } | undefined {
     if (!loc) return { filename };
-    return { filename, line: loc.startLine, col: loc.startCol };
+    return { filename, line: loc.startLine, col: loc.startCol, endLine: loc.endLine, endCol: loc.endCol };
 }
 
 /**

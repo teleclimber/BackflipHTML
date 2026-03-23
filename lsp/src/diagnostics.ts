@@ -8,12 +8,14 @@ export function errorsToDiagnostics(errors: BackflipError[]): Map<string, Diagno
 		const file = err.filename ?? '';
 		const line = (err.line ?? 1) - 1; // LSP is 0-based
 		const col = (err.col ?? 1) - 1;
+		const endLine = err.endLine != null ? err.endLine - 1 : line;
+		const endCol = err.endCol != null ? err.endCol - 1 : col + 1;
 
 		const diag: Diagnostic = {
 			severity: DiagnosticSeverity.Error,
 			range: {
 				start: { line, character: col },
-				end: { line, character: col + 1 },
+				end: { line: endLine, character: endCol },
 			},
 			message: err.message,
 			source: 'backflip',

@@ -415,6 +415,24 @@ Deno.test("compileDirectory - error when same-file b-part (no hash) references n
     assertStringIncludes(errors[0].message, 'not defined');
 });
 
+Deno.test("compileDirectory - error for unresolved b-part includes full attribute range", async () => {
+    const dir = await makeTempDir("error_range");
+    // Use a single-line file so offsets are predictable
+    const content = '<div b-name="page"><div b-part="#missing"></div></div>';
+    await writeFile(path.join(dir, "page.html"), content);
+
+    const { errors } = await compileDirectory(dir);
+    assertEquals(errors.length, 1);
+    // The error should have both start and end location covering the full b-part attribute
+    const err = errors[0];
+    assertEquals(err.line, 1);
+    assertEquals(typeof err.col, 'number');
+    assertEquals(typeof err.endLine, 'number');
+    assertEquals(typeof err.endCol, 'number');
+    // endCol should be greater than col (the range spans the full attribute, not just 1 char)
+    assertEquals(err.endCol! > err.col!, true, `endCol (${err.endCol}) should be greater than col (${err.col})`);
+});
+
 Deno.test("compileDirectory - no error for valid same-file b-part reference", async () => {
     const dir = await makeTempDir("samefile_valid");
     await writeFile(path.join(dir, "page.html"), `
