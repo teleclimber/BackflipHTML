@@ -1,10 +1,12 @@
-import type { CompiledDirectory, CompiledFile, RootTNode, TNode, PartialRefTNode, ForTNode, IfTNode, SourceLoc } from '@backflip/html';
+import type { CompiledDirectory, CompiledFile, RootTNode, TNode, PartialRefTNode, ForTNode, IfTNode, SlotTNode, SourceLoc } from '@backflip/html';
 
 export interface PartialDef {
 	file: string;
 	name: string;
 	loc?: SourceLoc;
 	exported: boolean;
+	slots: string[];
+	freeVars: string[];
 }
 
 export interface PartialRef {
@@ -12,6 +14,8 @@ export interface PartialRef {
 	partialName: string;
 	targetFile: string | null; // null = same-file
 	loc?: SourceLoc;
+	dataBindings: string[];
+	slotsFilled: string[];
 }
 
 export interface ProjectIndex {
@@ -25,11 +29,14 @@ export function buildIndex(directory: CompiledDirectory): ProjectIndex {
 
 	for (const [filePath, compiledFile] of directory.files) {
 		for (const [name, root] of compiledFile.partials) {
+			const slots = collectSlots(root.tnodes);
 			const def: PartialDef = {
 				file: filePath,
 				name,
 				loc: root.loc,
-				exported: false, // We don't track export status in CompiledFile; could be enhanced
+				exported: root.exported ?? false,
+				slots,
+				freeVars: root.freeVars ?? [],
 			};
 			const existing = partialDefs.get(name);
 			if (existing) {
@@ -55,6 +62,8 @@ function collectRefs(tnodes: TNode[], filePath: string, refs: PartialRef[]): voi
 					partialName: ref.partialName,
 					targetFile: ref.file,
 					loc: ref.loc,
+					dataBindings: ref.bindings.map(b => b.name),
+					slotsFilled: Object.keys(ref.slots),
 				});
 				// Also walk slot contents
 				for (const slotNodes of Object.values(ref.slots)) {
@@ -71,6 +80,38 @@ function collectRefs(tnodes: TNode[], filePath: string, refs: PartialRef[]): voi
 				const ifNode = tnode as IfTNode;
 				for (const branch of ifNode.branches) {
 					collectRefs(branch.tnodes, filePath, refs);
+				}
+				break;
+			}
+			default:
+				break;
+		}
+	}
+}
+
+function collectSlots(tnodes: TNode[]): string[] {
+	const slots: string[] = [];
+	walkForSlots(tnodes, slots);
+	return slots;
+}
+
+function walkForSlots(tnodes: TNode[], slots: string[]): void {
+	for (const tnode of tnodes) {
+		switch (tnode.type) {
+			case 'slot': {
+				const slot = tnode as SlotTNode;
+				slots.push(slot.name ?? 'default');
+				break;
+			}
+			case 'for': {
+				const forNode = tnode as ForTNode;
+				walkForSlots(forNode.tnodes, slots);
+				break;
+			}
+			case 'if': {
+				const ifNode = tnode as IfTNode;
+				for (const branch of ifNode.branches) {
+					walkForSlots(branch.tnodes, slots);
 				}
 				break;
 			}

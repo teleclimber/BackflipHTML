@@ -5,12 +5,21 @@ export function makeLoc(startLine: number, startCol: number, endLine: number, en
 	return { startLine, startCol, startOffset: 0, endLine, endCol, endOffset: 0 };
 }
 
-export function makeIndex(defs: PartialDef[], refs: PartialRef[]): ProjectIndex {
+export type PartialDefInput = Omit<PartialDef, 'slots' | 'freeVars'> & { slots?: string[]; freeVars?: string[] };
+export type PartialRefInput = Omit<PartialRef, 'dataBindings' | 'slotsFilled'> & { dataBindings?: string[]; slotsFilled?: string[] };
+
+export function makeIndex(defs: PartialDefInput[], refs: PartialRefInput[]): ProjectIndex {
 	const partialDefs = new Map<string, PartialDef[]>();
-	for (const def of defs) {
+	for (const d of defs) {
+		const def: PartialDef = { ...d, slots: d.slots ?? [], freeVars: d.freeVars ?? [] };
 		const existing = partialDefs.get(def.name);
 		if (existing) existing.push(def);
 		else partialDefs.set(def.name, [def]);
 	}
-	return { partialDefs, partialRefs: refs };
+	const partialRefs: PartialRef[] = refs.map(r => ({
+		...r,
+		dataBindings: r.dataBindings ?? [],
+		slotsFilled: r.slotsFilled ?? [],
+	}));
+	return { partialDefs, partialRefs };
 }

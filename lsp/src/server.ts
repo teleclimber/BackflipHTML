@@ -9,6 +9,7 @@ import {
 	DefinitionParams,
 	ReferenceParams,
 	DocumentSymbolParams,
+	HoverParams,
 } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { compileDirectory, loadConfig, resolveConfigRoot, CONFIG_FILENAME, type BackflipError } from '@backflip/html';
@@ -18,6 +19,7 @@ import { findDefinition } from './definition.js';
 import { findReferences } from './references.js';
 import { getDocumentSymbols } from './symbols.js';
 import { parseBPartValue } from './parse-bpart.js';
+import { getHover } from './hover.js';
 import * as path from 'node:path';
 
 const connection = createConnection(ProposedFeatures.all);
@@ -39,6 +41,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
 			definitionProvider: true,
 			referencesProvider: true,
 			documentSymbolProvider: true,
+			hoverProvider: true,
 		},
 	};
 });
@@ -224,6 +227,20 @@ connection.onDocumentSymbol((params: DocumentSymbolParams) => {
 	const relPath = path.relative(templateRoot, filePath);
 
 	return getDocumentSymbols(relPath, projectIndex);
+});
+
+// Hover: show info for b-directives
+connection.onHover((params: HoverParams) => {
+	if (!templateRoot) return null;
+
+	const uri = params.textDocument.uri;
+	const doc = documents.get(uri);
+	if (!doc) return null;
+
+	const filePath = uri.replace('file://', '');
+	const relPath = path.relative(templateRoot, filePath);
+
+	return getHover(doc, params.position, relPath, projectIndex);
 });
 
 documents.listen(connection);
