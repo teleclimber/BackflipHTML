@@ -1,6 +1,6 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { compileFile, type CompiledFile, type PartialRegistry, type PartialRefTNode, BackflipError } from './compiler.js';
+import { compileFile, collectSlots, type CompiledFile, type PartialRegistry, type PartialRefTNode, type RootTNode, BackflipError } from './compiler.js';
 
 export interface CompiledDirectory {
     files: Map<string, CompiledFile>  // key: relative file path e.g. "blog/general.html"
@@ -118,67 +118,142 @@ function findCycle(graph: Map<string, Set<string>>): string[] | null {
     return null;
 }
 
+interface ValidationContext {
+    compiledFile: CompiledFile;
+    sourceRelPath: string;
+    registry: PartialRegistry;
+    allFiles: Map<string, CompiledFile>;
+    errors: BackflipError[];
+}
+
 /**
- * Validate cross-file PartialRefTNode references in a compiled file.
- * Returns an array of errors found.
+ * Validate PartialRefTNode references in a compiled file:
+ * - Same-file partial existence
+ * - Cross-file partial existence and export
+ * - Slot existence (b-in references matching b-slot declarations)
  */
 function validateRefs(
     compiledFile: CompiledFile,
     sourceRelPath: string,
-    registry: PartialRegistry
+    registry: PartialRegistry,
+    allFiles: Map<string, CompiledFile>
 ): BackflipError[] {
-    const errors: BackflipError[] = [];
+    const ctx: ValidationContext = { compiledFile, sourceRelPath, registry, allFiles, errors: [] };
     for (const [, root] of compiledFile.partials) {
-        validateRootTNode(root, sourceRelPath, registry, errors);
+        validateRootTNode(root, ctx);
     }
-    return errors;
+    return ctx.errors;
 }
 
 function validateRootTNode(
     node: { tnodes: import('./compiler.ts').TNode[] },
-    sourceRelPath: string,
-    registry: PartialRegistry,
-    errors: BackflipError[]
+    ctx: ValidationContext
 ): void {
     for (const tnode of node.tnodes) {
-        validateTNode(tnode, sourceRelPath, registry, errors);
+        validateTNode(tnode, ctx);
     }
+}
+
+function errorLoc(filename: string, loc?: import('./compiler.ts').SourceLoc): { filename: string, line?: number, col?: number } | undefined {
+    if (!loc) return { filename };
+    return { filename, line: loc.startLine, col: loc.startCol };
+}
+
+/**
+ * Resolve the target partial's RootTNode for a partial-ref, or null if not found.
+ */
+function resolvePartial(ref: PartialRefTNode, ctx: ValidationContext): RootTNode | null {
+    if (ref.file === null) {
+        return ctx.compiledFile.partials.get(ref.partialName) ?? null;
+    } else {
+        const targetFile = ctx.allFiles.get(ref.file);
+        if (!targetFile) return null;
+        return targetFile.partials.get(ref.partialName) ?? null;
+    }
+}
+
+function hasSlotContent(nodes: import('./compiler.ts').TNode[]): boolean {
+    for (const n of nodes) {
+        if (n.type === 'raw') {
+            if ((n as import('./compiler.ts').RawTNode).raw.trim() !== '') return true;
+        } else {
+            return true;
+        }
+    }
+    return false;
 }
 
 function validateTNode(
     tnode: import('./compiler.ts').TNode,
-    sourceRelPath: string,
-    registry: PartialRegistry,
-    errors: BackflipError[]
+    ctx: ValidationContext
 ): void {
     if (tnode.type === 'partial-ref') {
         const ref = tnode as PartialRefTNode;
-        if (ref.file !== null) {
-            // Cross-file reference: validate registry
-            if (!registry.has(ref.file)) {
-                errors.push(new BackflipError(
-                    `In "${sourceRelPath}": b-part references file "${ref.file}" which does not exist in the directory`
+
+        // --- Validate partial existence ---
+        if (ref.file === null) {
+            // Same-file reference
+            if (!ctx.compiledFile.partials.has(ref.partialName)) {
+                ctx.errors.push(new BackflipError(
+                    `b-part references partial "${ref.partialName}" which is not defined in this file`,
+                    errorLoc(ctx.sourceRelPath, ref.loc)
+                ));
+            }
+        } else {
+            // Cross-file reference
+            if (!ctx.registry.has(ref.file)) {
+                ctx.errors.push(new BackflipError(
+                    `b-part references file "${ref.file}" which does not exist in the directory`,
+                    errorLoc(ctx.sourceRelPath, ref.loc)
                 ));
             } else {
-                const exportedNames = registry.get(ref.file)!;
+                const exportedNames = ctx.registry.get(ref.file)!;
                 if (!exportedNames.has(ref.partialName)) {
-                    errors.push(new BackflipError(
-                        `In "${sourceRelPath}": b-part references partial "${ref.partialName}" in file "${ref.file}", but that partial is not exported (missing b-export)`
+                    ctx.errors.push(new BackflipError(
+                        `b-part references partial "${ref.partialName}" in file "${ref.file}", but that partial is not exported (missing b-export)`,
+                        errorLoc(ctx.sourceRelPath, ref.loc)
                     ));
                 }
             }
         }
-        // Validate slot contents
+
+        // --- Validate slots ---
+        const targetPartial = resolvePartial(ref, ctx);
+        if (targetPartial) {
+            const declaredSlots = new Set(collectSlots(targetPartial.tnodes));
+
+            for (const slotName of Object.keys(ref.slots)) {
+                const slotNodes = ref.slots[slotName];
+                if (!hasSlotContent(slotNodes)) continue; // empty slot, skip
+
+                if (!declaredSlots.has(slotName)) {
+                    const loc = ref.slotLocs?.[slotName] ?? ref.loc;
+                    if (slotName === 'default') {
+                        ctx.errors.push(new BackflipError(
+                            `default slot content provided but partial "${ref.partialName}" declares no default slot`,
+                            errorLoc(ctx.sourceRelPath, loc)
+                        ));
+                    } else {
+                        ctx.errors.push(new BackflipError(
+                            `b-in references slot "${slotName}" which does not exist in partial "${ref.partialName}"`,
+                            errorLoc(ctx.sourceRelPath, loc)
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Validate slot contents recursively
         for (const slotNodes of Object.values(ref.slots)) {
             for (const slotTNode of slotNodes) {
-                validateTNode(slotTNode, sourceRelPath, registry, errors);
+                validateTNode(slotTNode, ctx);
             }
         }
     } else if (tnode.type === 'for') {
-        validateRootTNode(tnode, sourceRelPath, registry, errors);
+        validateRootTNode(tnode, ctx);
     } else if (tnode.type === 'if') {
         for (const branch of tnode.branches) {
-            validateRootTNode(branch, sourceRelPath, registry, errors);
+            validateRootTNode(branch, ctx);
         }
     }
 }
@@ -232,12 +307,13 @@ export async function compileDirectory(dir: string): Promise<{ directory: Compil
         })
     );
 
-    // Validate cross-file references
+    const files = new Map<string, CompiledFile>(compiledPairs);
+
+    // Validate references and slots
     for (const [relPath, compiled] of compiledPairs) {
-        const refErrors = validateRefs(compiled, relPath, registry);
+        const refErrors = validateRefs(compiled, relPath, registry, files);
         allErrors.push(...refErrors);
     }
 
-    const files = new Map<string, CompiledFile>(compiledPairs);
     return { directory: { files }, errors: allErrors };
 }

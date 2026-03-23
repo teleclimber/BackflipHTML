@@ -68,6 +68,7 @@ export interface PartialRefTNode extends ChildTNode {
 	partialName: string,
 	wrapper: { open: string, close: string } | null,  // null if <b-unwrap b-part>
 	slots: { [slotName: string]: TNode[] },            // 'default' for unnamed
+	slotLocs?: { [slotName: string]: SourceLoc },       // source locations for b-in attributes
 	bindings: PartialBinding[],
 	loc?: SourceLoc
 }
@@ -658,6 +659,7 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 					partialName,
 					wrapper,
 					slots: { 'default': [] },
+					slotLocs: {},
 					bindings,
 					parent
 				};
@@ -724,6 +726,11 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 					const slotName = bInAttr.value || 'default';
 					if (!innermost.partialRef.slots[slotName]) {
 						innermost.partialRef.slots[slotName] = [];
+					}
+					const bInLoc = attrLoc(tag, 'b-in');
+					if (bInLoc) {
+						if (!innermost.partialRef.slotLocs) innermost.partialRef.slotLocs = {};
+						innermost.partialRef.slotLocs[slotName] = bInLoc;
 					}
 					tag_stack.push({
 						tag: tag.tagName,
@@ -1052,6 +1059,29 @@ export function onText(cur:TNode, raw :string, textLoc?: {startLine:number;start
 	}
 
 	return cur;
+}
+
+/**
+ * Collect slot names declared (via b-slot) in a list of tnodes.
+ */
+export function collectSlots(tnodes: TNode[]): string[] {
+	const slots: string[] = [];
+	walkForSlots(tnodes, slots);
+	return slots;
+}
+
+function walkForSlots(tnodes: TNode[], slots: string[]): void {
+	for (const tnode of tnodes) {
+		if (tnode.type === 'slot') {
+			slots.push((tnode as SlotTNode).name ?? 'default');
+		} else if (tnode.type === 'for') {
+			walkForSlots((tnode as ForTNode).tnodes, slots);
+		} else if (tnode.type === 'if') {
+			for (const branch of (tnode as IfTNode).branches) {
+				walkForSlots(branch.tnodes, slots);
+			}
+		}
+	}
 }
 
 export function pushRaw(cur_tnode: TNode, raw :string) :TNode {

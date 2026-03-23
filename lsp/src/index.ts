@@ -1,3 +1,4 @@
+import { collectSlots } from '@backflip/html';
 import type { CompiledDirectory, CompiledFile, RootTNode, TNode, PartialRefTNode, ForTNode, IfTNode, SlotTNode, SourceLoc } from '@backflip/html';
 
 export interface PartialDef {
@@ -89,34 +90,3 @@ function collectRefs(tnodes: TNode[], filePath: string, refs: PartialRef[]): voi
 	}
 }
 
-function collectSlots(tnodes: TNode[]): string[] {
-	const slots: string[] = [];
-	walkForSlots(tnodes, slots);
-	return slots;
-}
-
-function walkForSlots(tnodes: TNode[], slots: string[]): void {
-	for (const tnode of tnodes) {
-		switch (tnode.type) {
-			case 'slot': {
-				const slot = tnode as SlotTNode;
-				slots.push(slot.name ?? 'default');
-				break;
-			}
-			case 'for': {
-				const forNode = tnode as ForTNode;
-				walkForSlots(forNode.tnodes, slots);
-				break;
-			}
-			case 'if': {
-				const ifNode = tnode as IfTNode;
-				for (const branch of ifNode.branches) {
-					walkForSlots(branch.tnodes, slots);
-				}
-				break;
-			}
-			default:
-				break;
-		}
-	}
-}

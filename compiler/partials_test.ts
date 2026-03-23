@@ -384,3 +384,162 @@ Deno.test("compileDirectory - same-file b-part reference", async () => {
     assertEquals(compiled.partials.has("card"), true);
     assertEquals(compiled.partials.has("page"), true);
 });
+
+// --- Validation: same-file partial not found ---
+
+Deno.test("compileDirectory - error when same-file b-part references non-existent partial", async () => {
+    const dir = await makeTempDir("samefile_missing");
+    await writeFile(path.join(dir, "page.html"), `
+        <div b-name="page">
+            <div b-part="#nonexistent"></div>
+        </div>
+    `);
+
+    const { errors } = await compileDirectory(dir);
+    assertEquals(errors.length, 1);
+    assertStringIncludes(errors[0].message, 'nonexistent');
+    assertStringIncludes(errors[0].message, 'not defined');
+});
+
+Deno.test("compileDirectory - error when same-file b-part (no hash) references non-existent partial", async () => {
+    const dir = await makeTempDir("samefile_missing_nohash");
+    await writeFile(path.join(dir, "page.html"), `
+        <div b-name="page">
+            <div b-part="nonexistent"></div>
+        </div>
+    `);
+
+    const { errors } = await compileDirectory(dir);
+    assertEquals(errors.length, 1);
+    assertStringIncludes(errors[0].message, 'nonexistent');
+    assertStringIncludes(errors[0].message, 'not defined');
+});
+
+Deno.test("compileDirectory - no error for valid same-file b-part reference", async () => {
+    const dir = await makeTempDir("samefile_valid");
+    await writeFile(path.join(dir, "page.html"), `
+        <div b-name="card"><p>Card</p></div>
+        <div b-name="page">
+            <div b-part="#card"></div>
+        </div>
+    `);
+
+    const { errors } = await compileDirectory(dir);
+    assertEquals(errors.length, 0);
+});
+
+// --- Validation: b-in referencing non-existent slot ---
+
+Deno.test("compileDirectory - error when b-in references non-existent slot", async () => {
+    const dir = await makeTempDir("slot_missing");
+    await writeFile(path.join(dir, "page.html"), `
+        <div b-name="card">
+            <b-unwrap b-slot="title" />
+        </div>
+        <div b-name="page">
+            <b-unwrap b-part="#card">
+                <b-unwrap b-in="title">Title</b-unwrap>
+                <b-unwrap b-in="footer">Footer</b-unwrap>
+            </b-unwrap>
+        </div>
+    `);
+
+    const { errors } = await compileDirectory(dir);
+    assertEquals(errors.length, 1);
+    assertStringIncludes(errors[0].message, 'footer');
+    assertStringIncludes(errors[0].message, 'does not exist');
+});
+
+Deno.test("compileDirectory - no error for valid named slot usage", async () => {
+    const dir = await makeTempDir("slot_valid");
+    await writeFile(path.join(dir, "page.html"), `
+        <div b-name="card">
+            <b-unwrap b-slot="title" />
+            <b-unwrap b-slot="body" />
+        </div>
+        <div b-name="page">
+            <b-unwrap b-part="#card">
+                <b-unwrap b-in="title">Title</b-unwrap>
+                <b-unwrap b-in="body">Body</b-unwrap>
+            </b-unwrap>
+        </div>
+    `);
+
+    const { errors } = await compileDirectory(dir);
+    assertEquals(errors.length, 0);
+});
+
+// --- Validation: default slot content without default b-slot ---
+
+Deno.test("compileDirectory - error when default slot content provided but no default slot declared", async () => {
+    const dir = await makeTempDir("default_slot_missing");
+    await writeFile(path.join(dir, "page.html"), `
+        <div b-name="card">
+            <b-unwrap b-slot="title" />
+        </div>
+        <div b-name="page">
+            <b-unwrap b-part="#card">
+                Default content here
+            </b-unwrap>
+        </div>
+    `);
+
+    const { errors } = await compileDirectory(dir);
+    assertEquals(errors.length, 1);
+    assertStringIncludes(errors[0].message, 'default slot');
+    assertStringIncludes(errors[0].message, 'card');
+});
+
+Deno.test("compileDirectory - no error when default slot content matches default b-slot", async () => {
+    const dir = await makeTempDir("default_slot_valid");
+    await writeFile(path.join(dir, "page.html"), `
+        <div b-name="card">
+            <b-unwrap b-slot />
+        </div>
+        <div b-name="page">
+            <b-unwrap b-part="#card">
+                Default content here
+            </b-unwrap>
+        </div>
+    `);
+
+    const { errors } = await compileDirectory(dir);
+    assertEquals(errors.length, 0);
+});
+
+// --- Validation: cross-file slot validation ---
+
+Deno.test("compileDirectory - error when b-in references non-existent slot in cross-file partial", async () => {
+    const dir = await makeTempDir("crossfile_slot_missing");
+    await writeFile(path.join(dir, "components.html"), `
+        <div b-name="card" b-export>
+            <b-unwrap b-slot="title" />
+        </div>
+    `);
+    await writeFile(path.join(dir, "page.html"), `
+        <div b-name="page">
+            <b-unwrap b-part="components.html#card">
+                <b-unwrap b-in="title">Title</b-unwrap>
+                <b-unwrap b-in="missing">Oops</b-unwrap>
+            </b-unwrap>
+        </div>
+    `);
+
+    const { errors } = await compileDirectory(dir);
+    assertEquals(errors.length, 1);
+    assertStringIncludes(errors[0].message, 'missing');
+    assertStringIncludes(errors[0].message, 'does not exist');
+});
+
+Deno.test("compileDirectory - no error for empty b-part (no slot content provided)", async () => {
+    const dir = await makeTempDir("empty_bpart");
+    await writeFile(path.join(dir, "page.html"), `
+        <div b-name="card"><p>Card</p></div>
+        <div b-name="page">
+            <b-unwrap b-part="#card" />
+        </div>
+    `);
+
+    const { errors } = await compileDirectory(dir);
+    assertEquals(errors.length, 0);
+});
