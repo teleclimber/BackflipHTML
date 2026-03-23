@@ -209,10 +209,20 @@ function validateTNode(
             } else {
                 const exportedNames = ctx.registry.get(ref.file)!;
                 if (!exportedNames.has(ref.partialName)) {
-                    ctx.errors.push(new BackflipError(
-                        `b-part references partial "${ref.partialName}" in file "${ref.file}", but that partial is not exported (missing b-export)`,
-                        errorLoc(ctx.sourceRelPath, ref.loc)
-                    ));
+                    const targetFile = ctx.allFiles.get(ref.file);
+                    const partialExistsInFile = targetFile?.partials.has(ref.partialName) ?? false;
+
+                    if (partialExistsInFile) {
+                        ctx.errors.push(new BackflipError(
+                            `b-part references partial "${ref.partialName}" in file "${ref.file}", but that partial is not exported (missing b-export)`,
+                            errorLoc(ctx.sourceRelPath, ref.loc)
+                        ));
+                    } else {
+                        ctx.errors.push(new BackflipError(
+                            `b-part references partial "${ref.partialName}" in file "${ref.file}", but no partial named "${ref.partialName}" exists in that file`,
+                            errorLoc(ctx.sourceRelPath, ref.loc)
+                        ));
+                    }
                 }
             }
         }

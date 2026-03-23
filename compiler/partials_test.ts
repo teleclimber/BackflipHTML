@@ -116,6 +116,29 @@ Deno.test("compileDirectory - reports error when referenced partial is not b-exp
     assertStringIncludes(errors[0].message, 'b-export');
 });
 
+// Test: reports error when partial name does not exist in referenced file
+Deno.test("compileDirectory - reports error when partial does not exist in referenced file", async () => {
+    const dir = await makeTempDir("nopartial");
+
+    // provider.html has a "card" partial but NOT "nonexistent"
+    await writeFile(path.join(dir, "provider.html"), `
+        <div b-name="card" b-export>
+            <div class="card">card content</div>
+        </div>
+    `);
+
+    // consumer.html tries to reference provider.html#nonexistent
+    await writeFile(path.join(dir, "consumer.html"), `
+        <div b-name="page" b-export>
+            <div b-part="provider.html#nonexistent"></div>
+        </div>
+    `);
+
+    const { errors } = await compileDirectory(dir);
+    assertEquals(errors.length > 0, true);
+    assertStringIncludes(errors[0].message, 'no partial named "nonexistent" exists in that file');
+});
+
 // Test: reports error on circular cross-file dependency (A references B which references A)
 Deno.test("compileDirectory - reports error on circular cross-file dependency", async () => {
     const dir = await makeTempDir("circular");
