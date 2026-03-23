@@ -5,7 +5,7 @@ import {
 	InitializeParams,
 	InitializeResult,
 	TextDocumentSyncKind,
-	DidSaveTextDocumentParams,
+	DidChangeWatchedFilesParams,
 	DefinitionParams,
 	ReferenceParams,
 	DocumentSymbolParams,
@@ -37,7 +37,11 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
 
 	return {
 		capabilities: {
-			textDocumentSync: TextDocumentSyncKind.Full,
+			textDocumentSync: {
+				openClose: true,
+				change: TextDocumentSyncKind.Full,
+				save: true,
+			},
 			definitionProvider: true,
 			referencesProvider: true,
 			documentSymbolProvider: true,
@@ -134,9 +138,11 @@ function scheduleRecompile(): void {
 	}, 300);
 }
 
+documents.listen(connection);
+
 // Recompile on save (or reload config if backflip.json changed)
-connection.onDidSaveTextDocument((params: DidSaveTextDocumentParams) => {
-	const filePath = params.textDocument.uri.replace('file://', '');
+documents.onDidSave((event) => {
+	const filePath = event.document.uri.replace('file://', '');
 	const fileName = path.basename(filePath);
 
 	if (fileName === CONFIG_FILENAME) {
@@ -149,6 +155,18 @@ connection.onDidSaveTextDocument((params: DidSaveTextDocumentParams) => {
 // Also recompile when documents are opened
 documents.onDidOpen(() => {
 	scheduleRecompile();
+});
+
+// Handle file watcher events (for files not open in the editor, external edits, etc.)
+connection.onDidChangeWatchedFiles((params: DidChangeWatchedFilesParams) => {
+	const configChanged = params.changes.some(
+		(c) => path.basename(c.uri.replace('file://', '')) === CONFIG_FILENAME
+	);
+	if (configChanged) {
+		loadAndApplyConfig();
+	} else {
+		scheduleRecompile();
+	}
 });
 
 // Go to Definition: b-part → b-name
@@ -243,5 +261,4 @@ connection.onHover((params: HoverParams) => {
 	return getHover(doc, params.position, relPath, projectIndex);
 });
 
-documents.listen(connection);
 connection.listen();
