@@ -5,6 +5,7 @@ import { interpretBackcode } from './backcode.js';
 import type { Parsed } from './backcode.js';
 export { BackflipError } from './errors.js';
 import { BackflipError } from './errors.js';
+import { inferFreeVars } from './data-shape.js';
 
 export interface SourceLoc {
 	startLine: number;    // 1-based
@@ -21,7 +22,9 @@ export interface ChildTNode {
 export interface RootTNode {
 	type: 'root',
 	tnodes: TNode[],
-	loc?: SourceLoc
+	loc?: SourceLoc,
+	exported?: boolean,
+	freeVars?: string[]
 }
 export interface RawTNode extends ChildTNode {
 	type: 'raw',
@@ -580,6 +583,7 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 				const partialName = bNameAttr.value;
 				const partialRoot: RootTNode = { type: 'root', tnodes: [] };
 				partialRoot.loc = attrLoc(tag, 'b-name');
+				partialRoot.exported = tag.attrs.some(a => a.name === 'b-export');
 				compiledFile.partials.set(partialName, partialRoot);
 
 				currentPartialRoot = partialRoot;
@@ -999,7 +1003,13 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 		s.pipe(rewriteStream);
 		s.on('error', (err) => { reject(err); });
 		rewriteStream.on('error', (err) => { reject(err); });
-		rewriteStream.on('end', () => { resolve({ compiled: compiledFile, errors }); });
+		rewriteStream.on('end', () => {
+			// Post-processing: infer free variables for each partial
+			for (const [, root] of compiledFile.partials) {
+				root.freeVars = inferFreeVars(root);
+			}
+			resolve({ compiled: compiledFile, errors });
+		});
 	});
 }
 
