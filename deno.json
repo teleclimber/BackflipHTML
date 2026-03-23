@@ -4,6 +4,7 @@
     "exports": "./mod.ts",
     "nodeModulesDir": "auto",
     "unstable": ["sloppy-imports"],
+    "exclude": ["lsp/", "dist/", "vscode-backflip/"],
     "tasks": {
         "test": "deno test --allow-read --allow-write --allow-run=php,deno"
     },

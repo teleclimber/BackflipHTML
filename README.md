@@ -152,6 +152,35 @@ The compile step (`compiler/` + `compiler/generate/*/`) only needs to run once p
 
 ---
 
+## Testing
+
+### Compiler & Runtime (Deno)
+
+From the repo root:
+
+```bash
+deno task test
+```
+
+This runs `deno test --allow-read --allow-write --allow-run=php,deno` and covers the compiler, code generators, JS runtime, and integration tests.
+
+- Integration PHP tests require `php` in PATH.
+- CLI tests spawn `deno` subprocesses.
+
+### LSP (Node.js)
+
+```bash
+cd lsp && npm install && npm test
+```
+
+This runs `node --import tsx --test src/*.test.ts` — unit tests for diagnostics, go-to-definition, references, symbols, hover, and parsing.
+
+### VSCode Extension
+
+No tests — thin wrapper that launches the LSP server.
+
+---
+
 ## Dual-Runtime Support
 
 The compiler, generators, and runtime are importable from both **Deno** and **Node.js**.
@@ -160,9 +189,6 @@ The compiler, generators, and runtime are importable from both **Deno** and **No
 - **Node.js**: run `npm run build` to compile to `dist/`, then import from `dist/mod.js`. The `package.json` exports field points here.
 
 ```bash
-# Deno
-deno test --allow-read --allow-write --allow-run=php
-
 # Node.js
 npm install && npm run build
 node -e "import('./dist/mod.js').then(m => console.log(Object.keys(m)))"

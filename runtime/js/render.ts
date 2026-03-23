@@ -54,6 +54,10 @@ export type RNode = RawRNode | PrintRNode | ForRNode | IfRNode | SlotRNode | Par
 
 export type SlotMap = { [name: string]: { nodes: RNode[], ctx: any } }
 
+export function render(n :RNode, ctx:any, slots?: SlotMap) :string {
+	return Array.from(streamRender(n, ctx, slots)).join('');
+}
+
 export function renderRoot(n :RootRNode, ctx:any, slots?: SlotMap) :string {
 	return Array.from(streamRenderRoot(n, ctx, slots)).join('');
 }
