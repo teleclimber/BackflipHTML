@@ -35,7 +35,7 @@ backflip <input-dir> <output-dir> --lang <js|php>
 ```
 
 - `<input-dir>` — directory of `.html` template files (scanned recursively)
-- `<output-dir>` — must be empty; output files mirror the input directory structure
+- `<output-dir>` — must be empty (when provided via CLI); output files mirror the input directory structure
 - `--lang js` — generate JavaScript modules (`.js`)
 - `--lang php` — generate PHP files (`.php`)
 
@@ -49,7 +49,7 @@ backflip ./templates ./out --lang js
 backflip ./templates ./out --lang php
 ```
 
-The output directory must be empty before running. The input hierarchy is preserved, with `.html` extensions replaced by `.js` or `.php`.
+When the output directory is specified via CLI arguments, it must be empty before running. When the output directory comes from `backflip.json`, it is automatically emptied before writing. The input hierarchy is preserved, with `.html` extensions replaced by `.js` or `.php`.
 
 ## Check mode
 

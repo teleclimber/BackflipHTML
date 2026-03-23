@@ -48,12 +48,16 @@ if (args.help) {
 let inputDir = args._[0] as string | undefined;
 let outputDir = args._[1] as string | undefined;
 let lang = args.lang as string | undefined;
+let outputDirFromConfig = false;
 
 // Load config as fallback for missing arguments
 const config = await loadConfig(Deno.cwd());
 if (config) {
     if (!inputDir) inputDir = resolveConfigRoot(Deno.cwd(), config);
-    if (!outputDir && config.output) outputDir = join(Deno.cwd(), config.output);
+    if (!outputDir && config.output) {
+        outputDir = join(Deno.cwd(), config.output);
+        outputDirFromConfig = true;
+    }
     if (!lang && config.lang) lang = config.lang;
 }
 
@@ -94,8 +98,13 @@ if (args.check) {
     }
 
     if (!empty) {
-        console.error(`Output directory is not empty: ${outputDir}`);
-        Deno.exit(1);
+        if (outputDirFromConfig) {
+            // When output dir comes from config, auto-clean it
+            await Deno.remove(outputDir, { recursive: true });
+        } else {
+            console.error(`Output directory is not empty: ${outputDir}`);
+            Deno.exit(1);
+        }
     }
 
     const { directory: result, errors } = await compileDirectory(inputDir);
