@@ -720,7 +720,7 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 
 			// --- b-in inside slot-collection context ---
 			const bInAttr = tag.attrs.find(a => a.name === 'b-in');
-			if (bInAttr !== undefined && tag.tagName === 'b-unwrap') {
+			if (bInAttr !== undefined) {
 				const innermost = getSlotCollection();
 				if (innermost) {
 					const slotName = bInAttr.value || 'default';
@@ -739,6 +739,10 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 							currentSlot: slotName
 						}
 					});
+					// For non-b-unwrap elements, emit the opening tag into the slot
+					if (tag.tagName !== 'b-unwrap') {
+						pushRawHere(reconstructTagExcluding(tag, ['b-in']));
+					}
 					return;
 				}
 			}
@@ -929,7 +933,19 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 					parent.tnodes!.push(new_raw);
 					cur_tnode = new_raw;
 				}
-				// b-in closing - outer slotCollection is still in tag_stack, nothing to do
+				// b-in closing - emit closing tag for non-b-unwrap elements
+				else if (matchTag.tag !== 'b-unwrap') {
+					const sc = matchTag.slotCollection!;
+					const slotName = sc.currentSlot;
+					const arr = sc.partialRef.slots[slotName];
+					const lastNode = arr.length > 0 ? arr[arr.length - 1] : null;
+					if (lastNode && lastNode.type === 'raw') {
+						(lastNode as RawTNode).raw += raw;
+					} else {
+						const raw_node: RawTNode = { type: 'raw', raw, parent: sc.partialRef.parent };
+						arr.push(raw_node);
+					}
+				}
 				return;
 			}
 

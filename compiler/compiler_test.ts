@@ -412,6 +412,43 @@ Deno.test("compileFile: named slot with b-in", async () => {
 	assertEquals(allRaw.includes('Title'), true);
 });
 
+Deno.test("compileFile: div b-part with no content does not create spurious default slot", async () => {
+	const { compiled: result } = await compileFile(
+		'<div b-name="page"><div class="leaderboard" b-part="#leaderboard"></div></div>'
+	);
+	const root = result.partials.get("page")!;
+	let ref: PartialRefTNode | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'partial-ref') { ref = n as PartialRefTNode; break; }
+	}
+	assertEquals(ref !== undefined, true);
+	// The default slot should have no content (or be empty raw nodes)
+	const defaultSlot = ref!.slots['default'];
+	if (defaultSlot) {
+		const allRaw = defaultSlot.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
+		assertEquals(allRaw.trim(), '');
+	}
+});
+
+Deno.test("compileFile: named slot with b-in on regular element", async () => {
+	const { compiled: result } = await compileFile(
+		'<div b-name="page"><b-unwrap b-part="#card"><div b-in="header"><h1>Title</h1></div></b-unwrap></div>'
+	);
+	const root = result.partials.get("page")!;
+	let ref: PartialRefTNode | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'partial-ref') { ref = n as PartialRefTNode; break; }
+	}
+	assertEquals(ref !== undefined, true);
+	const headerSlot = ref!.slots['header'];
+	assertEquals(headerSlot !== undefined, true);
+	const allRaw = headerSlot.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
+	// The wrapping <div> should be preserved in slot content
+	assertEquals(allRaw.includes('<div>'), true);
+	assertEquals(allRaw.includes('</div>'), true);
+	assertEquals(allRaw.includes('Title'), true);
+});
+
 Deno.test("compileFile: b-data: creates bindings on PartialRefTNode", async () => {
 	const { compiled: result } = await compileFile('<div b-name="page"><b-unwrap b-part="#card" b-data:title="item.title"></b-unwrap></div>');
 	const root = result.partials.get("page")!;
