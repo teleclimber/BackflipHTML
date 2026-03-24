@@ -72,6 +72,29 @@ Deno.test("loadConfig - throws when config is not an object", async () => {
 	await assertRejects(() => loadConfig(dir), Error, "must be a JSON object");
 });
 
+Deno.test("loadConfig - returns parsed config with stylesheet", async () => {
+	const dir = await makeTempDir("stylesheet");
+	await fs.writeFile(path.join(dir, "styles.css"), "body { margin: 0; }");
+	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({
+		root: ".",
+		stylesheet: "styles.css"
+	}));
+	const result = await loadConfig(dir);
+	assertEquals(result, { root: ".", stylesheet: "styles.css" });
+});
+
+Deno.test("loadConfig - throws when stylesheet is not a string", async () => {
+	const dir = await makeTempDir("stylesheet_num");
+	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({ root: ".", stylesheet: 123 }));
+	await assertRejects(() => loadConfig(dir), Error, '"stylesheet" must be a string');
+});
+
+Deno.test("loadConfig - throws when stylesheet file does not exist", async () => {
+	const dir = await makeTempDir("stylesheet_missing");
+	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({ root: ".", stylesheet: "missing.css" }));
+	await assertRejects(() => loadConfig(dir), Error, 'stylesheet not found: missing.css');
+});
+
 Deno.test("resolveConfigRoot - resolves relative path", () => {
 	const result = resolveConfigRoot("/home/user/project", { root: "src/templates" });
 	assertEquals(result, "/home/user/project/src/templates");

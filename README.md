@@ -96,15 +96,17 @@ Create a `backflip.json` file at the root of your project:
 {
   "root": "src/templates",
   "output": "dist",
-  "lang": "js"
+  "lang": "js",
+  "stylesheet": "styles/global.css"
 }
 ```
 
-| Field    | Required | Description                                          |
-|----------|----------|------------------------------------------------------|
-| `root`   | Yes      | Relative path to the directory containing `.html` templates |
-| `output` | No       | Relative path to the output directory (used by CLI)  |
-| `lang`   | No       | Output language: `"js"` or `"php"` (used by CLI)    |
+| Field        | Required | Description                                          |
+|--------------|----------|------------------------------------------------------|
+| `root`       | Yes      | Relative path to the directory containing `.html` templates |
+| `output`     | No       | Relative path to the output directory (used by CLI)  |
+| `lang`       | No       | Output language: `"js"` or `"php"` (used by CLI)    |
+| `stylesheet` | No       | Relative path to a global CSS stylesheet  (for ref only)  |
 
 The **LSP server** requires this file — without `backflip.json` in the workspace root, the language server stays inactive (no diagnostics, no go-to-definition, etc.).
 

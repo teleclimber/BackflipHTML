@@ -7,6 +7,7 @@ export interface BackflipConfig {
 	root: string;
 	output?: string;
 	lang?: 'js' | 'php';
+	stylesheet?: string;
 }
 
 export async function loadConfig(dir: string): Promise<BackflipConfig | null> {
@@ -44,9 +45,23 @@ export async function loadConfig(dir: string): Promise<BackflipConfig | null> {
 		throw new Error(`${CONFIG_FILENAME}: "lang" must be "js" or "php"`);
 	}
 
+	if (obj.stylesheet !== undefined && typeof obj.stylesheet !== 'string') {
+		throw new Error(`${CONFIG_FILENAME}: "stylesheet" must be a string`);
+	}
+
+	if (typeof obj.stylesheet === 'string') {
+		const stylesheetPath = path.resolve(dir, obj.stylesheet);
+		try {
+			await fs.stat(stylesheetPath);
+		} catch {
+			throw new Error(`${CONFIG_FILENAME}: stylesheet not found: ${obj.stylesheet}`);
+		}
+	}
+
 	const config: BackflipConfig = { root: obj.root };
 	if (obj.output !== undefined) config.output = obj.output as string;
 	if (obj.lang !== undefined) config.lang = obj.lang as 'js' | 'php';
+	if (obj.stylesheet !== undefined) config.stylesheet = obj.stylesheet as string;
 
 	return config;
 }
