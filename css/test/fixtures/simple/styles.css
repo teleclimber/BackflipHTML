@@ -1,0 +1,17 @@
+.card {
+  color: red;
+  padding: 16px;
+}
+
+.title {
+  font-size: 24px;
+  font-weight: bold;
+}
+
+#main {
+  border: 1px solid black;
+}
+
+div {
+  margin: 0;
+}

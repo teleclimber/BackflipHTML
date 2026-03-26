@@ -10,9 +10,9 @@ import {
 let client: LanguageClient;
 
 export function activate(context: ExtensionContext): void {
-	// Server is bundled inside the extension at server/server.js
+	// Server is bundled inside the extension at server/server.cjs
 	const serverModule = context.asAbsolutePath(
-		path.join('server', 'server.js')
+		path.join('server', 'server.cjs')
 	);
 
 	const serverOptions: ServerOptions = {

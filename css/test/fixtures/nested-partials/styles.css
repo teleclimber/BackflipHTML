@@ -1,0 +1,15 @@
+.card-header span {
+  font-weight: bold;
+}
+
+.card-content p {
+  line-height: 1.6;
+}
+
+.layout-body .card-header span {
+  color: blue;
+}
+
+.layout-body .card-content p {
+  margin: 0;
+}

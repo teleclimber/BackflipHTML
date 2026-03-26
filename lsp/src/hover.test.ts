@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import { strictEqual, ok, match } from 'node:assert';
 import { getHover } from './hover.js';
 import { makeIndex, makeLoc } from './test-helpers.js';
+import { analyzeCss } from '@backflip/css';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 import type { Position } from 'vscode-languageserver';
 
@@ -249,11 +250,212 @@ describe('getHover', () => {
 	});
 
 	describe('no match', () => {
-		it('returns null for plain HTML', () => {
+		it('returns null for plain HTML without CSS analysis', () => {
 			const index = makeIndex([], []);
 			const doc = makeDoc(['<div class="foo">Hello</div>']);
 			const result = getHover(doc, pos(0, 10), 'page.html', index);
 			strictEqual(result, null);
 		});
+	});
+
+	describe('CSS rules', () => {
+		function makeCssAnalysis(file: string, matches: Array<{
+			startLine: number;
+			startCol: number;
+			rules: Array<{ selector: string; specificity: [number, number, number]; properties?: Array<{ name: string; value: string }>; media?: string[]; matchType?: string }>;
+		}>) {
+			const elementMatches = new Map();
+			elementMatches.set(file, matches.map(m => ({
+				element: null,
+				file,
+				partialName: 'test',
+				startLine: m.startLine,
+				startCol: m.startCol,
+				startOffset: 0,
+				matches: m.rules.map(r => ({
+					rule: {
+						selectorText: r.selector,
+						selectors: [r.selector],
+						properties: r.properties ?? [],
+						mediaConditions: r.media ?? [],
+						sourceLine: 1,
+						sourceCol: 1,
+					},
+					selector: r.selector,
+					specificity: r.specificity,
+					mediaConditions: r.media ?? [],
+					matchType: r.matchType ?? 'definite',
+				})),
+			})));
+			return { elementMatches, rules: [] };
+		}
+
+		it('shows CSS rules on hover', () => {
+			const index = makeIndex([], []);
+			const cssAnalysis = makeCssAnalysis('page.html', [{
+				startLine: 1,
+				startCol: 1,
+				rules: [
+					{ selector: '.card', specificity: [0, 1, 0], properties: [{ name: 'color', value: 'red' }] },
+				],
+			}]);
+			const doc = makeDoc(['<div class="card">Hello</div>']);
+			const result = getHover(doc, pos(0, 5), 'page.html', index, cssAnalysis as any);
+			const v = hoverValue(result);
+			ok(v.includes('**CSS Rules**'));
+			ok(v.includes('`.card`'));
+			ok(v.includes('(0, 1, 0)'));
+			ok(v.includes('color: red'));
+		});
+
+		it('shows media conditions', () => {
+			const index = makeIndex([], []);
+			const cssAnalysis = makeCssAnalysis('page.html', [{
+				startLine: 1,
+				startCol: 1,
+				rules: [
+					{ selector: '.card', specificity: [0, 1, 0], media: ['(min-width:768px)'] },
+				],
+			}]);
+			const doc = makeDoc(['<div class="card">Hello</div>']);
+			const result = getHover(doc, pos(0, 5), 'page.html', index, cssAnalysis as any);
+			const v = hoverValue(result);
+			ok(v.includes('@media'));
+			ok(v.includes('(min-width:768px)'));
+		});
+
+		it('shows match type for conditional matches', () => {
+			const index = makeIndex([], []);
+			const cssAnalysis = makeCssAnalysis('page.html', [{
+				startLine: 1,
+				startCol: 1,
+				rules: [
+					{ selector: 'span', specificity: [0, 0, 1], matchType: 'conditional' },
+				],
+			}]);
+			const doc = makeDoc(['<span>Hello</span>']);
+			const result = getHover(doc, pos(0, 2), 'page.html', index, cssAnalysis as any);
+			const v = hoverValue(result);
+			ok(v.includes('*conditional*'));
+		});
+
+		it('returns null when no CSS analysis available', () => {
+			const index = makeIndex([], []);
+			const doc = makeDoc(['<div class="card">Hello</div>']);
+			const result = getHover(doc, pos(0, 5), 'page.html', index, null);
+			strictEqual(result, null);
+		});
+
+		it('returns null when cursor not on HTML tag', () => {
+			const index = makeIndex([], []);
+			const cssAnalysis = makeCssAnalysis('page.html', [{
+				startLine: 1,
+				startCol: 1,
+				rules: [{ selector: '.card', specificity: [0, 1, 0] }],
+			}]);
+			const doc = makeDoc(['Hello world']);
+			const result = getHover(doc, pos(0, 5), 'page.html', index, cssAnalysis as any);
+			strictEqual(result, null);
+		});
+	});
+});
+
+describe('getHover integration (analyzeCss + getHover)', () => {
+	it('shows CSS rules for elements inside a partial', () => {
+		const html = [
+			'<div b-name="card">',
+			'  <div class="card-body">content</div>',
+			'</div>',
+		].join('\n');
+		const css = '.card-body { padding: 8px; }';
+		const cssAnalysis = analyzeCss({
+			cssContent: css,
+			templateFiles: new Map([['page.html', html]]),
+		});
+		const doc = makeDoc(html.split('\n'));
+		// Hover on the div.card-body (line 1, 0-based)
+		const result = getHover(doc, pos(1, 5), 'page.html', makeIndex([], []), cssAnalysis);
+		const v = hoverValue(result);
+		ok(v.includes('**CSS Rules**'), 'should show CSS rules header');
+		ok(v.includes('.card-body'), 'should show .card-body selector');
+	});
+
+	it('shows CSS rules for slot content (b-in) with ancestors inside the partial', () => {
+		const html = [
+			'<div b-name="card">',
+			'  <div class="card-header">',
+			'    <b-unwrap b-slot="header" />',
+			'  </div>',
+			'</div>',
+			'<div b-part="#card">',
+			'  <h2 b-in="header">Title</h2>',
+			'</div>',
+		].join('\n');
+		const css = '.card-header h2 { color: red; }';
+		const cssAnalysis = analyzeCss({
+			cssContent: css,
+			templateFiles: new Map([['page.html', html]]),
+		});
+		const doc = makeDoc(html.split('\n'));
+		// Hover on the h2 (line 6, 0-based)
+		const result = getHover(doc, pos(6, 4), 'page.html', makeIndex([], []), cssAnalysis);
+		const v = hoverValue(result);
+		ok(v.includes('**CSS Rules**'), 'should show CSS rules for b-in element');
+		ok(v.includes('.card-header h2'), 'should match descendant selector through slot');
+	});
+
+	it('shows CSS rules for slot content with ancestors above the calling partial', () => {
+		const html = [
+			'<div b-name="card">',
+			'  <div class="card-body">',
+			'    <b-unwrap b-slot />',
+			'  </div>',
+			'</div>',
+			'<div class="page-wrapper">',
+			'  <div b-part="#card">',
+			'    <p b-in="default">Content</p>',
+			'  </div>',
+			'</div>',
+		].join('\n');
+		const css = '.page-wrapper .card-body p { margin: 0; }';
+		const cssAnalysis = analyzeCss({
+			cssContent: css,
+			templateFiles: new Map([['page.html', html]]),
+		});
+		const doc = makeDoc(html.split('\n'));
+		// Hover on the p (line 7, 0-based)
+		const result = getHover(doc, pos(7, 6), 'page.html', makeIndex([], []), cssAnalysis);
+		const v = hoverValue(result);
+		ok(v.includes('**CSS Rules**'), 'should show CSS rules for b-in element');
+		ok(v.includes('.page-wrapper .card-body p'), 'should match selector spanning caller and partial');
+	});
+
+	it('shows CSS rules for slot content in cross-file partials', () => {
+		const componentHtml = [
+			'<div b-name="card" b-export>',
+			'  <div class="card-header">',
+			'    <b-unwrap b-slot="header" />',
+			'  </div>',
+			'</div>',
+		].join('\n');
+		const pageHtml = [
+			'<div b-part="components.html#card">',
+			'  <span b-in="header">Title</span>',
+			'</div>',
+		].join('\n');
+		const css = '.card-header span { font-weight: bold; }';
+		const cssAnalysis = analyzeCss({
+			cssContent: css,
+			templateFiles: new Map([
+				['components.html', componentHtml],
+				['page.html', pageHtml],
+			]),
+		});
+		const doc = makeDoc(pageHtml.split('\n'));
+		// Hover on the span (line 1, 0-based)
+		const result = getHover(doc, pos(1, 4), 'page.html', makeIndex([], []), cssAnalysis);
+		const v = hoverValue(result);
+		ok(v.includes('**CSS Rules**'), 'should show CSS rules for cross-file slot content');
+		ok(v.includes('.card-header span'), 'should match selector from cross-file partial');
 	});
 });

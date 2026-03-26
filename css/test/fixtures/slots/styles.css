@@ -1,0 +1,20 @@
+.card-header h2 {
+  color: red;
+  margin: 0;
+}
+
+.card-body p {
+  line-height: 1.5;
+}
+
+.container .card-header h2 {
+  font-size: 20px;
+}
+
+.card-body ul li {
+  list-style: disc;
+}
+
+.container .card-body ul {
+  padding-left: 20px;
+}

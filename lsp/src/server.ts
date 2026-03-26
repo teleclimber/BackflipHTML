@@ -13,6 +13,7 @@ import {
 } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { compileDirectory, loadConfig, resolveConfigRoot, CONFIG_FILENAME, type BackflipError } from '@backflip/html';
+import { analyzeCss, type CssAnalysisResult } from '@backflip/css';
 import { buildIndex, type ProjectIndex } from './index.js';
 import { errorsToDiagnostics } from './diagnostics.js';
 import { findDefinition } from './definition.js';
@@ -21,13 +22,16 @@ import { getDocumentSymbols } from './symbols.js';
 import { parseBPartValue } from './parse-bpart.js';
 import { getHover } from './hover.js';
 import * as path from 'node:path';
+import * as fs from 'node:fs/promises';
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
 
 let workspaceRoot = '';
 let templateRoot: string | null = null;
+let stylesheetPath: string | null = null;
 let projectIndex: ProjectIndex = { partialDefs: new Map(), partialRefs: [] };
+let cssAnalysis: CssAnalysisResult | null = null;
 let recompileTimer: ReturnType<typeof setTimeout> | null = null;
 let knownFiles: Set<string> = new Set();
 
@@ -62,16 +66,23 @@ async function loadAndApplyConfig(): Promise<void> {
 		if (!config) {
 			connection.console.log(`[backflip] no ${CONFIG_FILENAME} found in ${workspaceRoot}, staying inactive`);
 			templateRoot = null;
+			stylesheetPath = null;
+			cssAnalysis = null;
 			clearAllDiagnostics();
 			projectIndex = { partialDefs: new Map(), partialRefs: [] };
 			return;
 		}
 		templateRoot = resolveConfigRoot(workspaceRoot, config);
-		connection.console.log(`[backflip] config loaded, template root: ${templateRoot}`);
+		stylesheetPath = config.stylesheet
+			? path.resolve(workspaceRoot, config.stylesheet)
+			: null;
+		connection.console.log(`[backflip] config loaded, template root: ${templateRoot}${stylesheetPath ? `, stylesheet: ${stylesheetPath}` : ''}`);
 		await recompile();
 	} catch (err) {
 		connection.console.error(`[backflip] config error: ${err instanceof Error ? err.message : err}`);
 		templateRoot = null;
+		stylesheetPath = null;
+		cssAnalysis = null;
 		clearAllDiagnostics();
 		projectIndex = { partialDefs: new Map(), partialRefs: [] };
 	}
@@ -92,6 +103,26 @@ async function recompile(): Promise<void> {
 		const { directory, errors } = await compileDirectory(templateRoot);
 		projectIndex = buildIndex(directory);
 		connection.console.log(`[backflip] recompile: ${directory.files.size} files, ${errors.length} errors, ${projectIndex.partialDefs.size} partials, ${projectIndex.partialRefs.length} refs`);
+
+		// Run CSS analysis if a stylesheet is configured
+		cssAnalysis = null;
+		if (stylesheetPath && templateRoot) {
+			try {
+				const cssContent = await fs.readFile(stylesheetPath, 'utf-8');
+				const templateFiles = new Map<string, string>();
+				for (const [filePath] of directory.files) {
+					const fullPath = path.join(templateRoot, filePath);
+					const html = await fs.readFile(fullPath, 'utf-8');
+					templateFiles.set(filePath, html);
+				}
+				cssAnalysis = analyzeCss({ cssContent, templateFiles });
+				const matchCount = Array.from(cssAnalysis.elementMatches.values())
+					.reduce((sum, arr) => sum + arr.length, 0);
+				connection.console.log(`[backflip] css analysis: ${cssAnalysis.rules.length} rules, ${matchCount} element matches`);
+			} catch (err) {
+				connection.console.error(`[backflip] css analysis failed: ${err instanceof Error ? err.message : err}`);
+			}
+		}
 
 		// Publish diagnostics
 		const diagsByFile = errorsToDiagnostics(errors as BackflipError[]);
@@ -258,7 +289,7 @@ connection.onHover((params: HoverParams) => {
 	const filePath = uri.replace('file://', '');
 	const relPath = path.relative(templateRoot, filePath);
 
-	return getHover(doc, params.position, relPath, projectIndex);
+	return getHover(doc, params.position, relPath, projectIndex, cssAnalysis);
 });
 
 connection.listen();

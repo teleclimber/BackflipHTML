@@ -2,6 +2,7 @@ import type { Hover, Position } from 'vscode-languageserver';
 import { MarkupKind } from 'vscode-languageserver';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 import type { ProjectIndex, PartialDef } from './index.js';
+import type { CssAnalysisResult } from '@backflip/css';
 import { parseBPartValue } from './parse-bpart.js';
 
 /**
@@ -12,6 +13,7 @@ export function getHover(
 	position: Position,
 	filePath: string,
 	index: ProjectIndex,
+	cssAnalysis?: CssAnalysisResult | null,
 ): Hover | null {
 	const line = doc.getText({
 		start: { line: position.line, character: 0 },
@@ -23,6 +25,7 @@ export function getHover(
 		?? hoverBIn(doc, line, position, filePath, index)
 		?? hoverBSlot(doc, line, position, filePath, index)
 		?? hoverBData(line, position, filePath, index)
+		?? hoverCssRules(line, position, filePath, cssAnalysis)
 		?? null;
 }
 
@@ -232,6 +235,62 @@ function hoverBData(
 	}
 
 	return null;
+}
+
+// --- CSS rules hover ---
+
+function hoverCssRules(
+	line: string,
+	position: Position,
+	filePath: string,
+	cssAnalysis?: CssAnalysisResult | null,
+): Hover | null {
+	if (!cssAnalysis) return null;
+
+	const matches = cssAnalysis.elementMatches.get(filePath);
+	if (!matches) return null;
+
+	// Find an element match on this line (1-based line in parse5 vs 0-based in LSP)
+	const lspLine = position.line + 1; // convert to 1-based
+
+	// Check if cursor is on an HTML tag opening
+	const tagMatch = line.match(/<([a-zA-Z][\w-]*)/);
+	if (!tagMatch) return null;
+
+	const tagStart = line.indexOf(tagMatch[0]);
+	const tagEnd = tagStart + tagMatch[0].length;
+
+	// Find the element match at this line that the cursor overlaps with
+	// We look for elements whose start tag is on this line
+	const elementMatch = matches.find(m => {
+		if (m.startLine !== lspLine) return false;
+		// Check if cursor is anywhere within the opening tag region
+		return position.character >= tagStart;
+	});
+
+	if (!elementMatch || elementMatch.matches.length === 0) return null;
+
+	const ruleCount = elementMatch.matches.length;
+	const lines: string[] = [];
+	lines.push(`**CSS Rules** (${ruleCount} rule${ruleCount !== 1 ? 's' : ''})`);
+	lines.push('');
+
+	for (const m of elementMatch.matches) {
+		const spec = `(${m.specificity.join(', ')})`;
+		const typeTag = m.matchType !== 'definite' ? ` · *${m.matchType}*` : '';
+		lines.push(`\`${m.selector}\` — ${spec}${typeTag}`);
+
+		if (m.rule.properties.length > 0) {
+			const props = m.rule.properties.map(p => `${p.name}: ${p.value}`).join('; ');
+			lines.push(`  ${props}`);
+		}
+
+		if (m.mediaConditions.length > 0) {
+			lines.push(`  @media ${m.mediaConditions.join(' and ')}`);
+		}
+	}
+
+	return mkHover(lines);
 }
 
 // --- helpers ---

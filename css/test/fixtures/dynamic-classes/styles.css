@@ -1,0 +1,12 @@
+.btn {
+  padding: 8px 16px;
+}
+
+.btn-primary {
+  background: blue;
+  color: white;
+}
+
+.label {
+  font-size: 12px;
+}

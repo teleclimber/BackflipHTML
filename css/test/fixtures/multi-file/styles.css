@@ -1,0 +1,15 @@
+.card-inner {
+  padding: 12px;
+}
+
+.card-title {
+  font-size: 18px;
+}
+
+.page-wrapper .card-inner {
+  background: white;
+}
+
+.page-wrapper .card-title {
+  color: navy;
+}

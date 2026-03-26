@@ -4,7 +4,7 @@
   "exports": "./dist/mod.js",
   "types": "./dist/mod.d.ts",
   "scripts": {
-    "build": "tsc",
+    "build": "npx tsc",
     "build:extension": "npm run build && cd lsp && npm run build && cd ../vscode-backflip && npm run build && vsce package --no-dependencies"
   },
   "files": [
@@ -13,5 +13,10 @@
   "dependencies": {
     "acorn": "^8.16.0",
     "parse5-html-rewriting-stream": "^8.0.0"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^28.0.1",
+    "jsdom": "^29.0.1",
+    "typescript": "^5.9.3"
   }
 }

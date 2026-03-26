@@ -37,8 +37,8 @@
   },
   "scripts": {
     "build": "npm run build:server && esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=dist/extension.js",
-    "build:server": "cd ../lsp && npm run build && mkdir -p ../vscode-backflip/server && cp dist/server.js ../vscode-backflip/server/server.js",
-    "watch": "tsc --watch"
+    "build:server": "cd ../lsp && npm run build && mkdir -p ../vscode-backflip/server && cp dist/server.cjs ../vscode-backflip/server/server.cjs",
+    "watch": "npx tsc --watch"
   },
   "dependencies": {
     "@backflip/lsp": "file:../lsp",

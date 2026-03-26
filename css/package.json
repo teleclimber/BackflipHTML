@@ -1,0 +1,24 @@
+{
+  "name": "@backflip/css",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "test": "node --import tsx --test src/**/*.test.ts test/**/*.test.ts"
+  },
+  "dependencies": {
+    "css-select": "^5.1.0",
+    "css-tree": "^3.1.0",
+    "css-what": "^6.1.0",
+    "parse5": "^7.2.1",
+    "specificity": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^28.0.1",
+    "@types/node": "^22.15.21",
+    "jsdom": "^29.0.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

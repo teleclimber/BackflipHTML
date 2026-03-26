@@ -1,0 +1,19 @@
+.always-visible {
+  display: block;
+}
+
+.banner {
+  background: yellow;
+}
+
+.banner-text {
+  font-weight: bold;
+}
+
+.fallback {
+  background: gray;
+}
+
+.fallback-text {
+  color: white;
+}
