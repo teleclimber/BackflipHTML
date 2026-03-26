@@ -4,6 +4,7 @@ import type { TextDocument } from 'vscode-languageserver-textdocument';
 import type { ProjectIndex, PartialDef } from './index.js';
 import type { CssAnalysisResult } from '@backflip/css';
 import { parseBPartValue } from './parse-bpart.js';
+import * as path from 'node:path';
 
 /**
  * Provide hover info for BackflipHTML b-directives.
@@ -14,6 +15,7 @@ export function getHover(
 	filePath: string,
 	index: ProjectIndex,
 	cssAnalysis?: CssAnalysisResult | null,
+	stylesheetPath?: string | null,
 ): Hover | null {
 	const line = doc.getText({
 		start: { line: position.line, character: 0 },
@@ -25,7 +27,7 @@ export function getHover(
 		?? hoverBIn(doc, line, position, filePath, index)
 		?? hoverBSlot(doc, line, position, filePath, index)
 		?? hoverBData(line, position, filePath, index)
-		?? hoverCssRules(line, position, filePath, cssAnalysis)
+		?? hoverCssRules(line, position, filePath, cssAnalysis, stylesheetPath)
 		?? null;
 }
 
@@ -244,6 +246,7 @@ function hoverCssRules(
 	position: Position,
 	filePath: string,
 	cssAnalysis?: CssAnalysisResult | null,
+	stylesheetPath?: string | null,
 ): Hover | null {
 	if (!cssAnalysis) return null;
 
@@ -278,7 +281,19 @@ function hoverCssRules(
 	for (const m of elementMatch.matches) {
 		const spec = `(${m.specificity.join(', ')})`;
 		const typeTag = m.matchType !== 'definite' ? ` · *${m.matchType}*` : '';
-		lines.push(`\`${m.selector}\` — ${spec}${typeTag}`);
+
+		let locationLink = '';
+		if (stylesheetPath && m.rule.sourceLine > 0) {
+			const fileName = path.basename(stylesheetPath);
+			const args = encodeURIComponent(JSON.stringify({
+				path: stylesheetPath,
+				line: m.rule.sourceLine - 1,
+				col: m.rule.sourceCol - 1,
+			}));
+			locationLink = ` · [${fileName}:${m.rule.sourceLine}](command:backflipHTML.openCssRule?${args})`;
+		}
+
+		lines.push(`\`${m.selector}\` — ${spec}${typeTag}${locationLink}`);
 
 		if (m.rule.properties.length > 0) {
 			const props = m.rule.properties.map(p => `${p.name}: ${p.value}`).join('; ');

@@ -16,6 +16,12 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "commands": [
+      {
+        "command": "backflipHTML.openCssRule",
+        "title": "BackflipHTML: Open CSS Rule"
+      }
+    ],
     "languages": [
       {
         "id": "html",

@@ -262,7 +262,7 @@ describe('getHover', () => {
 		function makeCssAnalysis(file: string, matches: Array<{
 			startLine: number;
 			startCol: number;
-			rules: Array<{ selector: string; specificity: [number, number, number]; properties?: Array<{ name: string; value: string }>; media?: string[]; matchType?: string }>;
+			rules: Array<{ selector: string; specificity: [number, number, number]; properties?: Array<{ name: string; value: string }>; media?: string[]; matchType?: string; sourceLine?: number; sourceCol?: number }>;
 		}>) {
 			const elementMatches = new Map();
 			elementMatches.set(file, matches.map(m => ({
@@ -278,8 +278,8 @@ describe('getHover', () => {
 						selectors: [r.selector],
 						properties: r.properties ?? [],
 						mediaConditions: r.media ?? [],
-						sourceLine: 1,
-						sourceCol: 1,
+						sourceLine: r.sourceLine ?? 1,
+						sourceCol: r.sourceCol ?? 1,
 					},
 					selector: r.selector,
 					specificity: r.specificity,
@@ -344,6 +344,54 @@ describe('getHover', () => {
 			const doc = makeDoc(['<div class="card">Hello</div>']);
 			const result = getHover(doc, pos(0, 5), 'page.html', index, null);
 			strictEqual(result, null);
+		});
+
+		it('shows CSS file name and line number when stylesheetPath is provided', () => {
+			const index = makeIndex([], []);
+			const cssAnalysis = makeCssAnalysis('page.html', [{
+				startLine: 1,
+				startCol: 1,
+				rules: [
+					{ selector: '.card', specificity: [0, 1, 0], properties: [{ name: 'color', value: 'red' }], sourceLine: 10 },
+				],
+			}]);
+			const doc = makeDoc(['<div class="card">Hello</div>']);
+			const result = getHover(doc, pos(0, 5), 'page.html', index, cssAnalysis as any, '/workspace/styles.css');
+			const v = hoverValue(result);
+			ok(v.includes('styles.css:10'), 'should include file name and line number');
+			ok(v.includes('command:backflipHTML.openCssRule'), 'should include command URI');
+		});
+
+		it('shows correct line numbers for multiple rules', () => {
+			const index = makeIndex([], []);
+			const cssAnalysis = makeCssAnalysis('page.html', [{
+				startLine: 1,
+				startCol: 1,
+				rules: [
+					{ selector: '.a', specificity: [0, 1, 0], sourceLine: 5 },
+					{ selector: '.b', specificity: [0, 1, 0], sourceLine: 12 },
+				],
+			}]);
+			const doc = makeDoc(['<div class="a b">Hello</div>']);
+			const result = getHover(doc, pos(0, 5), 'page.html', index, cssAnalysis as any, '/workspace/theme.css');
+			const v = hoverValue(result);
+			ok(v.includes('theme.css:5'), 'should include first rule line');
+			ok(v.includes('theme.css:12'), 'should include second rule line');
+		});
+
+		it('does not show file link when stylesheetPath is not provided', () => {
+			const index = makeIndex([], []);
+			const cssAnalysis = makeCssAnalysis('page.html', [{
+				startLine: 1,
+				startCol: 1,
+				rules: [
+					{ selector: '.card', specificity: [0, 1, 0] },
+				],
+			}]);
+			const doc = makeDoc(['<div class="card">Hello</div>']);
+			const result = getHover(doc, pos(0, 5), 'page.html', index, cssAnalysis as any);
+			const v = hoverValue(result);
+			ok(!v.includes('command:'), 'should not include command URI without stylesheetPath');
 		});
 
 		it('returns null when cursor not on HTML tag', () => {
