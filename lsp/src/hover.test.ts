@@ -408,6 +408,153 @@ describe('getHover', () => {
 	});
 });
 
+describe('CSS selector hover (hover in CSS file)', () => {
+	function makeCssAnalysisWithElements(entries: Array<{
+		file: string;
+		partialName: string;
+		startLine: number;
+		startCol: number;
+		selector: string;
+		ruleLine: number;
+		matchType?: string;
+	}>) {
+		const elementMatches = new Map<string, any[]>();
+		for (const e of entries) {
+			const arr = elementMatches.get(e.file) ?? [];
+			// Check if there's already an element at this line
+			let existing = arr.find((m: any) => m.startLine === e.startLine && m.startCol === e.startCol);
+			if (!existing) {
+				existing = {
+					element: null,
+					file: e.file,
+					partialName: e.partialName,
+					startLine: e.startLine,
+					startCol: e.startCol,
+					startOffset: 0,
+					matches: [],
+				};
+				arr.push(existing);
+			}
+			existing.matches.push({
+				rule: {
+					selectorText: e.selector,
+					selectors: [e.selector],
+					properties: [],
+					mediaConditions: [],
+					sourceLine: e.ruleLine,
+					sourceCol: 1,
+				},
+				selector: e.selector,
+				specificity: [0, 1, 0] as [number, number, number],
+				mediaConditions: [],
+				matchType: e.matchType ?? 'definite',
+			});
+			elementMatches.set(e.file, arr);
+		}
+		return { elementMatches, rules: [] };
+	}
+
+	// stylesheetPath is absolute, templateRoot is absolute
+	// filePath passed to getHover is path.relative(templateRoot, absoluteFilePath)
+	// So for stylesheet at /workspace/styles.css and templateRoot /workspace/templates,
+	// filePath would be ../styles.css
+	const ssPath = '/workspace/styles.css';
+	const tplRoot = '/workspace/templates';
+	const ssRelPath = '../styles.css'; // path.relative(tplRoot, ssPath)
+
+	it('shows matching partials when hovering on a CSS selector line', () => {
+		const index = makeIndex([], []);
+		const cssAnalysis = makeCssAnalysisWithElements([
+			{ file: 'page.html', partialName: 'card', startLine: 5, startCol: 3, selector: '.card', ruleLine: 2 },
+		]);
+		const doc = makeDoc([
+			'/* styles */',
+			'.card {',
+			'  color: red;',
+			'}',
+		]);
+		const result = getHover(doc, pos(1, 3), ssRelPath, index, cssAnalysis as any, ssPath, tplRoot);
+		const v = hoverValue(result);
+		ok(v.includes('**Matched elements**'), 'should show matched elements header');
+		ok(v.includes('card'), 'should show partial name');
+		ok(v.includes('page.html'), 'should show file name');
+	});
+
+	it('shows multiple partials from different files', () => {
+		const index = makeIndex([], []);
+		const cssAnalysis = makeCssAnalysisWithElements([
+			{ file: 'page.html', partialName: 'card', startLine: 5, startCol: 3, selector: '.title', ruleLine: 1 },
+			{ file: 'other.html', partialName: 'header', startLine: 3, startCol: 1, selector: '.title', ruleLine: 1 },
+		]);
+		const doc = makeDoc(['.title { font-size: 16px; }']);
+		const result = getHover(doc, pos(0, 3), ssRelPath, index, cssAnalysis as any, ssPath, tplRoot);
+		const v = hoverValue(result);
+		ok(v.includes('card'), 'should show first partial');
+		ok(v.includes('header'), 'should show second partial');
+		ok(v.includes('page.html'), 'should show first file');
+		ok(v.includes('other.html'), 'should show second file');
+	});
+
+	it('includes clickable link to element location', () => {
+		const index = makeIndex([], []);
+		const cssAnalysis = makeCssAnalysisWithElements([
+			{ file: 'page.html', partialName: 'card', startLine: 5, startCol: 3, selector: '.card', ruleLine: 1 },
+		]);
+		const doc = makeDoc(['.card { color: red; }']);
+		const result = getHover(doc, pos(0, 3), ssRelPath, index, cssAnalysis as any, ssPath, tplRoot);
+		const v = hoverValue(result);
+		ok(v.includes('command:backflipHTML.openCssRule'), 'should include command URI');
+		// Path is URL-encoded in the command URI
+		ok(v.includes(encodeURIComponent('/workspace/templates/page.html')), 'should include full path to template');
+	});
+
+	it('shows match type for non-definite matches', () => {
+		const index = makeIndex([], []);
+		const cssAnalysis = makeCssAnalysisWithElements([
+			{ file: 'page.html', partialName: 'card', startLine: 5, startCol: 3, selector: '.card', ruleLine: 1, matchType: 'conditional' },
+		]);
+		const doc = makeDoc(['.card { color: red; }']);
+		const result = getHover(doc, pos(0, 3), ssRelPath, index, cssAnalysis as any, ssPath, tplRoot);
+		const v = hoverValue(result);
+		ok(v.includes('conditional'), 'should show match type');
+	});
+
+	it('returns null when hovering on a non-selector line (e.g. property)', () => {
+		const index = makeIndex([], []);
+		const cssAnalysis = makeCssAnalysisWithElements([
+			{ file: 'page.html', partialName: 'card', startLine: 5, startCol: 3, selector: '.card', ruleLine: 1 },
+		]);
+		const doc = makeDoc([
+			'.card {',
+			'  color: red;',
+			'}',
+		]);
+		const result = getHover(doc, pos(1, 5), ssRelPath, index, cssAnalysis as any, ssPath, tplRoot);
+		strictEqual(result, null);
+	});
+
+	it('returns null when not hovering on the stylesheet file', () => {
+		const index = makeIndex([], []);
+		const cssAnalysis = makeCssAnalysisWithElements([
+			{ file: 'page.html', partialName: 'card', startLine: 5, startCol: 3, selector: '.card', ruleLine: 1 },
+		]);
+		const doc = makeDoc(['.card { color: red; }']);
+		const result = getHover(doc, pos(0, 3), 'other.css', index, cssAnalysis as any, ssPath, tplRoot);
+		strictEqual(result, null);
+	});
+
+	it('returns null when no elements match the selector', () => {
+		const index = makeIndex([], []);
+		const cssAnalysis = makeCssAnalysisWithElements([
+			{ file: 'page.html', partialName: 'card', startLine: 5, startCol: 3, selector: '.card', ruleLine: 3 },
+		]);
+		const doc = makeDoc(['.unmatched { color: red; }']);
+		// Rule is on line 3, but we're hovering line 1 (0-based 0)
+		const result = getHover(doc, pos(0, 3), ssRelPath, index, cssAnalysis as any, ssPath, tplRoot);
+		strictEqual(result, null);
+	});
+});
+
 describe('getHover integration (analyzeCss + getHover)', () => {
 	it('shows CSS rules for elements inside a partial', () => {
 		const html = [
@@ -505,5 +652,55 @@ describe('getHover integration (analyzeCss + getHover)', () => {
 		const v = hoverValue(result);
 		ok(v.includes('**CSS Rules**'), 'should show CSS rules for cross-file slot content');
 		ok(v.includes('.card-header span'), 'should match selector from cross-file partial');
+	});
+});
+
+describe('CSS selector hover integration (analyzeCss + getHover on CSS file)', () => {
+	it('shows matching partials when hovering a selector in the CSS file', () => {
+		const html = [
+			'<div b-name="card">',
+			'  <div class="card-body">content</div>',
+			'</div>',
+		].join('\n');
+		const css = '.card-body { padding: 8px; }';
+		const cssAnalysis = analyzeCss({
+			cssContent: css,
+			templateFiles: new Map([['page.html', html]]),
+		});
+		const doc = makeDoc(css.split('\n'));
+		// Hover on .card-body selector (line 0, 0-based) — rule is on line 1 (1-based)
+		const result = getHover(doc, pos(0, 3), '../styles.css', makeIndex([], []), cssAnalysis, '/workspace/styles.css', '/workspace/templates');
+		const v = hoverValue(result);
+		ok(v.includes('**Matched elements**'), 'should show matched elements header');
+		ok(v.includes('card'), 'should show partial name');
+		ok(v.includes('page.html'), 'should show file name');
+	});
+
+	it('shows matches from multiple files', () => {
+		const componentHtml = [
+			'<div b-name="card" b-export>',
+			'  <h2 class="title">heading</h2>',
+			'</div>',
+		].join('\n');
+		const pageHtml = [
+			'<div b-name="page">',
+			'  <span class="title">page title</span>',
+			'</div>',
+		].join('\n');
+		const css = '.title { color: blue; }';
+		const cssAnalysis = analyzeCss({
+			cssContent: css,
+			templateFiles: new Map([
+				['components.html', componentHtml],
+				['page.html', pageHtml],
+			]),
+		});
+		const doc = makeDoc(css.split('\n'));
+		const result = getHover(doc, pos(0, 3), '../styles.css', makeIndex([], []), cssAnalysis, '/workspace/styles.css', '/workspace/templates');
+		const v = hoverValue(result);
+		ok(v.includes('card'), 'should show card partial');
+		ok(v.includes('page'), 'should show page partial');
+		ok(v.includes('components.html'), 'should show components file');
+		ok(v.includes('page.html'), 'should show page file');
 	});
 });

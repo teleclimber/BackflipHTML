@@ -206,6 +206,8 @@ A **Language Server Protocol** implementation (Node.js) that provides IDE featur
 - **Go to Definition** — click a `b-part` reference to jump to the `b-name` definition
 - **Find All References** — from a `b-name` definition, find all `b-part` usages
 - **Document Symbols** — lists partials in the editor outline/breadcrumbs
+- **Hover (HTML)** — hover over `b-part`, `b-name`, `b-in`, `b-slot`, `b-data:` attributes or HTML elements to see directive info and matching CSS rules
+- **Hover (CSS)** — hover over a selector in the stylesheet to see which partials contain matching elements, with clickable links to jump to each element
 
 The server reuses the compiler's AST and source location tracking. On file open/save, it reads `backflip.json` from the workspace root to find the template directory, runs `compileDirectory()` on it, and builds a project index of partial definitions and references. The server stays inactive if no `backflip.json` is found.
 

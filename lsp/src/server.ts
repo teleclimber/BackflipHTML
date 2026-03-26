@@ -289,7 +289,7 @@ connection.onHover((params: HoverParams) => {
 	const filePath = uri.replace('file://', '');
 	const relPath = path.relative(templateRoot, filePath);
 
-	return getHover(doc, params.position, relPath, projectIndex, cssAnalysis, stylesheetPath);
+	return getHover(doc, params.position, relPath, projectIndex, cssAnalysis, stylesheetPath, templateRoot);
 });
 
 connection.listen();

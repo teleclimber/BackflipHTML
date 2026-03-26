@@ -16,13 +16,15 @@ export function getHover(
 	index: ProjectIndex,
 	cssAnalysis?: CssAnalysisResult | null,
 	stylesheetPath?: string | null,
+	templateRoot?: string | null,
 ): Hover | null {
 	const line = doc.getText({
 		start: { line: position.line, character: 0 },
 		end: { line: position.line + 1, character: 0 },
 	});
 
-	return hoverBPart(line, position, filePath, index)
+	return hoverCssSelector(line, position, filePath, cssAnalysis, stylesheetPath, templateRoot)
+		?? hoverBPart(line, position, filePath, index)
 		?? hoverBName(line, position, filePath, index)
 		?? hoverBIn(doc, line, position, filePath, index)
 		?? hoverBSlot(doc, line, position, filePath, index)
@@ -237,6 +239,83 @@ function hoverBData(
 	}
 
 	return null;
+}
+
+// --- CSS selector hover (in stylesheet) ---
+
+function hoverCssSelector(
+	line: string,
+	position: Position,
+	filePath: string,
+	cssAnalysis?: CssAnalysisResult | null,
+	stylesheetPath?: string | null,
+	templateRoot?: string | null,
+): Hover | null {
+	if (!cssAnalysis || !stylesheetPath || !templateRoot) return null;
+
+	// Only activate when hovering in the stylesheet file
+	const relStylesheet = path.relative(templateRoot, stylesheetPath);
+	if (filePath !== relStylesheet && filePath !== stylesheetPath) return null;
+
+	const lspLine = position.line + 1; // convert to 1-based
+
+	// Collect all element matches whose rule sourceLine matches the hovered line
+	const matchingElements: Array<{
+		file: string;
+		partialName: string;
+		startLine: number;
+		startCol: number;
+		matchType: string;
+	}> = [];
+
+	for (const [file, elements] of cssAnalysis.elementMatches) {
+		for (const el of elements) {
+			for (const m of el.matches) {
+				if (m.rule.sourceLine === lspLine) {
+					matchingElements.push({
+						file: el.file,
+						partialName: el.partialName,
+						startLine: el.startLine,
+						startCol: el.startCol,
+						matchType: m.matchType,
+					});
+				}
+			}
+		}
+	}
+
+	if (matchingElements.length === 0) return null;
+
+	// Deduplicate by file + partialName + startLine
+	const seen = new Set<string>();
+	const unique = matchingElements.filter(e => {
+		const key = `${e.file}:${e.partialName}:${e.startLine}`;
+		if (seen.has(key)) return false;
+		seen.add(key);
+		return true;
+	});
+
+	// Count unique partials
+	const partialSet = new Set(unique.map(e => `${e.file}#${e.partialName}`));
+	const partialCount = partialSet.size;
+	const matchCount = unique.length;
+
+	const lines: string[] = [];
+	lines.push(`**Matched elements** (${matchCount} match${matchCount !== 1 ? 'es' : ''} in ${partialCount} partial${partialCount !== 1 ? 's' : ''})`);
+	lines.push('');
+
+	for (const el of unique) {
+		const typeTag = el.matchType !== 'definite' ? ` · *${el.matchType}*` : '';
+		const fullPath = path.join(templateRoot, el.file);
+		const args = encodeURIComponent(JSON.stringify({
+			path: fullPath,
+			line: el.startLine - 1,
+			col: el.startCol - 1,
+		}));
+		lines.push(`\`${el.file}\` **${el.partialName}** · [line ${el.startLine}](command:backflipHTML.openCssRule?${args})${typeTag}`);
+	}
+
+	return mkHover(lines);
 }
 
 // --- CSS rules hover ---

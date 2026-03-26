@@ -12,6 +12,7 @@
   ],
   "activationEvents": [
     "onLanguage:html",
+    "onLanguage:css",
     "workspaceContains:backflip.json"
   ],
   "main": "./dist/extension.js",

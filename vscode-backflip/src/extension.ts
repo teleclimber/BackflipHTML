@@ -39,10 +39,14 @@ export function activate(context: ExtensionContext): void {
 	};
 
 	const clientOptions: LanguageClientOptions = {
-		documentSelector: [{ scheme: 'file', language: 'html' }],
+		documentSelector: [
+			{ scheme: 'file', language: 'html' },
+			{ scheme: 'file', language: 'css' },
+		],
 		synchronize: {
 			fileEvents: [
 				workspace.createFileSystemWatcher('**/*.html'),
+				workspace.createFileSystemWatcher('**/*.css'),
 				workspace.createFileSystemWatcher('**/backflip.json'),
 			],
 		},
