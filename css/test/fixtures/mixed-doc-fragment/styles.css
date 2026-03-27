@@ -1,0 +1,40 @@
+.app-shell {
+  display: flex;
+}
+
+.sidebar {
+  width: 250px;
+}
+
+.sidebar ul li {
+  padding: 8px;
+}
+
+.main-area {
+  flex: 1;
+}
+
+body .app-shell .main-area {
+  background: #f5f5f5;
+}
+
+.widget-box {
+  border: 1px solid #ccc;
+}
+
+.widget-title {
+  font-weight: bold;
+}
+
+.main-area .widget-box {
+  margin: 16px;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+}
+
+.badge-text {
+  font-size: 12px;
+}

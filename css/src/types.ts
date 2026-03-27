@@ -141,11 +141,23 @@ export interface ElementMatches {
 	matches: MatchedRule[];
 }
 
+// --- Partial Source Info ---
+
+export interface PartialSourceInfo {
+	startOffset: number;   // 0-based, start of opening tag '<'
+	endOffset: number;     // 0-based, just past closing tag '>'
+	startLine: number;     // 1-based
+	startCol: number;      // 1-based
+	isDocumentLevel: boolean;  // true if partial contains/is html, head, or body
+}
+
 // --- Analysis Result ---
 
 export interface CssAnalysisInput {
 	cssContent: string;
 	templateFiles: Map<string, string>;
+	/** Per-file partial metadata from the compiler. filePath -> partialName -> info */
+	partialInfo: Map<string, Map<string, PartialSourceInfo>>;
 }
 
 export interface CssAnalysisResult {

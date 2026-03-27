@@ -1,7 +1,16 @@
 import { describe, it } from 'node:test';
 import { ok, strictEqual } from 'node:assert';
 import { analyzeCss } from './index.js';
+import { buildPartialInfo } from './parse-dom.js';
 import type { CssAnalysisResult } from './types.js';
+
+function analyze(input: { cssContent: string; templateFiles: Map<string, string> }) {
+	const partialInfo = new Map<string, Map<string, any>>();
+	for (const [file, html] of input.templateFiles) {
+		partialInfo.set(file, buildPartialInfo(html));
+	}
+	return analyzeCss({ ...input, partialInfo });
+}
 
 /** Helper: find an ElementMatches entry where one of the matched selectors equals `sel`. */
 function findMatch(result: CssAnalysisResult, file: string, selector: string) {
@@ -14,7 +23,7 @@ describe('slot content CSS matching (integration)', () => {
 
 	describe('same-file partial with slots', () => {
 		it('matches b-in content against ancestors inside the partial', () => {
-			const result = analyzeCss({
+			const result = analyze({
 				cssContent: '.card-header h2 { color: red; }',
 				templateFiles: new Map([['page.html', [
 					'<div b-name="card">',
@@ -51,7 +60,7 @@ describe('slot content CSS matching (integration)', () => {
 				'  <p b-in="default">Body</p>',
 				'</div>',
 			].join('\n');
-			const result = analyzeCss({
+			const result = analyze({
 				cssContent: '.card-header h2 { color: red; } .card-body p { margin: 0; }',
 				templateFiles: new Map([
 					['components.html', componentHtml],
@@ -72,7 +81,7 @@ describe('slot content CSS matching (integration)', () => {
 				'  </div>',
 				'</div>',
 			].join('\n');
-			const result = analyzeCss({
+			const result = analyze({
 				cssContent: '.card-header h2 { color: red; }',
 				templateFiles: new Map([
 					['components.html', componentHtml],
@@ -93,7 +102,7 @@ describe('slot content CSS matching (integration)', () => {
 				'  </div>',
 				'</div>',
 			].join('\n');
-			const result = analyzeCss({
+			const result = analyze({
 				cssContent: '.container .card-header h2 { color: red; }',
 				templateFiles: new Map([
 					['components.html', componentHtml],
@@ -123,7 +132,7 @@ describe('slot content CSS matching (integration)', () => {
 				'  </div>',
 				'</div>',
 			].join('\n');
-			const result = analyzeCss({
+			const result = analyze({
 				cssContent: '.layout-body .content h1 { font-size: 2em; }',
 				templateFiles: new Map([
 					['layout.html', layoutHtml],
@@ -163,7 +172,7 @@ describe('slot content CSS matching (integration)', () => {
 				'  </div>',
 				'</div>',
 			].join('\n');
-			const result = analyzeCss({
+			const result = analyze({
 				cssContent: '.card-header span { font-weight: bold; }',
 				templateFiles: new Map([
 					['layout.html', layoutHtml],
@@ -201,7 +210,7 @@ describe('slot content CSS matching (integration)', () => {
 				'  </div>',
 				'</div>',
 			].join('\n');
-			const result = analyzeCss({
+			const result = analyze({
 				cssContent: '.layout-body .card-header span { color: blue; }',
 				templateFiles: new Map([
 					['layout.html', layoutHtml],
@@ -230,7 +239,7 @@ describe('slot content CSS matching (integration)', () => {
 				'  </div>',
 				'</div>',
 			].join('\n');
-			const result = analyzeCss({
+			const result = analyze({
 				cssContent: '.card-header h2 { color: red; }',
 				templateFiles: new Map([
 					['components.html', componentHtml],
@@ -256,7 +265,7 @@ describe('slot content CSS matching (integration)', () => {
 				'  </div>',
 				'</div>',
 			].join('\n');
-			const result = analyzeCss({
+			const result = analyze({
 				cssContent: '.page .card-header h2 { color: red; }',
 				templateFiles: new Map([
 					['components.html', componentHtml],

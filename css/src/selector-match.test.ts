@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import { strictEqual, deepStrictEqual, ok } from 'node:assert';
 import { matchSelectors, matchNodeFromElement, type MatchNode } from './selector-match.js';
-import { parseTemplate } from './parse-dom.js';
+import { parseTemplate, buildPartialInfo } from './parse-dom.js';
 import type { CssRule, ContextSpine } from './types.js';
 
 function makeRule(selector: string, props: Record<string, string> = {}, media: string[] = []): CssRule {
@@ -16,7 +16,7 @@ function makeRule(selector: string, props: Record<string, string> = {}, media: s
 }
 
 function setupPartial(html: string, partialName: string = 'test') {
-	const tmpl = parseTemplate(html, 'test.html');
+	const tmpl = parseTemplate(html, 'test.html', buildPartialInfo(html));
 	// Build MatchNode trees from top-level elements only (children are included recursively)
 	const roots: MatchNode[] = [];
 	for (const child of tmpl.fragment.childNodes) {

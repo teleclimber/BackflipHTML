@@ -1,10 +1,20 @@
 import { describe, it } from 'node:test';
 import { strictEqual, ok } from 'node:assert';
 import { analyzeCss } from './index.js';
+import { buildPartialInfo } from './parse-dom.js';
+import type { CssAnalysisInput } from './types.js';
+
+function analyze(input: { cssContent: string; templateFiles: Map<string, string> }) {
+	const partialInfo = new Map<string, Map<string, any>>();
+	for (const [file, html] of input.templateFiles) {
+		partialInfo.set(file, buildPartialInfo(html));
+	}
+	return analyzeCss({ ...input, partialInfo });
+}
 
 describe('analyzeCss', () => {
 	it('matches CSS rules to template elements', () => {
-		const result = analyzeCss({
+		const result = analyze({
 			cssContent: '.card { color: red; } .title { font-size: 16px; }',
 			templateFiles: new Map([
 				['page.html', '<div b-name="page"><div class="card"><span class="title">Hello</span></div></div>'],
@@ -22,7 +32,7 @@ describe('analyzeCss', () => {
 	});
 
 	it('matches descendant selectors using context spines', () => {
-		const result = analyzeCss({
+		const result = analyze({
 			cssContent: '.container .inner { color: blue; }',
 			templateFiles: new Map([
 				['page.html', '<div class="container"><div b-part="card"></div></div><div b-name="card"><span class="inner">text</span></div>'],
@@ -36,7 +46,7 @@ describe('analyzeCss', () => {
 	});
 
 	it('returns empty results for empty CSS', () => {
-		const result = analyzeCss({
+		const result = analyze({
 			cssContent: '',
 			templateFiles: new Map([
 				['page.html', '<div b-name="page"><div class="card">hi</div></div>'],
@@ -47,7 +57,7 @@ describe('analyzeCss', () => {
 	});
 
 	it('returns empty results for templates with no partials', () => {
-		const result = analyzeCss({
+		const result = analyze({
 			cssContent: '.card { color: red; }',
 			templateFiles: new Map([
 				['page.html', '<div class="card">hi</div>'],
@@ -58,7 +68,7 @@ describe('analyzeCss', () => {
 	});
 
 	it('preserves media conditions in matches', () => {
-		const result = analyzeCss({
+		const result = analyze({
 			cssContent: '@media print { .card { color: black; } }',
 			templateFiles: new Map([
 				['page.html', '<div b-name="page"><div class="card">hi</div></div>'],
@@ -73,7 +83,7 @@ describe('analyzeCss', () => {
 	});
 
 	it('handles multiple template files', () => {
-		const result = analyzeCss({
+		const result = analyze({
 			cssContent: '.card { color: red; } .panel { color: blue; }',
 			templateFiles: new Map([
 				['components.html', '<div b-name="card" b-export><div class="card">content</div></div>'],
@@ -88,7 +98,7 @@ describe('analyzeCss', () => {
 	});
 
 	it('matches slot content (b-in) against ancestors inside the partial definition', () => {
-		const result = analyzeCss({
+		const result = analyze({
 			cssContent: '.card-header h2 { color: red; }',
 			templateFiles: new Map([
 				['page.html', [
@@ -113,7 +123,7 @@ describe('analyzeCss', () => {
 	});
 
 	it('matches slot content against ancestors outside the partial (caller context)', () => {
-		const result = analyzeCss({
+		const result = analyze({
 			cssContent: '.page-wrapper .card-body p { margin: 0; }',
 			templateFiles: new Map([
 				['page.html', [
@@ -140,7 +150,7 @@ describe('analyzeCss', () => {
 	});
 
 	it('matches slot content in cross-file partials', () => {
-		const result = analyzeCss({
+		const result = analyze({
 			cssContent: '.card-header span { font-weight: bold; }',
 			templateFiles: new Map([
 				['components.html', [
@@ -167,7 +177,7 @@ describe('analyzeCss', () => {
 	});
 
 	it('sorts matches by specificity', () => {
-		const result = analyzeCss({
+		const result = analyze({
 			cssContent: 'div { margin: 0; } .card { color: red; } #main { font-size: 16px; }',
 			templateFiles: new Map([
 				['page.html', '<div b-name="page"><div id="main" class="card">hi</div></div>'],

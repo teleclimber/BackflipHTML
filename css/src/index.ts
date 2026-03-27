@@ -8,6 +8,7 @@ export type {
 	ContextSpine,
 	SpineNode,
 	BDirectiveInfo,
+	PartialSourceInfo,
 } from './types.js';
 
 import type { CssAnalysisInput, CssAnalysisResult, ContextSpine } from './types.js';
@@ -23,7 +24,7 @@ export { buildUsageGraph } from './usage-graph.js';
 export { computeSpines } from './context-spines.js';
 
 export function analyzeCss(input: CssAnalysisInput): CssAnalysisResult {
-	const { cssContent, templateFiles } = input;
+	const { cssContent, templateFiles, partialInfo } = input;
 	const timings: string[] = [];
 	let t = performance.now();
 
@@ -38,7 +39,9 @@ export function analyzeCss(input: CssAnalysisInput): CssAnalysisResult {
 	t = performance.now();
 	const templates = [];
 	for (const [filePath, html] of templateFiles) {
-		templates.push(parseTemplate(html, filePath));
+		const filePartials = partialInfo.get(filePath);
+		if (!filePartials || filePartials.size === 0) continue;
+		templates.push(parseTemplate(html, filePath, filePartials));
 	}
 	timings.push(`parse-templates: ${(performance.now() - t).toFixed(0)}ms`);
 

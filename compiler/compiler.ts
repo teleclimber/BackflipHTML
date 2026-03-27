@@ -16,6 +16,14 @@ export interface SourceLoc {
 	endOffset: number;    // points directly after the last character
 }
 
+export interface PartialMeta {
+	startOffset: number;   // 0-based, start of opening tag '<'
+	endOffset: number;     // 0-based, just past closing tag '>'
+	startLine: number;     // 1-based
+	startCol: number;      // 1-based
+	isDocumentLevel: boolean;  // true if partial contains/is html, head, or body
+}
+
 export interface ChildTNode {
 	parent: ParentTNode
 }
@@ -24,7 +32,8 @@ export interface RootTNode {
 	tnodes: TNode[],
 	loc?: SourceLoc,
 	exported?: boolean,
-	freeVars?: string[]
+	freeVars?: string[],
+	meta?: PartialMeta
 }
 export interface RawTNode extends ChildTNode {
 	type: 'raw',
@@ -103,6 +112,8 @@ type TagMatcher = {
 	}
 }
 
+const DOCUMENT_LEVEL_TAGS = new Set(['html', 'head', 'body']);
+
 const BOOLEAN_ATTRS = new Set([
 	'allowfullscreen','async','autofocus','autoplay','checked','controls',
 	'default','defer','disabled','formnovalidate','hidden','ismap','loop',
@@ -177,7 +188,7 @@ export function generateStringStack(in_str:string, filename?:string) :Promise<{ 
 	// to knwow when we reach the matching closing element
 	// ..we have to stack every element we encounter
 
-		const root_node :RootTNode = { type: 'root', tnodes: [] };
+		const root_node :RootTNode = { type: 'root', tnodes: [], meta: { startOffset: 0, endOffset: 0, startLine: 1, startCol: 1, isDocumentLevel: false } };
 		let cur_tnode :TNode = { type: 'raw', raw: '', parent: root_node };
 		root_node.tnodes.push(cur_tnode);
 
@@ -582,7 +593,14 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 				}
 
 				const partialName = bNameAttr.value;
-				const partialRoot: RootTNode = { type: 'root', tnodes: [] };
+				const tagSrcLoc = tag.sourceCodeLocation as { startOffset?: number; startLine?: number; startCol?: number } | null | undefined;
+				const partialRoot: RootTNode = { type: 'root', tnodes: [], meta: {
+					startOffset: tagSrcLoc?.startOffset ?? 0,
+					endOffset: tagSrcLoc?.startOffset ?? 0, // updated on close
+					startLine: tagSrcLoc?.startLine ?? 1,
+					startCol: tagSrcLoc?.startCol ?? 1,
+					isDocumentLevel: DOCUMENT_LEVEL_TAGS.has(tag.tagName),
+				} };
 				partialRoot.loc = attrLoc(tag, 'b-name');
 				partialRoot.exported = tag.attrs.some(a => a.name === 'b-export');
 				compiledFile.partials.set(partialName, partialRoot);
@@ -603,6 +621,9 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 					cur_tnode = openNode.type === 'raw' ? openNode : null;
 					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
 						tag_stack.push({ tag: tag.tagName });
+					} else {
+						// Self-closing or void element: end offset is end of this tag
+						partialRoot.meta!.endOffset = (tagSrcLoc?.startOffset ?? 0) + raw.length;
 					}
 				}
 				return;
@@ -753,6 +774,11 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 					tag_stack.push({ tag: tag.tagName });
 				}
 				return;
+			}
+
+			// Track document-level tags inside partials
+			if (currentPartialRoot !== null && DOCUMENT_LEVEL_TAGS.has(tag.tagName)) {
+				currentPartialRoot.meta!.isDocumentLevel = true;
 			}
 
 			// --- standard b-for / b-if / b-else-if / b-else ---
@@ -917,6 +943,9 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 				if (tag.tagName !== 'b-unwrap') {
 					pushRawHere(raw);
 				}
+				// Record end offset of the partial
+				const endTagLoc = tag.sourceCodeLocation as { startOffset?: number } | null | undefined;
+				currentPartialRoot.meta!.endOffset = (endTagLoc?.startOffset ?? 0) + raw.length;
 				// End of this partial
 				currentPartialRoot = null;
 				cur_tnode = null;

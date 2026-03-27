@@ -1,11 +1,11 @@
 import { describe, it } from 'node:test';
 import { strictEqual, deepStrictEqual, ok } from 'node:assert';
-import { parseTemplate } from './parse-dom.js';
+import { parseTemplate, buildPartialInfo } from './parse-dom.js';
 import { buildUsageGraph } from './usage-graph.js';
 import { computeSpines } from './context-spines.js';
 
 function buildGraph(templates: { html: string; file: string }[]) {
-	const parsed = templates.map(t => parseTemplate(t.html, t.file));
+	const parsed = templates.map(t => parseTemplate(t.html, t.file, buildPartialInfo(t.html)));
 	return buildUsageGraph(parsed);
 }
 

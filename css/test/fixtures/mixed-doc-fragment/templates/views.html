@@ -1,0 +1,30 @@
+<html b-name="layout" b-export>
+<head><title>App</title></head>
+<body>
+  <div class="app-shell" data-mark="app-shell">
+    <nav class="sidebar" data-mark="sidebar">
+      <ul data-mark="nav-list">
+        <li data-mark="nav-item">Link</li>
+      </ul>
+    </nav>
+    <main class="main-area" data-mark="main-area">
+      <div b-part="#widget"></div>
+    </main>
+  </div>
+</body>
+</html>
+
+<div b-name="widget" b-export>
+  <div class="widget-box" data-mark="widget-box">
+    <span class="widget-title" data-mark="widget-title">Widget</span>
+    <div class="widget-body" data-mark="widget-body">
+      <p data-mark="widget-text">Content</p>
+    </div>
+  </div>
+</div>
+
+<div b-name="badge" b-export>
+  <span class="badge" data-mark="badge">
+    <span class="badge-text" data-mark="badge-text">New</span>
+  </span>
+</div>

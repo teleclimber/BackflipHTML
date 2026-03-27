@@ -1,0 +1,24 @@
+.page-container {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.site-header {
+  padding: 20px;
+}
+
+.site-header h1 {
+  font-size: 32px;
+}
+
+.content {
+  padding: 40px;
+}
+
+body .page-container .content {
+  background: white;
+}
+
+.bio {
+  margin-top: 20px;
+}

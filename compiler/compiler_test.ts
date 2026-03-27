@@ -768,3 +768,62 @@ Deno.test("disallowed unary operators produce errors", () => {
 		assertEquals(result.errs.length > 0, true, `expected error for: ${s}`);
 	});
 });
+
+// --- PartialMeta tests ---
+
+Deno.test("meta: fragment-level partial has correct startOffset, endOffset, isDocumentLevel=false", async () => {
+	const src = '<div b-name="card"><p>hello</p></div>';
+	const { compiled: result } = await compileFile(src);
+	const root = result.partials.get("card")!;
+	const meta = root.meta!;
+	assertEquals(meta.startOffset, 0);
+	assertEquals(meta.endOffset, src.length);
+	assertEquals(meta.startLine, 1);
+	assertEquals(meta.startCol, 1);
+	assertEquals(meta.isDocumentLevel, false);
+});
+
+Deno.test("meta: document-level partial (html tag) has isDocumentLevel=true", async () => {
+	const src = '<html b-name="page"><head><title>Hi</title></head><body><div>content</div></body></html>';
+	const { compiled: result } = await compileFile(src);
+	const root = result.partials.get("page")!;
+	const meta = root.meta!;
+	assertEquals(meta.isDocumentLevel, true);
+	assertEquals(meta.startOffset, 0);
+	assertEquals(meta.endOffset, src.length);
+});
+
+Deno.test("meta: document-level partial (body tag as b-name element)", async () => {
+	const src = '<body b-name="page"><div>content</div></body>';
+	const { compiled: result } = await compileFile(src);
+	const root = result.partials.get("page")!;
+	assertEquals(root.meta!.isDocumentLevel, true);
+});
+
+Deno.test("meta: document-level partial (contains body as descendant)", async () => {
+	const src = '<b-unwrap b-name="page"><html><body><div>content</div></body></html></b-unwrap>';
+	const { compiled: result } = await compileFile(src);
+	const root = result.partials.get("page")!;
+	assertEquals(root.meta!.isDocumentLevel, true);
+});
+
+Deno.test("meta: multiple partials in one file have separate meta", async () => {
+	const src = '<div b-name="header"><h1>hi</h1></div>\n<div b-name="footer"><p>bye</p></div>';
+	const { compiled: result } = await compileFile(src);
+	const header = result.partials.get("header")!;
+	const footer = result.partials.get("footer")!;
+	assertEquals(header.meta!.startOffset, 0);
+	assertEquals(header.meta!.endOffset, src.indexOf('</div>') + '</div>'.length);
+	assertEquals(footer.meta!.startOffset, src.indexOf('<div b-name="footer">'));
+	assertEquals(footer.meta!.endOffset, src.length);
+	assertEquals(header.meta!.isDocumentLevel, false);
+	assertEquals(footer.meta!.isDocumentLevel, false);
+});
+
+Deno.test("meta: partial on second line has correct startLine/startCol", async () => {
+	const src = '\n<div b-name="card"><p>hello</p></div>';
+	const { compiled: result } = await compileFile(src);
+	const meta = result.partials.get("card")!.meta!;
+	assertEquals(meta.startLine, 2);
+	assertEquals(meta.startCol, 1);
+});

@@ -2,7 +2,40 @@ import { describe, it } from 'node:test';
 import { strictEqual, ok, match } from 'node:assert';
 import { getHover } from './hover.js';
 import { makeIndex, makeLoc } from './test-helpers.js';
-import { analyzeCss } from '@backflip/css';
+import { analyzeCss, type PartialSourceInfo } from '@backflip/css';
+
+function makePartialInfo(templateFiles: Map<string, string>): Map<string, Map<string, PartialSourceInfo>> {
+	const result = new Map<string, Map<string, PartialSourceInfo>>();
+	// Simple regex scan for b-name partials
+	for (const [file, html] of templateFiles) {
+		const info = new Map<string, PartialSourceInfo>();
+		const tagRegex = /<([a-zA-Z][a-zA-Z0-9-]*)\b[^>]*\bb-name="([^"]*)"[^>]*>/g;
+		let m: RegExpExecArray | null;
+		while ((m = tagRegex.exec(html)) !== null) {
+			const tagName = m[1].toLowerCase();
+			const partialName = m[2];
+			const startOffset = m.index;
+			const before = html.substring(0, startOffset);
+			const startLine = (before.match(/\n/g) ?? []).length + 1;
+			const lastNl = before.lastIndexOf('\n');
+			const startCol = lastNl === -1 ? startOffset + 1 : startOffset - lastNl;
+			const closeTag = `</${tagName}>`;
+			const closeIdx = html.indexOf(closeTag, startOffset + m[0].length);
+			const endOffset = closeIdx !== -1 ? closeIdx + closeTag.length : startOffset + m[0].length;
+			const isDocumentLevel = ['html', 'head', 'body'].includes(tagName);
+			info.set(partialName, { startOffset, endOffset, startLine, startCol, isDocumentLevel });
+		}
+		if (info.size === 0) {
+			info.set('__root__', { startOffset: 0, endOffset: html.length, startLine: 1, startCol: 1, isDocumentLevel: false });
+		}
+		result.set(file, info);
+	}
+	return result;
+}
+
+function analyze(input: { cssContent: string; templateFiles: Map<string, string> }) {
+	return analyzeCss({ ...input, partialInfo: makePartialInfo(input.templateFiles) });
+}
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 import type { Position } from 'vscode-languageserver';
 
@@ -563,7 +596,7 @@ describe('getHover integration (analyzeCss + getHover)', () => {
 			'</div>',
 		].join('\n');
 		const css = '.card-body { padding: 8px; }';
-		const cssAnalysis = analyzeCss({
+		const cssAnalysis = analyze({
 			cssContent: css,
 			templateFiles: new Map([['page.html', html]]),
 		});
@@ -587,7 +620,7 @@ describe('getHover integration (analyzeCss + getHover)', () => {
 			'</div>',
 		].join('\n');
 		const css = '.card-header h2 { color: red; }';
-		const cssAnalysis = analyzeCss({
+		const cssAnalysis = analyze({
 			cssContent: css,
 			templateFiles: new Map([['page.html', html]]),
 		});
@@ -613,7 +646,7 @@ describe('getHover integration (analyzeCss + getHover)', () => {
 			'</div>',
 		].join('\n');
 		const css = '.page-wrapper .card-body p { margin: 0; }';
-		const cssAnalysis = analyzeCss({
+		const cssAnalysis = analyze({
 			cssContent: css,
 			templateFiles: new Map([['page.html', html]]),
 		});
@@ -639,7 +672,7 @@ describe('getHover integration (analyzeCss + getHover)', () => {
 			'</div>',
 		].join('\n');
 		const css = '.card-header span { font-weight: bold; }';
-		const cssAnalysis = analyzeCss({
+		const cssAnalysis = analyze({
 			cssContent: css,
 			templateFiles: new Map([
 				['components.html', componentHtml],
@@ -663,7 +696,7 @@ describe('CSS selector hover integration (analyzeCss + getHover on CSS file)', (
 			'</div>',
 		].join('\n');
 		const css = '.card-body { padding: 8px; }';
-		const cssAnalysis = analyzeCss({
+		const cssAnalysis = analyze({
 			cssContent: css,
 			templateFiles: new Map([['page.html', html]]),
 		});
@@ -688,7 +721,7 @@ describe('CSS selector hover integration (analyzeCss + getHover on CSS file)', (
 			'</div>',
 		].join('\n');
 		const css = '.title { color: blue; }';
-		const cssAnalysis = analyzeCss({
+		const cssAnalysis = analyze({
 			cssContent: css,
 			templateFiles: new Map([
 				['components.html', componentHtml],

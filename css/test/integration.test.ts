@@ -5,6 +5,7 @@ import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import { JSDOM } from 'jsdom';
 import { analyzeCss } from '../src/index.js';
+import { buildPartialInfo } from '../src/parse-dom.js';
 import type { CssAnalysisResult } from '../src/types.js';
 // @ts-ignore — dist build has no .d.ts for render
 import { compileDirectory, fileToJsModule } from '../../dist/mod.js';
@@ -28,7 +29,11 @@ function loadFixture(name: string) {
 			templateFiles.set(file, fs.readFileSync(path.join(templatesDir, file), 'utf-8'));
 		}
 	}
-	return { cssContent, templateFiles };
+	const partialInfo = new Map<string, Map<string, any>>();
+	for (const [file, html] of templateFiles) {
+		partialInfo.set(file, buildPartialInfo(html));
+	}
+	return { cssContent, templateFiles, partialInfo };
 }
 
 function findMatchedRule(result: CssAnalysisResult, file: string, selector: string) {
@@ -426,6 +431,115 @@ describe('integration: nested-partials', () => {
 
 	it('matches .layout-body .card-content p spanning two partial boundaries, same as jsdom', () => {
 		assertCssEqualsJsdom(result, doc, 'page.html', '.layout-body .card-content p');
+	});
+});
+
+describe('integration: multi-document (multiple document-level partials in one file)', () => {
+	let result: CssAnalysisResult;
+	let docHome: Document;
+	let docAbout: Document;
+
+	before(async () => {
+		result = analyzeCss(loadFixture('multi-document'));
+		const modules = await compileFixture('multi-document');
+		docHome = renderToDoc(modules, 'pages.html', 'homePage');
+		docAbout = renderToDoc(modules, 'pages.html', 'aboutPage');
+	});
+
+	it('matches .page-container on both partials, same as jsdom', () => {
+		assertCssFindsJsdom(result, docHome, 'pages.html', '.page-container');
+		assertCssFindsJsdom(result, docAbout, 'pages.html', '.page-container');
+	});
+
+	it('matches .site-header on homePage, same as jsdom', () => {
+		assertCssFindsJsdom(result, docHome, 'pages.html', '.site-header');
+	});
+
+	it('matches .site-header on aboutPage, same as jsdom', () => {
+		assertCssFindsJsdom(result, docAbout, 'pages.html', '.site-header');
+	});
+
+	it('matches .site-header h1 descendant selector on homePage, same as jsdom', () => {
+		assertCssFindsJsdom(result, docHome, 'pages.html', '.site-header h1');
+	});
+
+	it('matches .site-header h1 descendant selector on aboutPage, same as jsdom', () => {
+		assertCssFindsJsdom(result, docAbout, 'pages.html', '.site-header h1');
+	});
+
+	it('matches .content on both partials, same as jsdom', () => {
+		assertCssFindsJsdom(result, docHome, 'pages.html', '.content');
+		assertCssFindsJsdom(result, docAbout, 'pages.html', '.content');
+	});
+
+	it('matches body .page-container .content spanning document structure, same as jsdom', () => {
+		assertCssFindsJsdom(result, docHome, 'pages.html', 'body .page-container .content');
+		assertCssFindsJsdom(result, docAbout, 'pages.html', 'body .page-container .content');
+	});
+
+	it('matches .bio only in aboutPage partial', () => {
+		const cMarks = cssMarks(result, 'pages.html', '.bio');
+		ok(cMarks.size > 0, 'CSS analysis should find .bio');
+		ok(cMarks.has('about-bio'), '.bio should match in aboutPage');
+	});
+
+	it('has the correct total number of rules', () => {
+		strictEqual(result.rules.length, 6);
+	});
+});
+
+describe('integration: mixed-doc-fragment (document and fragment partials in one file)', () => {
+	let result: CssAnalysisResult;
+	let docLayout: Document;
+
+	before(async () => {
+		result = analyzeCss(loadFixture('mixed-doc-fragment'));
+		const modules = await compileFixture('mixed-doc-fragment');
+		docLayout = renderToDoc(modules, 'views.html', 'layout');
+	});
+
+	it('matches .app-shell on document-level partial, same as jsdom', () => {
+		assertCssEqualsJsdom(result, docLayout, 'views.html', '.app-shell');
+	});
+
+	it('matches .sidebar on document-level partial, same as jsdom', () => {
+		assertCssEqualsJsdom(result, docLayout, 'views.html', '.sidebar');
+	});
+
+	it('matches .sidebar ul li descendant selector, same as jsdom', () => {
+		assertCssFindsJsdom(result, docLayout, 'views.html', '.sidebar ul li');
+	});
+
+	it('matches body .app-shell .main-area spanning document structure, same as jsdom', () => {
+		assertCssFindsJsdom(result, docLayout, 'views.html', 'body .app-shell .main-area');
+	});
+
+	it('matches .widget-box on fragment partial embedded in document partial, same as jsdom', () => {
+		assertCssEqualsJsdom(result, docLayout, 'views.html', '.widget-box');
+	});
+
+	it('matches .widget-title on fragment partial, same as jsdom', () => {
+		assertCssEqualsJsdom(result, docLayout, 'views.html', '.widget-title');
+	});
+
+	it('matches .main-area .widget-box across document-fragment partial boundary, same as jsdom', () => {
+		assertCssEqualsJsdom(result, docLayout, 'views.html', '.main-area .widget-box');
+	});
+
+	it('matches .badge on standalone fragment partial', () => {
+		const cMarks = cssMarks(result, 'views.html', '.badge');
+		ok(cMarks.size > 0, 'CSS analysis should find .badge');
+		ok(cMarks.has('badge'), '.badge should match the badge element');
+	});
+
+	it('matches .badge-text on standalone fragment partial', () => {
+		const cMarks = cssMarks(result, 'views.html', '.badge-text');
+		ok(cMarks.size > 0, 'CSS analysis should find .badge-text');
+		ok(cMarks.has('badge-text'), '.badge-text should match');
+	});
+
+	it('has the correct total number of rules', () => {
+		strictEqual(result.rules.length, 10);
 	});
 });
 

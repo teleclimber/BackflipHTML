@@ -13,7 +13,7 @@ import {
 } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { compileDirectory, loadConfig, resolveConfigRoot, CONFIG_FILENAME, type BackflipError } from '@backflip/html';
-import { analyzeCss, type CssAnalysisResult } from '@backflip/css';
+import { analyzeCss, type CssAnalysisResult, type PartialSourceInfo } from '@backflip/css';
 import { buildIndex, type ProjectIndex } from './index.js';
 import { errorsToDiagnostics } from './diagnostics.js';
 import { findDefinition } from './definition.js';
@@ -110,13 +110,19 @@ async function recompile(): Promise<void> {
 			try {
 				const cssContent = await fs.readFile(stylesheetPath, 'utf-8');
 				const templateFiles = new Map<string, string>();
-				for (const [filePath] of directory.files) {
+				const partialInfo = new Map<string, Map<string, PartialSourceInfo>>();
+				for (const [filePath, compiledFile] of directory.files) {
 					const fullPath = path.join(templateRoot, filePath);
 					const html = await fs.readFile(fullPath, 'utf-8');
 					templateFiles.set(filePath, html);
+					const fileInfo = new Map<string, PartialSourceInfo>();
+					for (const [name, root] of compiledFile.partials) {
+						if (root.meta) fileInfo.set(name, root.meta);
+					}
+					partialInfo.set(filePath, fileInfo);
 				}
 				const cssStart = performance.now();
-				cssAnalysis = analyzeCss({ cssContent, templateFiles });
+				cssAnalysis = analyzeCss({ cssContent, templateFiles, partialInfo });
 				const cssElapsed = performance.now() - cssStart;
 				const matchCount = Array.from(cssAnalysis.elementMatches.values())
 					.reduce((sum, arr) => sum + arr.length, 0);
