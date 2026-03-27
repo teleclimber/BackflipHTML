@@ -114,7 +114,7 @@ export function analyzeCss(input: CssAnalysisInput): CssAnalysisResult {
 					partialRoots.set(key, {
 						roots: [root],
 						file: site.file,
-						partialName: targetPartialName,
+						partialName: site.containingPartialName ?? partialName,
 					});
 					spinesCache.set(key, slotSpines);
 				}

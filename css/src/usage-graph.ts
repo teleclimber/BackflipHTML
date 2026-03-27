@@ -75,9 +75,19 @@ export function buildUsageGraph(templates: ParsedTemplate[]): UsageGraph {
 			}
 		}
 
-		// Process each element
+		// Process each element.
+		// Track the containing b-name partial as we iterate in pre-order so
+		// that usage sites know which lexical partial they belong to.
+		const partialStack: { name: string; endOffset: number }[] = [];
 		for (const el of template.elements) {
 			const info = template.directives.get(el);
+
+			// Pop partials whose subtree we've left
+			const startOffset = el.sourceCodeLocation?.startOffset ?? 0;
+			while (partialStack.length > 0 && startOffset >= partialStack[partialStack.length - 1].endOffset) {
+				partialStack.pop();
+			}
+
 			if (!info) continue;
 
 			if (info.bName) {
@@ -95,11 +105,17 @@ export function buildUsageGraph(templates: ParsedTemplate[]): UsageGraph {
 					definitions.set(info.bName, []);
 				}
 				definitions.get(info.bName)!.push(def);
+
+				const endOffset = el.sourceCodeLocation?.endOffset ?? Infinity;
+				partialStack.push({ name: info.bName, endOffset });
 			}
 
 			if (info.bPartParsed) {
 				const slotInjections = collectSlotInjections(el, template.directives);
 				const parentElement = findParentElement(el);
+				const containingPartialName = partialStack.length > 0
+					? partialStack[partialStack.length - 1].name
+					: null;
 
 				const site: PartialUsageSite = {
 					file: template.filePath,
@@ -108,6 +124,7 @@ export function buildUsageGraph(templates: ParsedTemplate[]): UsageGraph {
 					targetFile: info.bPartParsed.targetFile,
 					parentElement,
 					slotInjections,
+					containingPartialName,
 				};
 
 				if (!usages.has(info.bPartParsed.partialName)) {

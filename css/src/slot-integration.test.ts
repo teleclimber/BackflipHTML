@@ -223,6 +223,58 @@ describe('slot content CSS matching (integration)', () => {
 		});
 	});
 
+	describe('partialName on slot content should be lexical, not target', () => {
+		it('same-file: partialName is the partial containing the b-part usage, not the slot target', () => {
+			const result = analyze({
+				cssContent: '.card-header h2 { color: red; }',
+				templateFiles: new Map([['page.html', [
+					'<div b-name="card">',
+					'  <div class="card-header">',
+					'    <b-unwrap b-slot="header" />',
+					'  </div>',
+					'</div>',
+					'<div b-name="page">',
+					'  <div b-part="#card">',
+					'    <h2 b-in="header">Title</h2>',
+					'  </div>',
+					'</div>',
+				].join('\n')]]),
+			});
+			const match = findMatch(result, 'page.html', '.card-header h2');
+			ok(match, 'h2 should match .card-header h2');
+			strictEqual(match!.partialName, 'page',
+				'partialName should be "page" (lexical partial), not "card" (slot target)');
+		});
+
+		it('cross-file: partialName is the partial containing the b-part usage, not the slot target', () => {
+			const componentHtml = [
+				'<div b-name="card" b-export>',
+				'  <div class="card-header">',
+				'    <b-unwrap b-slot="header" />',
+				'  </div>',
+				'</div>',
+			].join('\n');
+			const pageHtml = [
+				'<div b-name="page">',
+				'  <div b-part="components.html#card">',
+				'    <h2 b-in="header">Title</h2>',
+				'  </div>',
+				'</div>',
+			].join('\n');
+			const result = analyze({
+				cssContent: '.card-header h2 { color: red; }',
+				templateFiles: new Map([
+					['components.html', componentHtml],
+					['page.html', pageHtml],
+				]),
+			});
+			const match = findMatch(result, 'page.html', '.card-header h2');
+			ok(match, 'h2 should match .card-header h2');
+			strictEqual(match!.partialName, 'page',
+				'partialName should be "page" (lexical partial), not "card" (slot target)');
+		});
+	});
+
 	describe('top-level (no b-name wrapper) cross-file usage with slots', () => {
 		it('matches when b-part is at root level of file', () => {
 			const componentHtml = [

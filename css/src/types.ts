@@ -79,6 +79,8 @@ export interface PartialUsageSite {
 	parentElement: Element | null;
 	/** slotName -> elements with b-in */
 	slotInjections: Map<string, Element[]>;
+	/** The b-name partial this usage site is lexically inside, or null if at file root */
+	containingPartialName: string | null;
 }
 
 export interface UsageGraph {
