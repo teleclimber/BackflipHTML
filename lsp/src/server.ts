@@ -115,10 +115,12 @@ async function recompile(): Promise<void> {
 					const html = await fs.readFile(fullPath, 'utf-8');
 					templateFiles.set(filePath, html);
 				}
+				const cssStart = performance.now();
 				cssAnalysis = analyzeCss({ cssContent, templateFiles });
+				const cssElapsed = performance.now() - cssStart;
 				const matchCount = Array.from(cssAnalysis.elementMatches.values())
 					.reduce((sum, arr) => sum + arr.length, 0);
-				connection.console.log(`[backflip] css analysis: ${cssAnalysis.rules.length} rules, ${matchCount} element matches`);
+				connection.console.log(`[backflip] css analysis: ${cssAnalysis.rules.length} rules, ${matchCount} element matches (${cssElapsed.toFixed(0)}ms)`);
 			} catch (err) {
 				connection.console.error(`[backflip] css analysis failed: ${err instanceof Error ? err.message : err}`);
 			}
@@ -181,11 +183,6 @@ documents.onDidSave((event) => {
 	} else {
 		scheduleRecompile();
 	}
-});
-
-// Also recompile when documents are opened
-documents.onDidOpen(() => {
-	scheduleRecompile();
 });
 
 // Handle file watcher events (for files not open in the editor, external edits, etc.)

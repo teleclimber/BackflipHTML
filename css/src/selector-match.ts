@@ -1,4 +1,4 @@
-import { is as cssIs } from 'css-select';
+import { compile as cssCompile } from 'css-select';
 import { calculate } from 'specificity';
 import type {
 	CssRule, MatchedRule, ElementMatches, Element, SpineNode,
@@ -182,9 +182,15 @@ function graftOntoSpine(elementNode: MatchNode, spine: ContextSpine): MatchNode 
 
 // --- Specificity ---
 
+const specificityCache = new Map<string, [number, number, number]>();
+
 function getSpecificity(selector: string): [number, number, number] {
+	let cached = specificityCache.get(selector);
+	if (cached) return cached;
 	const result = calculate(selector);
-	return [result.A, result.B, result.C];
+	cached = [result.A, result.B, result.C];
+	specificityCache.set(selector, cached);
+	return cached;
 }
 
 // --- Selector uses class/id check ---
@@ -238,6 +244,22 @@ export function matchSelectors(
 ): Map<string, ElementMatches[]> {
 	const result = new Map<string, ElementMatches[]>();
 
+	// Pre-compile all selectors once
+	const adapterOpts = { adapter: adapter as any };
+	const compiledSelectors = new Map<string, (node: MatchNode) => boolean>();
+	for (const rule of rules) {
+		for (const selector of rule.selectors) {
+			if (!compiledSelectors.has(selector)) {
+				try {
+					const compiled = cssCompile<MatchNode, MatchNode>(selector, adapterOpts);
+					compiledSelectors.set(selector, compiled);
+				} catch {
+					// Skip invalid selectors
+				}
+			}
+		}
+	}
+
 	for (const [partialName, partial] of partialRoots) {
 		const spines = spinesCache.get(partialName) ?? [{ ancestors: [], isConditional: false }];
 
@@ -246,6 +268,10 @@ export function matchSelectors(
 
 		// For each root subtree, graft it onto each spine and test all elements
 		for (const rootNode of partial.roots) {
+			// Build a lookup map from sourceElement to original MatchNode (once per root)
+			const origNodeMap = new Map<Element, MatchNode>();
+			buildOrigNodeMap(rootNode, origNodeMap);
+
 			for (const spine of spines) {
 				const cloned = cloneMatchNode(rootNode);
 				graftOntoSpine(cloned, spine);
@@ -255,7 +281,7 @@ export function matchSelectors(
 				for (const node of allNodes) {
 					// Find the original MatchNode this was cloned from (by sourceElement identity)
 					const origKey = node.sourceElement
-						? findOriginalNode(rootNode, node.sourceElement)
+						? origNodeMap.get(node.sourceElement) ?? null
 						: node;
 					if (!origKey) continue;
 
@@ -270,19 +296,16 @@ export function matchSelectors(
 							const key = `${selector}:${rule.sourceLine}:${rule.sourceCol}`;
 							if (entry.seen.has(key)) continue;
 
-							try {
-								if (cssIs(node, selector, { adapter: adapter as any, cacheResults: false })) {
-									entry.seen.add(key);
-									entry.matches.push({
-										rule,
-										selector,
-										specificity: getSpecificity(selector),
-										mediaConditions: rule.mediaConditions,
-										matchType: determineMatchType(node, spine, selector),
-									});
-								}
-							} catch {
-								// Skip invalid selectors
+							const compiled = compiledSelectors.get(selector);
+							if (compiled && compiled(node)) {
+								entry.seen.add(key);
+								entry.matches.push({
+									rule,
+									selector,
+									specificity: getSpecificity(selector),
+									mediaConditions: rule.mediaConditions,
+									matchType: determineMatchType(node, spine, selector),
+								});
 							}
 						}
 					}
@@ -326,14 +349,14 @@ export function matchSelectors(
 	return result;
 }
 
-/** Find a MatchNode in the original tree by sourceElement reference. */
-function findOriginalNode(root: MatchNode, sourceElement: Element): MatchNode | null {
-	if (root.sourceElement === sourceElement) return root;
-	for (const child of root.children) {
-		const found = findOriginalNode(child, sourceElement);
-		if (found) return found;
+/** Build a map from sourceElement to MatchNode for fast lookup. */
+function buildOrigNodeMap(node: MatchNode, map: Map<Element, MatchNode>): void {
+	if (node.sourceElement) {
+		map.set(node.sourceElement, node);
 	}
-	return null;
+	for (const child of node.children) {
+		buildOrigNodeMap(child, map);
+	}
 }
 
 function cloneMatchNode(node: MatchNode): MatchNode {

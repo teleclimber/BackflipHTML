@@ -24,27 +24,36 @@ export { computeSpines } from './context-spines.js';
 
 export function analyzeCss(input: CssAnalysisInput): CssAnalysisResult {
 	const { cssContent, templateFiles } = input;
+	const timings: string[] = [];
+	let t = performance.now();
 
 	// Step 1: Parse CSS
 	const rules = parseCssFile(cssContent);
+	timings.push(`parse-css: ${(performance.now() - t).toFixed(0)}ms`);
 	if (rules.length === 0) {
 		return { elementMatches: new Map(), rules };
 	}
 
 	// Step 2: Parse all templates
+	t = performance.now();
 	const templates = [];
 	for (const [filePath, html] of templateFiles) {
 		templates.push(parseTemplate(html, filePath));
 	}
+	timings.push(`parse-templates: ${(performance.now() - t).toFixed(0)}ms`);
 
 	// Step 3: Build usage graph
+	t = performance.now();
 	const usageGraph = buildUsageGraph(templates);
+	timings.push(`usage-graph: ${(performance.now() - t).toFixed(0)}ms`);
 
 	// Step 4: Compute context spines for each partial
+	t = performance.now();
 	const spinesCache = new Map<string, ContextSpine[]>();
 	for (const partialName of usageGraph.definitions.keys()) {
 		spinesCache.set(partialName, computeSpines(partialName, usageGraph));
 	}
+	timings.push(`spines: ${(performance.now() - t).toFixed(0)}ms`);
 
 	// Step 5: Build MatchNode trees for each partial's elements
 	const partialRoots = new Map<string, { roots: MatchNode[]; file: string; partialName: string }>();
@@ -111,7 +120,11 @@ export function analyzeCss(input: CssAnalysisInput): CssAnalysisResult {
 	}
 
 	// Step 6: Match selectors
+	t = performance.now();
 	const elementMatches = matchSelectors(rules, partialRoots, spinesCache);
+	timings.push(`match-selectors: ${(performance.now() - t).toFixed(0)}ms`);
+
+	console.log(`[backflip] css analysis breakdown: ${timings.join(', ')}`);
 
 	return { elementMatches, rules };
 }
