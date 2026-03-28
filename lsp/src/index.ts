@@ -1,5 +1,5 @@
 import { collectSlots } from '@backflip/html';
-import type { CompiledDirectory, CompiledFile, RootTNode, TNode, PartialRefTNode, ForTNode, IfTNode, SlotTNode, SourceLoc } from '@backflip/html';
+import type { CompiledDirectory, CompiledFile, RootTNode, TNode, PartialRefTNode, ForTNode, IfTNode, SlotTNode, SourceLoc, DataShape } from '@backflip/html';
 
 export interface PartialDef {
 	file: string;
@@ -8,6 +8,7 @@ export interface PartialDef {
 	exported: boolean;
 	slots: string[];
 	freeVars: string[];
+	dataShape?: Map<string, DataShape>;
 }
 
 export interface PartialRef {
@@ -38,6 +39,7 @@ export function buildIndex(directory: CompiledDirectory): ProjectIndex {
 				exported: root.exported ?? false,
 				slots,
 				freeVars: root.freeVars ?? [],
+				dataShape: root.dataShape,
 			};
 			const existing = partialDefs.get(name);
 			if (existing) {

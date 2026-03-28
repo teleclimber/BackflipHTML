@@ -125,6 +125,34 @@ describe('getHover', () => {
 			ok(v.includes('**Slots:** none'));
 			ok(v.includes('**Data:** none'));
 		});
+
+		it('shows rich data shape when dataShape is provided', () => {
+			const dataShape = new Map<string, import('@backflip/html').DataShape>([
+				['title', { usages: new Set(['printed'] as const) }],
+				['user', {
+					usages: new Set<import('@backflip/html').UsageKind>(),
+					properties: new Map([
+						['name', { usages: new Set(['printed'] as const) }],
+						['email', { usages: new Set(['attribute'] as const), attributes: new Set(['href']) }],
+					]),
+				}],
+				['items', { usages: new Set(['iterable', 'boolean'] as const) }],
+			]);
+			const index = makeIndex(
+				[{ file: 'page.html', name: 'card', loc: makeLoc(1, 1, 1, 20), exported: false, freeVars: ['items', 'title', 'user'], dataShape }],
+				[],
+			);
+			const doc = makeDoc(['<div b-part="#card"></div>']);
+			const result = getHover(doc, pos(0, 15), 'page.html', index);
+			const v = hoverValue(result);
+			ok(v.includes('`title`'), 'should include title');
+			ok(v.includes('printed'), 'should show printed usage');
+			ok(v.includes('.name'), 'should show property name');
+			ok(v.includes('.email'), 'should show property email');
+			ok(v.includes('attribute: href'), 'should show attribute name');
+			ok(v.includes('iterable'), 'should show iterable usage');
+			ok(v.includes('boolean'), 'should show boolean usage');
+		});
 	});
 
 	describe('b-name', () => {

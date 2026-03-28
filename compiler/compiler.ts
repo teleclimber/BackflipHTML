@@ -5,7 +5,8 @@ import { interpretBackcode } from './backcode.js';
 import type { Parsed } from './backcode.js';
 export { BackflipError } from './errors.js';
 import { BackflipError } from './errors.js';
-import { inferFreeVars } from './data-shape.js';
+import { inferFreeVars, inferDataShape } from './data-shape.js';
+import type { DataShape } from './data-shape.js';
 
 export interface SourceLoc {
 	startLine: number;    // 1-based
@@ -33,6 +34,7 @@ export interface RootTNode {
 	loc?: SourceLoc,
 	exported?: boolean,
 	freeVars?: string[],
+	dataShape?: Map<string, DataShape>,
 	meta?: PartialMeta
 }
 export interface RawTNode extends ChildTNode {
@@ -1056,9 +1058,11 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 		s.on('error', (err) => { reject(err); });
 		rewriteStream.on('error', (err) => { reject(err); });
 		rewriteStream.on('end', () => {
-			// Post-processing: infer free variables for each partial
+			// Post-processing: infer data shapes and free variables for each partial
 			for (const [, root] of compiledFile.partials) {
-				root.freeVars = inferFreeVars(root);
+				const shape = inferDataShape(root);
+				root.dataShape = shape;
+				root.freeVars = [...shape.keys()].sort();
 			}
 			resolve({ compiled: compiledFile, errors });
 		});

@@ -3,6 +3,7 @@ import { MarkupKind } from 'vscode-languageserver';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 import type { ProjectIndex, PartialDef } from './index.js';
 import type { CssAnalysisResult } from '@backflip/css';
+import type { DataShape } from '@backflip/html';
 import { parseBPartValue } from './parse-bpart.js';
 import * as path from 'node:path';
 
@@ -88,6 +89,110 @@ function formatFreeVars(freeVars: string[]): string {
 	return `**Data:** ${freeVars.map(v => `\`${v}\``).join(', ')}`;
 }
 
+function formatDataInfo(def: PartialDef): string {
+	if (def.dataShape && def.dataShape.size > 0) {
+		return formatDataShape(def.dataShape);
+	}
+	return formatFreeVars(def.freeVars);
+}
+
+function formatDataShape(shapes: Map<string, DataShape>): string {
+	if (shapes.size === 0) return '**Data:** none';
+	const entries: string[] = [];
+	for (const [name, shape] of shapes) {
+		entries.push(`\`${name}\` — ${describeShape(name, shape)}`);
+	}
+	return `**Data:**  \n${entries.join('  \n')}`;
+}
+
+function describeShape(_name: string, shape: DataShape): string {
+	const parts: string[] = [];
+
+	// Own usages
+	if (shape.usages.size > 0) {
+		for (const usage of shape.usages) {
+			if (usage === 'attribute' && shape.attributes && shape.attributes.size > 0) {
+				parts.push(`attribute: ${[...shape.attributes].join(', ')}`);
+			} else if (usage === 'passed' && shape.passedTo && shape.passedTo.length > 0) {
+				for (const p of shape.passedTo) {
+					parts.push(`passed → ${p.partial}.${p.as}`);
+				}
+			} else {
+				parts.push(usage);
+			}
+		}
+	}
+
+	if (shape.indexed) {
+		parts.push('indexed');
+	}
+
+	// Element shape summary
+	if (shape.elementShape) {
+		const elDesc = describeShapeBrief(shape.elementShape);
+		if (elDesc) parts.push(`element: ${elDesc}`);
+	}
+
+	// Properties — flatten with dot notation
+	if (shape.properties && shape.properties.size > 0) {
+		for (const [prop, propShape] of shape.properties) {
+			const propParts = flattenProperties(prop, propShape);
+			parts.push(...propParts);
+		}
+	}
+
+	return parts.join(' · ') || 'used';
+}
+
+function describeShapeBrief(shape: DataShape): string {
+	const parts: string[] = [];
+	if (shape.usages.size > 0) parts.push([...shape.usages].join(', '));
+	if (shape.properties && shape.properties.size > 0) {
+		parts.push(`{${[...shape.properties.keys()].join(', ')}}`);
+	}
+	return parts.join(' ') || '';
+}
+
+function flattenProperties(prefix: string, shape: DataShape): string[] {
+	const results: string[] = [];
+
+	// Leaf: has own usages
+	if (shape.usages.size > 0) {
+		const usageStr = describeLeafUsages(shape);
+		results.push(`.${prefix} (${usageStr})`);
+	}
+
+	// Recurse into sub-properties
+	if (shape.properties && shape.properties.size > 0) {
+		for (const [prop, propShape] of shape.properties) {
+			results.push(...flattenProperties(`${prefix}.${prop}`, propShape));
+		}
+	}
+
+	// If no usages and no sub-properties, just note it exists
+	if (results.length === 0) {
+		results.push(`.${prefix}`);
+	}
+
+	return results;
+}
+
+function describeLeafUsages(shape: DataShape): string {
+	const parts: string[] = [];
+	for (const usage of shape.usages) {
+		if (usage === 'attribute' && shape.attributes && shape.attributes.size > 0) {
+			parts.push(`attribute: ${[...shape.attributes].join(', ')}`);
+		} else if (usage === 'passed' && shape.passedTo && shape.passedTo.length > 0) {
+			for (const p of shape.passedTo) {
+				parts.push(`passed → ${p.partial}.${p.as}`);
+			}
+		} else {
+			parts.push(usage);
+		}
+	}
+	return parts.join(', ');
+}
+
 function mkHover(lines: string[]): Hover {
 	return {
 		contents: {
@@ -117,7 +222,7 @@ function hoverBPart(
 	const exportInfo = def.exported ? ' · exported' : '';
 	lines.push(`**Partial** \`${partialName}\`${fileInfo}${exportInfo}`);
 	lines.push(formatSlots(def.slots));
-	lines.push(formatFreeVars(def.freeVars));
+	lines.push(formatDataInfo(def));
 	return mkHover(lines);
 }
 
@@ -140,7 +245,7 @@ function hoverBName(
 	lines.push(`**Partial** \`${value}\``);
 	lines.push(`${exportInfo} · ${refCount} reference${refCount !== 1 ? 's' : ''}`);
 	lines.push(formatSlots(def.slots));
-	lines.push(formatFreeVars(def.freeVars));
+	lines.push(formatDataInfo(def));
 	return mkHover(lines);
 }
 
