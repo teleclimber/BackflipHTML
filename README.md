@@ -226,7 +226,21 @@ A standalone **partial preview** module that renders partials with auto-generate
 - Fills slots with grey placeholder blocks
 - Includes the project's global CSS from `backflip.json` `stylesheet`
 - Handles document-level partials (`<html>`, `<body>`) without double-wrapping
-- Available as a programmatic API and via the VSCode extension
+- Available as a programmatic API, via the VSCode extension, or as a local preview server
+
+### Preview server
+
+Run a local server to browse and preview all partials in the browser:
+
+```bash
+npm run preview
+```
+
+This compiles templates from `backflip.json`, starts a server at `http://localhost:3000`, and shows a tree list of all files and partials. Click any partial to see its rendered preview. Use `--port` to change the port:
+
+```bash
+npx tsx preview/server.ts --port 8080
+```
 
 ---
 
