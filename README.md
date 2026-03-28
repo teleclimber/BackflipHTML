@@ -217,12 +217,26 @@ cd lsp && npm install && npm run build
 
 ---
 
+## `preview/`
+
+A standalone **partial preview** module that renders partials with auto-generated mock data. No backend or real data required — the preview infers what data each partial needs from its data shape and generates plausible values. See [`docs/preview.md`](docs/preview.md) for details.
+
+- Generates mock data from `DataShape` (printed → variable name string, boolean → `true`, iterable → array of 3 items, attributes → sensible defaults)
+- Resolves data shapes across `b-part` references (looks up the called partial's requirements)
+- Fills slots with grey placeholder blocks
+- Includes the project's global CSS from `backflip.json` `stylesheet`
+- Handles document-level partials (`<html>`, `<body>`) without double-wrapping
+- Available as a programmatic API and via the VSCode extension
+
+---
+
 ## `vscode-backflip/`
 
 A **VSCode extension** that launches the BackflipHTML language server and provides:
 
 - TextMate grammar injection for `b-*` directive highlighting and `{{ }}` interpolation
 - Language configuration for bracket matching and auto-closing pairs
+- **Preview Partial** command — right-click in an HTML template or use the Command Palette to open a live preview panel
 
 ### Building & installing
 

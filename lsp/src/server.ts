@@ -12,7 +12,7 @@ import {
 	HoverParams,
 } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { compileDirectory, loadConfig, resolveConfigRoot, CONFIG_FILENAME, type BackflipError } from '@backflip/html';
+import { compileDirectory, loadConfig, resolveConfigRoot, CONFIG_FILENAME, previewPartial, type BackflipError, type CompiledFile } from '@backflip/html';
 import { analyzeCss, type CssAnalysisResult, type PartialSourceInfo } from '@backflip/css';
 import { buildIndex, type ProjectIndex } from './index.js';
 import { errorsToDiagnostics } from './diagnostics.js';
@@ -31,6 +31,7 @@ let workspaceRoot = '';
 let templateRoot: string | null = null;
 let stylesheetPath: string | null = null;
 let projectIndex: ProjectIndex = { partialDefs: new Map(), partialRefs: [] };
+let compiledFiles: Map<string, CompiledFile> = new Map();
 let cssAnalysis: CssAnalysisResult | null = null;
 let recompileTimer: ReturnType<typeof setTimeout> | null = null;
 let knownFiles: Set<string> = new Set();
@@ -68,6 +69,7 @@ async function loadAndApplyConfig(): Promise<void> {
 			templateRoot = null;
 			stylesheetPath = null;
 			cssAnalysis = null;
+			compiledFiles = new Map();
 			clearAllDiagnostics();
 			projectIndex = { partialDefs: new Map(), partialRefs: [] };
 			return;
@@ -83,6 +85,7 @@ async function loadAndApplyConfig(): Promise<void> {
 		templateRoot = null;
 		stylesheetPath = null;
 		cssAnalysis = null;
+		compiledFiles = new Map();
 		clearAllDiagnostics();
 		projectIndex = { partialDefs: new Map(), partialRefs: [] };
 	}
@@ -101,6 +104,7 @@ async function recompile(): Promise<void> {
 
 	try {
 		const { directory, errors } = await compileDirectory(templateRoot);
+		compiledFiles = directory.files;
 		projectIndex = buildIndex(directory);
 		connection.console.log(`[backflip] recompile: ${directory.files.size} files, ${errors.length} errors, ${projectIndex.partialDefs.size} partials, ${projectIndex.partialRefs.length} refs`);
 
@@ -330,6 +334,43 @@ connection.onRequest('backflip/findSelectorsForElement', (params: { uri: string;
 		...result,
 		stylesheetPath,
 	};
+});
+
+// Preview Partial: generate preview HTML for a partial
+connection.onRequest('backflip/previewPartial', async (params: { uri: string; partialName: string }) => {
+	if (!templateRoot || compiledFiles.size === 0) return null;
+
+	const filePath = params.uri.replace('file://', '');
+	const relPath = path.relative(templateRoot, filePath);
+	const compiledFile = compiledFiles.get(relPath);
+	if (!compiledFile) return null;
+
+	// Read CSS content if stylesheet is configured
+	let cssContent: string | undefined;
+	if (stylesheetPath) {
+		try {
+			cssContent = await fs.readFile(stylesheetPath, 'utf-8');
+		} catch { /* stylesheet not readable */ }
+	}
+
+	try {
+		const result = await previewPartial({
+			partialName: params.partialName,
+			compiledFile,
+			allFiles: compiledFiles,
+			fileName: relPath,
+			cssContent,
+		});
+		return {
+			html: result.html,
+			partialName: params.partialName,
+			mockData: result.mockData,
+			errors: result.errors,
+		};
+	} catch (err) {
+		connection.console.error(`[backflip] preview error: ${err instanceof Error ? err.message : err}`);
+		return null;
+	}
 });
 
 connection.listen();

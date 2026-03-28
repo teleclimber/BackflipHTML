@@ -29,6 +29,10 @@
       {
         "command": "backflipHTML.findAllMatches",
         "title": "BackflipHTML: Find All Matches"
+      },
+      {
+        "command": "backflipHTML.previewPartial",
+        "title": "BackflipHTML: Preview Partial"
       }
     ],
     "menus": {
@@ -42,6 +46,11 @@
           "command": "backflipHTML.findAllMatches",
           "when": "editorLangId == css",
           "group": "navigation@100"
+        },
+        {
+          "command": "backflipHTML.previewPartial",
+          "when": "editorLangId == html",
+          "group": "navigation@101"
         }
       ]
     },

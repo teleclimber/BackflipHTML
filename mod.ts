@@ -9,3 +9,5 @@ export { collectSlots } from './compiler/compiler.js';
 export type { SourceLoc, CompiledFile, RootTNode, TNode, PartialRefTNode, ForTNode, IfTNode, IfBranch, SlotTNode, PrintTNode, RawTNode, AttrBindTNode, PartialMeta } from './compiler/compiler.js';
 export { inferDataShape, inferFreeVars } from './compiler/data-shape.js';
 export type { DataShape, UsageKind } from './compiler/data-shape.js';
+export { previewPartial } from './preview/preview.js';
+export type { PreviewOptions, PreviewResult } from './preview/preview.js';

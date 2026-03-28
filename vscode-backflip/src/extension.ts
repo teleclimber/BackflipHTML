@@ -9,12 +9,14 @@ import {
 } from 'vscode-languageclient/node.js';
 import { showSelectorsPanel, refreshSelectorsPanel, isSelectorsOpen, type SelectorsData } from './panels/selectors-panel.js';
 import { MatchesTreeProvider, type MatchInfo } from './panels/matches-tree.js';
+import { showPreviewPanel, refreshPreviewPanel, isPreviewOpen } from './panels/preview-panel.js';
 
 let client: LanguageClient;
 
 // Store last query params for auto-refresh
 let lastSelectorsQuery: { uri: string; line: number; character: number } | null = null;
 let lastMatchesQuery: { uri: string; line: number } | null = null;
+let lastPreviewQuery: { uri: string; partialName: string } | null = null;
 
 export function activate(context: ExtensionContext): void {
 	// Register command to open a CSS file at a specific line/column
@@ -94,6 +96,57 @@ export function activate(context: ExtensionContext): void {
 	);
 	context.subscriptions.push(findAllMatchesDisposable);
 
+	// Preview Partial command
+	const previewPartialDisposable = vscode.commands.registerCommand(
+		'backflipHTML.previewPartial',
+		async () => {
+			const editor = vscode.window.activeTextEditor;
+			if (!editor || !client?.isRunning()) return;
+
+			// Find which partial the cursor is in by checking document symbols
+			const symbols = await client.sendRequest<Array<{ name: string; range: { start: { line: number }; end: { line: number } } }> | null>(
+				'textDocument/documentSymbol',
+				{ textDocument: { uri: editor.document.uri.toString() } },
+			);
+			if (!symbols || symbols.length === 0) {
+				vscode.window.showInformationMessage('No partials found in this file.');
+				return;
+			}
+
+			// Find the partial containing the cursor
+			const cursorLine = editor.selection.active.line;
+			let partialName: string | null = null;
+			for (const sym of symbols) {
+				if (cursorLine >= sym.range.start.line && cursorLine <= sym.range.end.line) {
+					partialName = sym.name;
+					break;
+				}
+			}
+
+			if (!partialName) {
+				// If cursor is not in any partial, let user pick from list
+				const names = symbols.map(s => s.name);
+				const picked = await vscode.window.showQuickPick(names, { placeHolder: 'Select a partial to preview' });
+				if (!picked) return;
+				partialName = picked;
+			}
+
+			const params = {
+				uri: editor.document.uri.toString(),
+				partialName,
+			};
+			lastPreviewQuery = params;
+
+			const result = await client.sendRequest<{ html: string; partialName: string } | null>('backflip/previewPartial', params);
+			if (!result) {
+				vscode.window.showInformationMessage('Could not generate preview for this partial.');
+				return;
+			}
+			showPreviewPanel(result.html, result.partialName, context);
+		},
+	);
+	context.subscriptions.push(previewPartialDisposable);
+
 	// Server is bundled inside the extension at server/server.cjs
 	const serverModule = context.asAbsolutePath(
 		path.join('server', 'server.cjs')
@@ -161,6 +214,13 @@ export function activate(context: ExtensionContext): void {
 				const result = await client.sendRequest<{ matches: MatchInfo[]; templateRoot: string } | null>('backflip/findMatchesForSelector', lastMatchesQuery);
 				if (result && result.matches.length > 0) {
 					matchesTreeProvider.setData(result.matches, '', result.templateRoot);
+				}
+			}
+
+			if (isPreviewOpen() && lastPreviewQuery) {
+				const result = await client.sendRequest<{ html: string; partialName: string } | null>('backflip/previewPartial', lastPreviewQuery);
+				if (result) {
+					refreshPreviewPanel(result.html, result.partialName);
 				}
 			}
 		});
