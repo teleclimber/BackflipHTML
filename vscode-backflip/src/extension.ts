@@ -7,8 +7,14 @@ import {
 	ServerOptions,
 	TransportKind,
 } from 'vscode-languageclient/node.js';
+import { showSelectorsPanel, refreshSelectorsPanel, isSelectorsOpen, type SelectorsData } from './panels/selectors-panel.js';
+import { MatchesTreeProvider, type MatchInfo } from './panels/matches-tree.js';
 
 let client: LanguageClient;
+
+// Store last query params for auto-refresh
+let lastSelectorsQuery: { uri: string; line: number; character: number } | null = null;
+let lastMatchesQuery: { uri: string; line: number } | null = null;
 
 export function activate(context: ExtensionContext): void {
 	// Register command to open a CSS file at a specific line/column
@@ -27,6 +33,66 @@ export function activate(context: ExtensionContext): void {
 		},
 	);
 	context.subscriptions.push(openCssRuleDisposable);
+
+	// Set up the matches tree view
+	const matchesTreeProvider = new MatchesTreeProvider();
+	const treeView = vscode.window.createTreeView('backflipHTML.matchesTree', {
+		treeDataProvider: matchesTreeProvider,
+	});
+	context.subscriptions.push(treeView);
+
+	// Find All Selectors command (HTML → CSS rules)
+	const findAllSelectorsDisposable = vscode.commands.registerCommand(
+		'backflipHTML.findAllSelectors',
+		async () => {
+			const editor = vscode.window.activeTextEditor;
+			if (!editor || !client?.isRunning()) return;
+
+			const params = {
+				uri: editor.document.uri.toString(),
+				line: editor.selection.active.line,
+				character: editor.selection.active.character,
+			};
+			lastSelectorsQuery = params;
+
+			const result = await client.sendRequest<SelectorsData | null>('backflip/findSelectorsForElement', params);
+			if (!result) {
+				vscode.window.showInformationMessage('No CSS selectors match this element.');
+				return;
+			}
+			showSelectorsPanel(result, context);
+		},
+	);
+	context.subscriptions.push(findAllSelectorsDisposable);
+
+	// Find All Matches command (CSS → HTML elements)
+	const findAllMatchesDisposable = vscode.commands.registerCommand(
+		'backflipHTML.findAllMatches',
+		async () => {
+			const editor = vscode.window.activeTextEditor;
+			if (!editor || !client?.isRunning()) return;
+
+			const params = {
+				uri: editor.document.uri.toString(),
+				line: editor.selection.active.line,
+			};
+			lastMatchesQuery = params;
+
+			const result = await client.sendRequest<{ matches: MatchInfo[]; templateRoot: string } | null>('backflip/findMatchesForSelector', params);
+			if (!result || result.matches.length === 0) {
+				vscode.window.showInformationMessage('No HTML elements match this selector.');
+				return;
+			}
+
+			// Extract selector text (everything before the opening brace)
+			const lineText = editor.document.lineAt(params.line).text;
+			const selectorText = lineText.replace(/\s*\{.*$/, '').trim();
+			matchesTreeProvider.setData(result.matches, selectorText, result.templateRoot);
+			treeView.title = `Matches for "${selectorText}"`;
+			await vscode.commands.executeCommand('backflipHTML.matchesTree.focus');
+		},
+	);
+	context.subscriptions.push(findAllMatchesDisposable);
 
 	// Server is bundled inside the extension at server/server.cjs
 	const serverModule = context.asAbsolutePath(
@@ -81,7 +147,24 @@ export function activate(context: ExtensionContext): void {
 		clientOptions,
 	);
 
-	client.start();
+	client.start().then(() => {
+		// Listen for analysis updates to auto-refresh open panels
+		client.onNotification('backflip/analysisUpdated', async () => {
+			if (isSelectorsOpen() && lastSelectorsQuery) {
+				const result = await client.sendRequest<SelectorsData | null>('backflip/findSelectorsForElement', lastSelectorsQuery);
+				if (result) {
+					refreshSelectorsPanel(result);
+				}
+			}
+
+			if (lastMatchesQuery) {
+				const result = await client.sendRequest<{ matches: MatchInfo[]; templateRoot: string } | null>('backflip/findMatchesForSelector', lastMatchesQuery);
+				if (result && result.matches.length > 0) {
+					matchesTreeProvider.setData(result.matches, '', result.templateRoot);
+				}
+			}
+		});
+	});
 }
 
 export function deactivate(): Thenable<void> | undefined {

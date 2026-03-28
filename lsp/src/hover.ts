@@ -243,32 +243,33 @@ function hoverBData(
 
 // --- CSS selector hover (in stylesheet) ---
 
-function hoverCssSelector(
-	line: string,
-	position: Position,
-	filePath: string,
-	cssAnalysis?: CssAnalysisResult | null,
-	stylesheetPath?: string | null,
-	templateRoot?: string | null,
-): Hover | null {
-	if (!cssAnalysis || !stylesheetPath || !templateRoot) return null;
+export interface ElementMatchInfo {
+	file: string;
+	partialName: string;
+	startLine: number;
+	startCol: number;
+	matchType: string;
+}
 
-	// Only activate when hovering in the stylesheet file
+/**
+ * Find all HTML elements that match a CSS rule at the given line.
+ * Shared by hover and "Find All Matches" panel.
+ */
+export function findElementsForSelector(
+	filePath: string,
+	lspLine0: number,
+	cssAnalysis: CssAnalysisResult,
+	stylesheetPath: string,
+	templateRoot: string,
+): ElementMatchInfo[] | null {
 	const relStylesheet = path.relative(templateRoot, stylesheetPath);
 	if (filePath !== relStylesheet && filePath !== stylesheetPath) return null;
 
-	const lspLine = position.line + 1; // convert to 1-based
+	const lspLine = lspLine0 + 1; // convert to 1-based
 
-	// Collect all element matches whose rule sourceLine matches the hovered line
-	const matchingElements: Array<{
-		file: string;
-		partialName: string;
-		startLine: number;
-		startCol: number;
-		matchType: string;
-	}> = [];
+	const matchingElements: ElementMatchInfo[] = [];
 
-	for (const [file, elements] of cssAnalysis.elementMatches) {
+	for (const [_file, elements] of cssAnalysis.elementMatches) {
 		for (const el of elements) {
 			for (const m of el.matches) {
 				if (m.rule.sourceLine === lspLine) {
@@ -288,14 +289,27 @@ function hoverCssSelector(
 
 	// Deduplicate by file + partialName + startLine
 	const seen = new Set<string>();
-	const unique = matchingElements.filter(e => {
+	return matchingElements.filter(e => {
 		const key = `${e.file}:${e.partialName}:${e.startLine}`;
 		if (seen.has(key)) return false;
 		seen.add(key);
 		return true;
 	});
+}
 
-	// Count unique partials
+function hoverCssSelector(
+	line: string,
+	position: Position,
+	filePath: string,
+	cssAnalysis?: CssAnalysisResult | null,
+	stylesheetPath?: string | null,
+	templateRoot?: string | null,
+): Hover | null {
+	if (!cssAnalysis || !stylesheetPath || !templateRoot) return null;
+
+	const unique = findElementsForSelector(filePath, position.line, cssAnalysis, stylesheetPath, templateRoot);
+	if (!unique) return null;
+
 	const partialSet = new Set(unique.map(e => `${e.file}#${e.partialName}`));
 	const partialCount = partialSet.size;
 	const matchCount = unique.length;
@@ -320,6 +334,71 @@ function hoverCssSelector(
 
 // --- CSS rules hover ---
 
+export interface RuleMatchInfo {
+	selector: string;
+	specificity: [number, number, number];
+	matchType: 'definite' | 'conditional' | 'dynamic';
+	properties: Array<{ name: string; value: string }>;
+	mediaConditions: string[];
+	sourceLine: number;
+	sourceCol: number;
+}
+
+export interface ElementRulesResult {
+	tagName: string;
+	file: string;
+	partialName: string;
+	startLine: number;
+	startCol: number;
+	rules: RuleMatchInfo[];
+}
+
+/**
+ * Find all CSS rules that match an HTML element at the given position.
+ * Shared by hover and "Find All Selectors" panel.
+ */
+export function findRulesForElement(
+	line: string,
+	lspLine0: number,
+	character: number,
+	filePath: string,
+	cssAnalysis: CssAnalysisResult,
+): ElementRulesResult | null {
+	const matches = cssAnalysis.elementMatches.get(filePath);
+	if (!matches) return null;
+
+	const lspLine = lspLine0 + 1; // convert to 1-based
+
+	const tagMatch = line.match(/<([a-zA-Z][\w-]*)/);
+	if (!tagMatch) return null;
+
+	const tagStart = line.indexOf(tagMatch[0]);
+
+	const elementMatch = matches.find(m => {
+		if (m.startLine !== lspLine) return false;
+		return character >= tagStart;
+	});
+
+	if (!elementMatch || elementMatch.matches.length === 0) return null;
+
+	return {
+		tagName: tagMatch[1],
+		file: elementMatch.file,
+		partialName: elementMatch.partialName,
+		startLine: elementMatch.startLine,
+		startCol: elementMatch.startCol,
+		rules: elementMatch.matches.map(m => ({
+			selector: m.selector,
+			specificity: m.specificity,
+			matchType: m.matchType,
+			properties: m.rule.properties.map(p => ({ name: p.name, value: p.value })),
+			mediaConditions: m.mediaConditions,
+			sourceLine: m.rule.sourceLine,
+			sourceCol: m.rule.sourceCol,
+		})),
+	};
+}
+
 function hoverCssRules(
 	line: string,
 	position: Position,
@@ -329,53 +408,33 @@ function hoverCssRules(
 ): Hover | null {
 	if (!cssAnalysis) return null;
 
-	const matches = cssAnalysis.elementMatches.get(filePath);
-	if (!matches) return null;
+	const result = findRulesForElement(line, position.line, position.character, filePath, cssAnalysis);
+	if (!result) return null;
 
-	// Find an element match on this line (1-based line in parse5 vs 0-based in LSP)
-	const lspLine = position.line + 1; // convert to 1-based
-
-	// Check if cursor is on an HTML tag opening
-	const tagMatch = line.match(/<([a-zA-Z][\w-]*)/);
-	if (!tagMatch) return null;
-
-	const tagStart = line.indexOf(tagMatch[0]);
-	const tagEnd = tagStart + tagMatch[0].length;
-
-	// Find the element match at this line that the cursor overlaps with
-	// We look for elements whose start tag is on this line
-	const elementMatch = matches.find(m => {
-		if (m.startLine !== lspLine) return false;
-		// Check if cursor is anywhere within the opening tag region
-		return position.character >= tagStart;
-	});
-
-	if (!elementMatch || elementMatch.matches.length === 0) return null;
-
-	const ruleCount = elementMatch.matches.length;
+	const ruleCount = result.rules.length;
 	const lines: string[] = [];
 	lines.push(`**CSS Rules** (${ruleCount} rule${ruleCount !== 1 ? 's' : ''})`);
 	lines.push('');
 
-	for (const m of elementMatch.matches) {
+	for (const m of result.rules) {
 		const spec = `(${m.specificity.join(', ')})`;
 		const typeTag = m.matchType !== 'definite' ? ` · *${m.matchType}*` : '';
 
 		let locationLink = '';
-		if (stylesheetPath && m.rule.sourceLine > 0) {
+		if (stylesheetPath && m.sourceLine > 0) {
 			const fileName = path.basename(stylesheetPath);
 			const args = encodeURIComponent(JSON.stringify({
 				path: stylesheetPath,
-				line: m.rule.sourceLine - 1,
-				col: m.rule.sourceCol - 1,
+				line: m.sourceLine - 1,
+				col: m.sourceCol - 1,
 			}));
-			locationLink = ` · [${fileName}:${m.rule.sourceLine}](command:backflipHTML.openCssRule?${args})`;
+			locationLink = ` · [${fileName}:${m.sourceLine}](command:backflipHTML.openCssRule?${args})`;
 		}
 
 		lines.push(`\`${m.selector}\` — ${spec}${typeTag}${locationLink}`);
 
-		if (m.rule.properties.length > 0) {
-			const props = m.rule.properties.map(p => `${p.name}: ${p.value}`).join('; ');
+		if (m.properties.length > 0) {
+			const props = m.properties.map(p => `${p.name}: ${p.value}`).join('; ');
 			lines.push(`  ${props}`);
 		}
 

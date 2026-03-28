@@ -20,7 +20,7 @@ import { findDefinition } from './definition.js';
 import { findReferences } from './references.js';
 import { getDocumentSymbols } from './symbols.js';
 import { parseBPartValue } from './parse-bpart.js';
-import { getHover } from './hover.js';
+import { getHover, findElementsForSelector, findRulesForElement } from './hover.js';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 
@@ -162,6 +162,7 @@ async function recompile(): Promise<void> {
 				diagnostics: globalDiags,
 			});
 		}
+		connection.sendNotification('backflip/analysisUpdated');
 	} catch (err) {
 		connection.console.error(`[backflip] recompile failed: ${err instanceof Error ? err.stack : err}`);
 	}
@@ -293,6 +294,42 @@ connection.onHover((params: HoverParams) => {
 	const relPath = path.relative(templateRoot, filePath);
 
 	return getHover(doc, params.position, relPath, projectIndex, cssAnalysis, stylesheetPath, templateRoot);
+});
+
+// Find All Matches: CSS selector → matching HTML elements
+connection.onRequest('backflip/findMatchesForSelector', (params: { uri: string; line: number }) => {
+	if (!templateRoot || !cssAnalysis || !stylesheetPath) return null;
+
+	const filePath = params.uri.replace('file://', '');
+	const relPath = path.relative(templateRoot, filePath);
+
+	const matches = findElementsForSelector(relPath, params.line, cssAnalysis, stylesheetPath, templateRoot);
+	if (!matches) return null;
+	return { matches, templateRoot };
+});
+
+// Find All Selectors: HTML element → matching CSS rules
+connection.onRequest('backflip/findSelectorsForElement', (params: { uri: string; line: number; character: number }) => {
+	if (!templateRoot || !cssAnalysis) return null;
+
+	const filePath = params.uri.replace('file://', '');
+	const relPath = path.relative(templateRoot, filePath);
+
+	const doc = documents.get(params.uri);
+	if (!doc) return null;
+
+	const lineText = doc.getText({
+		start: { line: params.line, character: 0 },
+		end: { line: params.line + 1, character: 0 },
+	});
+
+	const result = findRulesForElement(lineText, params.line, params.character, relPath, cssAnalysis);
+	if (!result) return null;
+
+	return {
+		...result,
+		stylesheetPath,
+	};
 });
 
 connection.listen();

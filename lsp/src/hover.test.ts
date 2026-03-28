@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import { strictEqual, ok, match } from 'node:assert';
-import { getHover } from './hover.js';
+import { getHover, findRulesForElement, findElementsForSelector } from './hover.js';
 import { makeIndex, makeLoc } from './test-helpers.js';
 import { analyzeCss, type PartialSourceInfo } from '@backflip/css';
 
@@ -735,5 +735,177 @@ describe('CSS selector hover integration (analyzeCss + getHover on CSS file)', (
 		ok(v.includes('page'), 'should show page partial');
 		ok(v.includes('components.html'), 'should show components file');
 		ok(v.includes('page.html'), 'should show page file');
+	});
+});
+
+describe('findRulesForElement', () => {
+	function makeCssAnalysis(file: string, matches: Array<{
+		startLine: number;
+		startCol: number;
+		rules: Array<{
+			selector: string;
+			specificity: [number, number, number];
+			properties?: Array<{ name: string; value: string }>;
+			media?: string[];
+			matchType?: string;
+			sourceLine?: number;
+			sourceCol?: number;
+		}>;
+	}>) {
+		const elementMatches = new Map();
+		elementMatches.set(file, matches.map(m => ({
+			element: null,
+			file,
+			partialName: 'test',
+			startLine: m.startLine,
+			startCol: m.startCol,
+			startOffset: 0,
+			matches: m.rules.map(r => ({
+				rule: {
+					selectorText: r.selector,
+					selectors: [r.selector],
+					properties: r.properties ?? [],
+					mediaConditions: r.media ?? [],
+					sourceLine: r.sourceLine ?? 1,
+					sourceCol: r.sourceCol ?? 1,
+				},
+				selector: r.selector,
+				specificity: r.specificity,
+				mediaConditions: r.media ?? [],
+				matchType: r.matchType ?? 'definite',
+			})),
+		})));
+		return { elementMatches, rules: [] };
+	}
+
+	it('returns structured data for matching element', () => {
+		const cssAnalysis = makeCssAnalysis('page.html', [{
+			startLine: 1,
+			startCol: 1,
+			rules: [
+				{ selector: '.card', specificity: [0, 1, 0], properties: [{ name: 'color', value: 'red' }], sourceLine: 5, sourceCol: 3 },
+			],
+		}]);
+		const result = findRulesForElement('<div class="card">Hello</div>', 0, 5, 'page.html', cssAnalysis as any);
+		ok(result, 'should return a result');
+		strictEqual(result!.tagName, 'div');
+		strictEqual(result!.rules.length, 1);
+		strictEqual(result!.rules[0].selector, '.card');
+		strictEqual(result!.rules[0].specificity[1], 1);
+		strictEqual(result!.rules[0].properties[0].name, 'color');
+		strictEqual(result!.rules[0].sourceLine, 5);
+	});
+
+	it('returns null when no element matches', () => {
+		const cssAnalysis = makeCssAnalysis('page.html', [{
+			startLine: 2,
+			startCol: 1,
+			rules: [{ selector: '.card', specificity: [0, 1, 0] }],
+		}]);
+		const result = findRulesForElement('<div>Hello</div>', 0, 5, 'page.html', cssAnalysis as any);
+		strictEqual(result, null);
+	});
+
+	it('returns null for non-tag lines', () => {
+		const cssAnalysis = makeCssAnalysis('page.html', []);
+		const result = findRulesForElement('Hello world', 0, 5, 'page.html', cssAnalysis as any);
+		strictEqual(result, null);
+	});
+});
+
+describe('findElementsForSelector', () => {
+	function makeCssAnalysisWithElements(entries: Array<{
+		file: string;
+		partialName: string;
+		startLine: number;
+		startCol: number;
+		selector: string;
+		ruleLine: number;
+		matchType?: string;
+	}>) {
+		const elementMatches = new Map<string, any[]>();
+		for (const e of entries) {
+			const arr = elementMatches.get(e.file) ?? [];
+			let existing = arr.find((m: any) => m.startLine === e.startLine && m.startCol === e.startCol);
+			if (!existing) {
+				existing = {
+					element: null,
+					file: e.file,
+					partialName: e.partialName,
+					startLine: e.startLine,
+					startCol: e.startCol,
+					startOffset: 0,
+					matches: [],
+				};
+				arr.push(existing);
+			}
+			existing.matches.push({
+				rule: {
+					selectorText: e.selector,
+					selectors: [e.selector],
+					properties: [],
+					mediaConditions: [],
+					sourceLine: e.ruleLine,
+					sourceCol: 1,
+				},
+				selector: e.selector,
+				specificity: [0, 1, 0] as [number, number, number],
+				mediaConditions: [],
+				matchType: e.matchType ?? 'definite',
+			});
+			elementMatches.set(e.file, arr);
+		}
+		return { elementMatches, rules: [] };
+	}
+
+	const ssPath = '/workspace/styles.css';
+	const tplRoot = '/workspace/templates';
+	const ssRelPath = '../styles.css';
+
+	it('returns matching elements for a selector line', () => {
+		const cssAnalysis = makeCssAnalysisWithElements([
+			{ file: 'page.html', partialName: 'card', startLine: 5, startCol: 3, selector: '.card', ruleLine: 1 },
+			{ file: 'page.html', partialName: 'header', startLine: 10, startCol: 1, selector: '.card', ruleLine: 1 },
+		]);
+		const result = findElementsForSelector(ssRelPath, 0, cssAnalysis as any, ssPath, tplRoot);
+		ok(result, 'should return matches');
+		strictEqual(result!.length, 2);
+		strictEqual(result![0].partialName, 'card');
+		strictEqual(result![1].partialName, 'header');
+	});
+
+	it('deduplicates by file + partialName + startLine', () => {
+		const cssAnalysis = makeCssAnalysisWithElements([
+			{ file: 'page.html', partialName: 'card', startLine: 5, startCol: 3, selector: '.a', ruleLine: 1 },
+			{ file: 'page.html', partialName: 'card', startLine: 5, startCol: 3, selector: '.b', ruleLine: 1 },
+		]);
+		const result = findElementsForSelector(ssRelPath, 0, cssAnalysis as any, ssPath, tplRoot);
+		ok(result, 'should return matches');
+		strictEqual(result!.length, 1, 'should deduplicate');
+	});
+
+	it('returns null when not in stylesheet file', () => {
+		const cssAnalysis = makeCssAnalysisWithElements([
+			{ file: 'page.html', partialName: 'card', startLine: 5, startCol: 3, selector: '.card', ruleLine: 1 },
+		]);
+		const result = findElementsForSelector('other.css', 0, cssAnalysis as any, ssPath, tplRoot);
+		strictEqual(result, null);
+	});
+
+	it('returns null when no matches on line', () => {
+		const cssAnalysis = makeCssAnalysisWithElements([
+			{ file: 'page.html', partialName: 'card', startLine: 5, startCol: 3, selector: '.card', ruleLine: 3 },
+		]);
+		const result = findElementsForSelector(ssRelPath, 0, cssAnalysis as any, ssPath, tplRoot);
+		strictEqual(result, null);
+	});
+
+	it('preserves match type', () => {
+		const cssAnalysis = makeCssAnalysisWithElements([
+			{ file: 'page.html', partialName: 'card', startLine: 5, startCol: 3, selector: '.card', ruleLine: 1, matchType: 'conditional' },
+		]);
+		const result = findElementsForSelector(ssRelPath, 0, cssAnalysis as any, ssPath, tplRoot);
+		ok(result);
+		strictEqual(result![0].matchType, 'conditional');
 	});
 });

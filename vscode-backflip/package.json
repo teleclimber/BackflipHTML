@@ -21,8 +21,46 @@
       {
         "command": "backflipHTML.openCssRule",
         "title": "BackflipHTML: Open CSS Rule"
+      },
+      {
+        "command": "backflipHTML.findAllSelectors",
+        "title": "BackflipHTML: Find All Selectors"
+      },
+      {
+        "command": "backflipHTML.findAllMatches",
+        "title": "BackflipHTML: Find All Matches"
       }
     ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "backflipHTML.findAllSelectors",
+          "when": "editorLangId == html",
+          "group": "navigation@100"
+        },
+        {
+          "command": "backflipHTML.findAllMatches",
+          "when": "editorLangId == css",
+          "group": "navigation@100"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "backflipMatches",
+          "title": "BackflipHTML"
+        }
+      ]
+    },
+    "views": {
+      "backflipMatches": [
+        {
+          "id": "backflipHTML.matchesTree",
+          "name": "CSS Matches"
+        }
+      ]
+    },
     "languages": [
       {
         "id": "html",
