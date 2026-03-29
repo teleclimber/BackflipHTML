@@ -236,7 +236,7 @@ Run a local server to browse and preview all partials in the browser:
 npm run preview
 ```
 
-This compiles templates from `backflip.json`, starts a server at `http://localhost:3000`, and shows a tree list of all files and partials. Click any partial to see its rendered preview. Use `--port` to change the port:
+This compiles templates from `backflip.json`, starts a server at `http://localhost:3000`, and shows a tree list of all files and partials. Click any partial to see its rendered preview. The server watches for changes to templates, CSS, and `backflip.json` — when a file changes, templates are recompiled and the browser reloads automatically. Use `--port` to change the port:
 
 ```bash
 npx tsx preview/server.ts --port 8080

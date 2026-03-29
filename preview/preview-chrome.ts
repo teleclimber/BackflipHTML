@@ -1,6 +1,7 @@
 export interface ChromeOptions {
 	cssHref?: string;
 	fileName?: string;
+	liveReload?: boolean;
 }
 
 const PREVIEW_STYLES = `
@@ -15,6 +16,8 @@ const SLOT_PLACEHOLDER_STYLE = `
 	/* Slot placeholder styling is inline, no extra rules needed */
 `;
 
+const RELOAD_SCRIPT = `<script>(function(){var es=new EventSource("/__events");es.addEventListener("reload",function(){location.reload()})})();</script>`;
+
 /**
  * Wrap rendered partial HTML in a complete document for preview.
  * Detects whether the rendered HTML is already a full document
@@ -27,13 +30,15 @@ export function wrapInChrome(html: string, partialName: string, options?: Chrome
 	const hasHead = /<head[\s>]/i.test(html);
 	const hasBody = /<body[\s>]/i.test(html);
 
+	const liveReload = options?.liveReload ?? false;
+
 	if (hasHead && hasBody) {
-		return wrapDocumentLevel(html, cssHref);
+		return wrapDocumentLevel(html, cssHref, liveReload);
 	}
-	return wrapFragment(html, partialName, fileName, cssHref);
+	return wrapFragment(html, partialName, fileName, cssHref, liveReload);
 }
 
-function wrapFragment(html: string, partialName: string, fileName: string, cssHref: string): string {
+function wrapFragment(html: string, partialName: string, fileName: string, cssHref: string, liveReload: boolean): string {
 	const label = fileName
 		? `${escapeHtml(fileName)} &rsaquo; <code>${escapeHtml(partialName)}</code>`
 		: `<code>${escapeHtml(partialName)}</code>`;
@@ -50,11 +55,12 @@ ${cssHref ? `<link rel="stylesheet" href="${escapeHtml(cssHref)}">` : ''}
 <body>
 <div class="backflip-preview-bar">Preview: ${label}</div>
 ${html}
+${liveReload ? RELOAD_SCRIPT : ''}
 </body>
 </html>`;
 }
 
-function wrapDocumentLevel(html: string, cssHref: string): string {
+function wrapDocumentLevel(html: string, cssHref: string, liveReload: boolean): string {
 	let result = '<!DOCTYPE html>\n' + html;
 
 	if (cssHref) {
@@ -63,6 +69,14 @@ function wrapDocumentLevel(html: string, cssHref: string): string {
 			result = result.replace('</head>', linkTag + '\n</head>');
 		} else {
 			result = linkTag + '\n' + result;
+		}
+	}
+
+	if (liveReload) {
+		if (result.includes('</body>')) {
+			result = result.replace('</body>', RELOAD_SCRIPT + '\n</body>');
+		} else {
+			result += '\n' + RELOAD_SCRIPT;
 		}
 	}
 

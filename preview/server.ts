@@ -6,10 +6,12 @@ import { loadConfig, resolveConfigRoot } from '../compiler/config.js';
 import { compileDirectory, type CompiledDirectory } from '../compiler/partials.js';
 import { previewPartial } from './preview.js';
 import type { CompiledFile } from '../compiler/compiler.js';
+import { createWatcher } from '../lib/watch.js';
 
 export interface ServerContext {
 	directory: CompiledDirectory;
 	cssPath: string;
+	templateRoot: string;
 }
 
 /** Build the server context: compile templates and load CSS. */
@@ -31,7 +33,7 @@ export async function buildContext(projectDir: string): Promise<ServerContext> {
 		cssPath = path.resolve(projectDir, config.stylesheet);
 	}
 
-	return { directory, cssPath };
+	return { directory, cssPath, templateRoot: inputDir };
 }
 
 /** Build a tree structure from the compiled directory for the index page. */
@@ -53,7 +55,7 @@ function escapeHtml(s: string): string {
 }
 
 /** Render the index page listing all files and partials. */
-export function renderIndex(files: Map<string, CompiledFile>): string {
+export function renderIndex(files: Map<string, CompiledFile>, liveReload = false): string {
 	const tree = buildTree(files);
 	let list = '';
 	for (const entry of tree) {
@@ -85,8 +87,16 @@ strong { font-weight: 600; }
 <body>
 <h1>Backflip Previews</h1>
 <ul>${list}</ul>
+${liveReload ? '<script>(function(){var es=new EventSource("/__events");es.addEventListener("reload",function(){location.reload()})})();</script>' : ''}
 </body>
 </html>`;
+}
+
+/** Broadcast a reload event to all connected SSE clients. */
+export function broadcastReload(clients: Set<http.ServerResponse>): void {
+	for (const client of clients) {
+		client.write('event: reload\ndata: {}\n\n');
+	}
 }
 
 /** Handle an HTTP request. Exported for testing. */
@@ -94,13 +104,27 @@ export async function handleRequest(
 	req: http.IncomingMessage,
 	res: http.ServerResponse,
 	ctx: ServerContext,
+	sseClients?: Set<http.ServerResponse>,
 ): Promise<void> {
 	const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 	const pathname = decodeURIComponent(url.pathname);
+	const liveReload = sseClients !== undefined;
+
+	if (pathname === '/__events' && sseClients) {
+		res.writeHead(200, {
+			'Content-Type': 'text/event-stream',
+			'Cache-Control': 'no-cache',
+			'Connection': 'keep-alive',
+		});
+		res.write(':ok\n\n');
+		sseClients.add(res);
+		req.on('close', () => sseClients.delete(res));
+		return;
+	}
 
 	if (pathname === '/') {
-		res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-		res.end(renderIndex(ctx.directory.files));
+		res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+		res.end(renderIndex(ctx.directory.files, liveReload));
 		return;
 	}
 
@@ -113,7 +137,7 @@ export async function handleRequest(
 		}
 		try {
 			const content = await fs.readFile(ctx.cssPath, 'utf-8');
-			res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8' });
+			res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8', 'Cache-Control': 'no-store' });
 			res.end(content);
 		} catch {
 			res.writeHead(404, { 'Content-Type': 'text/plain' });
@@ -150,20 +174,21 @@ export async function handleRequest(
 		fileName: filePath,
 		allFiles: ctx.directory.files,
 		cssHref: ctx.cssPath ? '/css/styles.css' : undefined,
+		liveReload,
 	});
 
 	if (result.errors.length > 0) {
 		for (const err of result.errors) console.error(err);
 	}
 
-	res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+	res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
 	res.end(result.html);
 }
 
 /** Create and return the HTTP server (does not start listening). */
-export function createServer(ctx: ServerContext): http.Server {
+export function createServer(ctx: ServerContext, sseClients?: Set<http.ServerResponse>): http.Server {
 	return http.createServer((req, res) => {
-		handleRequest(req, res, ctx).catch(err => {
+		handleRequest(req, res, ctx, sseClients).catch(err => {
 			console.error(err);
 			res.writeHead(500, { 'Content-Type': 'text/plain' });
 			res.end('Internal server error');
@@ -208,14 +233,43 @@ if (import.meta.url === `file://${process.argv[1]}` ||
 	const port = portArg !== -1 ? parseInt(process.argv[portArg + 1], 10) : 3000;
 
 	console.log('Compiling templates...');
-	const ctx = await buildContext(process.cwd());
+	let ctx = await buildContext(process.cwd());
 	const fileCount = ctx.directory.files.size;
 	let partialCount = 0;
 	for (const [, f] of ctx.directory.files) partialCount += f.partials.size;
 
-	const server = createServer(ctx);
+	const sseClients = new Set<http.ServerResponse>();
+
+	// Use a proxy so the http handler always sees the latest ctx after recompilation.
+	const liveCtx: ServerContext = {
+		get directory() { return ctx.directory; },
+		get cssPath() { return ctx.cssPath; },
+		get templateRoot() { return ctx.templateRoot; },
+	};
+
+	const server = createServer(liveCtx, sseClients);
 	server.listen(port, () => {
 		console.log(`Serving ${partialCount} partials from ${fileCount} files`);
 		printListeningAddresses(server);
+	});
+
+	const projectDir = process.cwd();
+	const configPath = path.join(projectDir, 'backflip.json');
+
+	createWatcher({
+		templateRoot: ctx.templateRoot,
+		cssPath: ctx.cssPath || undefined,
+		configPath,
+	}, async (category) => {
+		if (category === 'template' || category === 'config') {
+			try {
+				console.log('Recompiling templates...');
+				ctx = await buildContext(projectDir);
+				console.log('Recompilation complete.');
+			} catch (err) {
+				console.error('Recompilation failed:', err instanceof Error ? err.message : err);
+			}
+		}
+		broadcastReload(sseClients);
 	});
 }

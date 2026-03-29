@@ -42,3 +42,37 @@ Deno.test("html with only <body> (no <head>) gets fragment wrapping", () => {
 	const html = wrapInChrome('<body><p>content</p></body>', 'test');
 	assertStringIncludes(html, 'backflip-preview-bar');
 });
+
+// --- Live reload script injection ---
+
+Deno.test("fragment: includes reload script when liveReload is true", () => {
+	const html = wrapInChrome('<div>hello</div>', 'card', { liveReload: true });
+	assertStringIncludes(html, 'EventSource');
+	assertStringIncludes(html, '/__events');
+});
+
+Deno.test("fragment: omits reload script when liveReload is false", () => {
+	const html = wrapInChrome('<div>hello</div>', 'card', { liveReload: false });
+	assertEquals(html.includes('EventSource'), false);
+});
+
+Deno.test("fragment: omits reload script by default", () => {
+	const html = wrapInChrome('<div>hello</div>', 'card');
+	assertEquals(html.includes('EventSource'), false);
+});
+
+Deno.test("document-level: includes reload script when liveReload is true", () => {
+	const input = '<html><head><title>Hi</title></head><body><p>content</p></body></html>';
+	const html = wrapInChrome(input, 'page', { liveReload: true });
+	assertStringIncludes(html, 'EventSource');
+	// Script should be before </body>
+	const scriptPos = html.indexOf('EventSource');
+	const bodyEnd = html.indexOf('</body>');
+	assertEquals(scriptPos < bodyEnd, true, 'reload script should be before </body>');
+});
+
+Deno.test("document-level: omits reload script by default", () => {
+	const input = '<html><head><title>Hi</title></head><body><p>content</p></body></html>';
+	const html = wrapInChrome(input, 'page');
+	assertEquals(html.includes('EventSource'), false);
+});
