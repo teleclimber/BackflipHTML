@@ -7,3 +7,9 @@
         <span>Hi</span>
     </div>
 </b-unwrap>
+
+<b-unwrap b-name="full-page" b-export>
+    <b-unwrap b-part="layout.html#shell" b-data:title="title">
+        <p b-in="content">{{ body }}</p>
+    </b-unwrap>
+</b-unwrap>

@@ -1,6 +1,6 @@
 export interface ChromeOptions {
-	cssContent?: string;
-	isDocumentLevel?: boolean;
+	cssHref?: string;
+	fileName?: string;
 }
 
 const PREVIEW_STYLES = `
@@ -17,18 +17,27 @@ const SLOT_PLACEHOLDER_STYLE = `
 
 /**
  * Wrap rendered partial HTML in a complete document for preview.
+ * Detects whether the rendered HTML is already a full document
+ * (has both <head> and <body>) and injects chrome accordingly.
+ * Document-level partials get no preview banner; fragments do.
  */
 export function wrapInChrome(html: string, partialName: string, options?: ChromeOptions): string {
-	const css = options?.cssContent ?? '';
-	const isDoc = options?.isDocumentLevel ?? false;
+	const cssHref = options?.cssHref ?? '';
+	const fileName = options?.fileName ?? '';
+	const hasHead = /<head[\s>]/i.test(html);
+	const hasBody = /<body[\s>]/i.test(html);
 
-	if (isDoc) {
-		return wrapDocumentLevel(html, partialName, css);
+	if (hasHead && hasBody) {
+		return wrapDocumentLevel(html, cssHref);
 	}
-	return wrapFragment(html, partialName, css);
+	return wrapFragment(html, partialName, fileName, cssHref);
 }
 
-function wrapFragment(html: string, partialName: string, css: string): string {
+function wrapFragment(html: string, partialName: string, fileName: string, cssHref: string): string {
+	const label = fileName
+		? `${escapeHtml(fileName)} &rsaquo; <code>${escapeHtml(partialName)}</code>`
+		: `<code>${escapeHtml(partialName)}</code>`;
+
 	return `<!DOCTYPE html>
 <html>
 <head>
@@ -36,33 +45,28 @@ function wrapFragment(html: string, partialName: string, css: string): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Preview: ${escapeHtml(partialName)}</title>
 <style>${PREVIEW_STYLES}${SLOT_PLACEHOLDER_STYLE}</style>
-${css ? `<style>\n${css}\n</style>` : ''}
+${cssHref ? `<link rel="stylesheet" href="${escapeHtml(cssHref)}">` : ''}
 </head>
 <body>
-<div class="backflip-preview-bar">Preview: <code>${escapeHtml(partialName)}</code></div>
+<div class="backflip-preview-bar">Preview: ${label}</div>
 ${html}
 </body>
 </html>`;
 }
 
-function wrapDocumentLevel(html: string, partialName: string, css: string): string {
-	const injection = `<style>${PREVIEW_STYLES}${SLOT_PLACEHOLDER_STYLE}</style>
-${css ? `<style>\n${css}\n</style>` : ''}
-<div class="backflip-preview-bar" style="position:fixed;top:0;left:0;right:0;">Preview: <code>${escapeHtml(partialName)}</code></div>`;
+function wrapDocumentLevel(html: string, cssHref: string): string {
+	let result = '<!DOCTYPE html>\n' + html;
 
-	// Try to inject before </head>
-	if (html.includes('</head>')) {
-		return html.replace('</head>', injection + '\n</head>');
+	if (cssHref) {
+		const linkTag = `<link rel="stylesheet" href="${escapeHtml(cssHref)}">`;
+		if (result.includes('</head>')) {
+			result = result.replace('</head>', linkTag + '\n</head>');
+		} else {
+			result = linkTag + '\n' + result;
+		}
 	}
 
-	// Try to inject after <body> or <body ...>
-	const bodyMatch = html.match(/<body[^>]*>/i);
-	if (bodyMatch) {
-		return html.replace(bodyMatch[0], bodyMatch[0] + '\n' + injection);
-	}
-
-	// Fallback: prepend
-	return injection + '\n' + html;
+	return result;
 }
 
 function escapeHtml(s: string): string {

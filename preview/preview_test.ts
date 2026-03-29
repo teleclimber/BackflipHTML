@@ -140,14 +140,14 @@ Deno.test("preview cross-file partial with slot content", async () => {
 
 // --- CSS injection ---
 
-Deno.test("preview with CSS includes stylesheet in output", async () => {
+Deno.test("preview with cssHref includes link tag in output", async () => {
 	const result = await previewPartial({
 		partialName: 'greeting',
 		compiledFile: getFile('simple.html'),
 		fileName: 'simple.html',
-		cssContent: 'p { color: red; }',
+		cssHref: '/css/styles.css',
 	});
-	assertStringIncludes(result.html, 'p { color: red; }');
+	assertStringIncludes(result.html, '<link rel="stylesheet" href="/css/styles.css">');
 });
 
 // --- Preview chrome ---
@@ -160,7 +160,25 @@ Deno.test("preview wraps in HTML document with partial name", async () => {
 	});
 	assertStringIncludes(result.html, '<!DOCTYPE html>');
 	assertStringIncludes(result.html, 'Preview:');
+	assertStringIncludes(result.html, 'simple.html');
 	assertStringIncludes(result.html, 'greeting');
+});
+
+Deno.test("cross-file document-level partial: doctype, no banner, no nested head/body", async () => {
+	const result = await previewPartial({
+		partialName: 'full-page',
+		compiledFile: getFile('page.html'),
+		fileName: 'page.html',
+		allFiles: allFiles(),
+		tmpDir: TMPDIR,
+	});
+	assertEquals(result.errors.length, 0);
+	assertEquals(result.html.startsWith('<!DOCTYPE html>'), true, 'should start with doctype');
+	assertEquals(result.html.includes('backflip-preview-bar'), false, 'document-level should have no banner');
+	const headCount = (result.html.match(/<head[\s>]/gi) || []).length;
+	const bodyCount = (result.html.match(/<body[\s>]/gi) || []).length;
+	assertEquals(headCount, 1, 'should have exactly one <head>');
+	assertEquals(bodyCount, 1, 'should have exactly one <body>');
 });
 
 // --- Data overrides ---

@@ -1,6 +1,5 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
-import { collectSlots } from '../compiler/compiler.js';
 import type { CompiledFile } from '../compiler/compiler.js';
 import { fileToJsModule } from '../compiler/generate/js/nodes2js.js';
 import { renderRoot } from '../runtime/js/render.js';
@@ -14,7 +13,7 @@ export interface PreviewOptions {
 	compiledFile: CompiledFile;
 	allFiles?: Map<string, CompiledFile>;
 	fileName?: string;
-	cssContent?: string;
+	cssHref?: string;
 	dataOverrides?: Record<string, unknown>;
 	tmpDir?: string;
 }
@@ -29,7 +28,7 @@ export interface PreviewResult {
  * Preview a partial by compiling it, generating mock data, and rendering to HTML.
  */
 export async function previewPartial(options: PreviewOptions): Promise<PreviewResult> {
-	const { partialName, compiledFile, allFiles, fileName, cssContent, dataOverrides, tmpDir } = options;
+	const { partialName, compiledFile, allFiles, fileName, cssHref, dataOverrides, tmpDir } = options;
 	const errors: string[] = [];
 
 	// 1. Find the partial
@@ -44,8 +43,7 @@ export async function previewPartial(options: PreviewOptions): Promise<PreviewRe
 	const mockData = generateMockData(shapes, lookup, dataOverrides);
 
 	// 3. Generate slot placeholders for the top-level partial's own slots
-	const slotNames = collectSlots(root.tnodes);
-	const slotMap = generateSlotPlaceholders(slotNames);
+	const slotMap = generateSlotPlaceholders(root.tnodes);
 
 	// 4. Compile to JS and evaluate to get RootRNode
 	let rnode: RootRNode;
@@ -68,8 +66,7 @@ export async function previewPartial(options: PreviewOptions): Promise<PreviewRe
 	}
 
 	// 6. Wrap in chrome
-	const isDocumentLevel = root.meta?.isDocumentLevel ?? false;
-	const html = wrapInChrome(rendered, partialName, { cssContent, isDocumentLevel });
+	const html = wrapInChrome(rendered, partialName, { cssHref, fileName });
 
 	return { html, mockData, errors };
 }
