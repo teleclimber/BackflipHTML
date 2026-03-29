@@ -1,4 +1,5 @@
 import * as http from 'node:http';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { loadConfig, resolveConfigRoot } from '../compiler/config.js';
@@ -170,6 +171,35 @@ export function createServer(ctx: ServerContext): http.Server {
 	});
 }
 
+/** Print all network addresses the server is reachable on. */
+function printListeningAddresses(server: http.Server): void {
+	const addr = server.address();
+	if (!addr || typeof addr === 'string') {
+		console.log(addr ?? 'unknown address');
+		return;
+	}
+	const { port } = addr;
+
+	// If bound to a specific interface, just print that.
+	if (addr.address !== '::' && addr.address !== '0.0.0.0') {
+		const host = addr.family === 'IPv6' ? `[${addr.address}]` : addr.address;
+		console.log(`  http://${host}:${port}`);
+		return;
+	}
+
+	// Listening on all interfaces — enumerate them.
+	const ifaces = os.networkInterfaces();
+	for (const [, entries] of Object.entries(ifaces)) {
+		if (!entries) continue;
+		for (const entry of entries) {
+			if (entry.internal) continue;
+			const host = entry.family === 'IPv6' ? `[${entry.address}]` : entry.address;
+			console.log(`  http://${host}:${port}`);
+		}
+	}
+	console.log(`  http://localhost:${port}`);
+}
+
 // --- CLI entry point ---
 if (import.meta.url === `file://${process.argv[1]}` ||
 	process.argv[1]?.endsWith('/preview/server.ts') ||
@@ -186,6 +216,6 @@ if (import.meta.url === `file://${process.argv[1]}` ||
 	const server = createServer(ctx);
 	server.listen(port, () => {
 		console.log(`Serving ${partialCount} partials from ${fileCount} files`);
-		console.log(`http://localhost:${port}`);
+		printListeningAddresses(server);
 	});
 }
