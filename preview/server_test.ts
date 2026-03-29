@@ -7,7 +7,7 @@ const TEMPLATES_DIR = new URL("../test/templates", import.meta.url).pathname;
 
 // Compile once for all tests
 const { directory } = await compileDirectory(TEMPLATES_DIR);
-const ctx: ServerContext = { directory, cssContent: '' };
+const ctx: ServerContext = { directory, cssPath: '' };
 
 // --- Minimal mock for http.IncomingMessage / http.ServerResponse ---
 
@@ -88,12 +88,33 @@ Deno.test("GET unknown route returns 404", async () => {
 	assertEquals(res._status, 404);
 });
 
-// --- CSS injection ---
+// --- CSS serving ---
 
-Deno.test("preview includes CSS when provided in context", async () => {
-	const ctxWithCss: ServerContext = { directory, cssContent: 'body { color: blue; }' };
+Deno.test("preview includes CSS link when cssPath is set", async () => {
+	const ctxWithCss: ServerContext = { directory, cssPath: '/some/styles.css' };
 	const res = mockRes();
 	await handleRequest(mockReq('/preview/simple.html/greeting'), res, ctxWithCss);
 	assertEquals(res._status, 200);
-	assertStringIncludes(res._body, 'body { color: blue; }');
+	assertStringIncludes(res._body, '<link rel="stylesheet" href="/css/styles.css">');
+});
+
+Deno.test("GET /css/styles.css serves CSS file", async () => {
+	const tmpCss = await Deno.makeTempFile({ suffix: '.css' });
+	await Deno.writeTextFile(tmpCss, 'body { color: blue; }');
+	try {
+		const ctxWithCss: ServerContext = { directory, cssPath: tmpCss };
+		const res = mockRes();
+		await handleRequest(mockReq('/css/styles.css'), res, ctxWithCss);
+		assertEquals(res._status, 200);
+		assertStringIncludes(res._headers['Content-Type'], 'text/css');
+		assertStringIncludes(res._body, 'body { color: blue; }');
+	} finally {
+		await Deno.remove(tmpCss).catch(() => {});
+	}
+});
+
+Deno.test("GET /css/styles.css returns 404 when no stylesheet configured", async () => {
+	const res = mockRes();
+	await handleRequest(mockReq('/css/styles.css'), res, ctx);
+	assertEquals(res._status, 404);
 });

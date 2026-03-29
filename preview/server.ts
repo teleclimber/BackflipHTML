@@ -8,7 +8,7 @@ import type { CompiledFile } from '../compiler/compiler.js';
 
 export interface ServerContext {
 	directory: CompiledDirectory;
-	cssContent: string;
+	cssPath: string;
 }
 
 /** Build the server context: compile templates and load CSS. */
@@ -25,13 +25,12 @@ export async function buildContext(projectDir: string): Promise<ServerContext> {
 		throw new Error(`Compilation failed with ${errors.length} error(s)`);
 	}
 
-	let cssContent = '';
+	let cssPath = '';
 	if (config.stylesheet) {
-		const cssPath = path.resolve(projectDir, config.stylesheet);
-		cssContent = await fs.readFile(cssPath, 'utf-8');
+		cssPath = path.resolve(projectDir, config.stylesheet);
 	}
 
-	return { directory, cssContent };
+	return { directory, cssPath };
 }
 
 /** Build a tree structure from the compiled directory for the index page. */
@@ -104,6 +103,24 @@ export async function handleRequest(
 		return;
 	}
 
+	// Serve CSS file
+	if (pathname === '/css/styles.css') {
+		if (!ctx.cssPath) {
+			res.writeHead(404, { 'Content-Type': 'text/plain' });
+			res.end('No stylesheet configured');
+			return;
+		}
+		try {
+			const content = await fs.readFile(ctx.cssPath, 'utf-8');
+			res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8' });
+			res.end(content);
+		} catch {
+			res.writeHead(404, { 'Content-Type': 'text/plain' });
+			res.end('Stylesheet not found');
+		}
+		return;
+	}
+
 	// Match /preview/<file>/<partial>
 	const match = pathname.match(/^\/preview\/(.+?)\/([^/]+)$/);
 	if (!match) {
@@ -131,7 +148,7 @@ export async function handleRequest(
 		compiledFile,
 		fileName: filePath,
 		allFiles: ctx.directory.files,
-		cssContent: ctx.cssContent,
+		cssHref: ctx.cssPath ? '/css/styles.css' : undefined,
 	});
 
 	if (result.errors.length > 0) {

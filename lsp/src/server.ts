@@ -345,27 +345,19 @@ connection.onRequest('backflip/previewPartial', async (params: { uri: string; pa
 	const compiledFile = compiledFiles.get(relPath);
 	if (!compiledFile) return null;
 
-	// Read CSS content if stylesheet is configured
-	let cssContent: string | undefined;
-	if (stylesheetPath) {
-		try {
-			cssContent = await fs.readFile(stylesheetPath, 'utf-8');
-		} catch { /* stylesheet not readable */ }
-	}
-
 	try {
 		const result = await previewPartial({
 			partialName: params.partialName,
 			compiledFile,
 			allFiles: compiledFiles,
 			fileName: relPath,
-			cssContent,
 		});
 		return {
 			html: result.html,
 			partialName: params.partialName,
 			mockData: result.mockData,
 			errors: result.errors,
+			stylesheetPath: stylesheetPath ?? undefined,
 		};
 	} catch (err) {
 		connection.console.error(`[backflip] preview error: ${err instanceof Error ? err.message : err}`);
