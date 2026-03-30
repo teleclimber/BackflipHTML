@@ -429,7 +429,11 @@ export function generateStringStack(in_str:string, filename?:string) :Promise<{ 
 }
 
 
-export function compileFile(html: string, _registry?: PartialRegistry, filename?: string): Promise<{ compiled: CompiledFile, errors: BackflipError[] }> {
+export interface CompileOptions {
+	includeLocs?: boolean;
+}
+
+export function compileFile(html: string, _registry?: PartialRegistry, filename?: string, options?: CompileOptions): Promise<{ compiled: CompiledFile, errors: BackflipError[] }> {
 
 	return new Promise((resolve, reject) => {
 
@@ -445,7 +449,19 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 
 		// current partial being compiled (null = top-level, outside any b-name partial)
 		let currentPartialRoot: RootTNode | null = null;
+		let currentPartialName: string | null = null;
 		let cur_tnode: TNode | null = null;
+
+		const includeLocs = options?.includeLocs ?? false;
+
+		// Helper: build data-loc attribute for source location tracking
+		function dataLocAttr(tag: { sourceCodeLocation?: unknown }): string {
+			if (!includeLocs || !currentPartialName) return '';
+			const loc = tag.sourceCodeLocation as { startLine?: number; startCol?: number } | null | undefined;
+			if (!loc?.startLine) return '';
+			const file = filename ?? '';
+			return ` data-loc="${file}#${currentPartialName}:${loc.startLine}:${loc.startCol}"`;
+		}
 
 		// Helper: get current slot-collection context from innermost tag_stack entry.
 		// Walks up the stack, stopping if a structural node (tnode) is found first —
@@ -533,7 +549,7 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			}
 			const hasBind = tag.attrs.some(attr => isBindAttr(attr.name));
 			if (!hasBind) {
-				return { type: 'raw', raw: reconstructTagExcluding(tag, excludeAttrs), parent };
+				return { type: 'raw', raw: buildTagPrefix(tag, excludeAttrs) + dataLocAttr(tag) + '>', parent };
 			}
 			const tagOpen = `<${tag.tagName}`;
 			const parts: AttrPart[] = [];
@@ -548,6 +564,7 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 					staticBuf += ` ${attr.name}="${attr.value}"`;
 				}
 			}
+			staticBuf += dataLocAttr(tag);
 			if (staticBuf) parts.push({ type: 'static', raw: staticBuf });
 			return { type: 'attr-bind', tagOpen, parts, parent };
 		}
@@ -608,6 +625,7 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 				compiledFile.partials.set(partialName, partialRoot);
 
 				currentPartialRoot = partialRoot;
+				currentPartialName = partialName;
 
 				if (tag.tagName === 'b-unwrap') {
 					// Don't emit opening tag; just track for closing
@@ -670,7 +688,7 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 				if (tag.tagName === 'b-unwrap') {
 					wrapper = null;
 				} else {
-					const open = reconstructTagExcluding(tag, ['b-part']);
+					const open = buildTagPrefix(tag, ['b-part']) + dataLocAttr(tag) + '>';
 					wrapper = { open, close: `</${tag.tagName}>` };
 				}
 
@@ -764,7 +782,7 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 					});
 					// For non-b-unwrap elements, emit the opening tag into the slot
 					if (tag.tagName !== 'b-unwrap') {
-						pushRawHere(reconstructTagExcluding(tag, ['b-in']));
+						pushRawHere(buildTagPrefix(tag, ['b-in']) + dataLocAttr(tag) + '>');
 					}
 					return;
 				}
@@ -915,7 +933,9 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 						tag_stack.push({ tag: tag.tagName });
 					}
 				} else {
-					const new_cur = pushRawHere(raw);
+					const loc = dataLocAttr(tag);
+					const tagRaw = loc ? raw.replace(/>$/, loc + '>') : raw;
+					const new_cur = pushRawHere(tagRaw);
 					if (cur_tnode !== null) cur_tnode = new_cur;
 					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
 						tag_stack.push({ tag: tag.tagName });
@@ -950,6 +970,7 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 				currentPartialRoot.meta!.endOffset = (endTagLoc?.startOffset ?? 0) + raw.length;
 				// End of this partial
 				currentPartialRoot = null;
+				currentPartialName = null;
 				cur_tnode = null;
 				return;
 			}

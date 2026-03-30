@@ -1,6 +1,6 @@
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
 
-import type { RootTNode, RawTNode, PrintTNode, ForTNode, IfTNode, SlotTNode, PartialRefTNode, AttrBindTNode, SourceLoc } from "./compiler.ts";
+import type { RootTNode, RawTNode, PrintTNode, ForTNode, IfTNode, SlotTNode, PartialRefTNode, AttrBindTNode, SourceLoc, CompileOptions } from "./compiler.ts";
 import { generateStringStack, compileFile, onText, pushRaw } from "./compiler.ts";
 import { interpretBackcode } from "./backcode.ts";
 
@@ -826,4 +826,79 @@ Deno.test("meta: partial on second line has correct startLine/startCol", async (
 	const meta = result.partials.get("card")!.meta!;
 	assertEquals(meta.startLine, 2);
 	assertEquals(meta.startCol, 1);
+});
+
+// --- includeLocs tests ---
+
+Deno.test("includeLocs: regular element gets data-loc attribute", async () => {
+	const src = '<div b-name="card"><p>hello</p></div>';
+	const { compiled } = await compileFile(src, undefined, 'test.html', { includeLocs: true });
+	const root = compiled.partials.get("card")!;
+	// All raw content merges into tnodes[0] — check for <p with data-loc
+	const rawNode = root.tnodes[0] as RawTNode;
+	assertEquals(rawNode.type, 'raw');
+	assertStringIncludes(rawNode.raw, '<p data-loc="test.html#card:1:');
+});
+
+Deno.test("includeLocs: b-name root element gets data-loc attribute", async () => {
+	const src = '<section b-name="hero"><h1>Title</h1></section>';
+	const { compiled } = await compileFile(src, undefined, 'pages.html', { includeLocs: true });
+	const root = compiled.partials.get("hero")!;
+	const rawNode = root.tnodes[0] as RawTNode;
+	assertEquals(rawNode.type, 'raw');
+	assertStringIncludes(rawNode.raw, '<section data-loc="pages.html#hero:1:');
+});
+
+Deno.test("includeLocs: element with bind attr gets data-loc in static part", async () => {
+	const src = '<div b-name="card"><a :href="url">link</a></div>';
+	const { compiled } = await compileFile(src, undefined, 'test.html', { includeLocs: true });
+	const root = compiled.partials.get("card")!;
+	// tnodes[0] is the div open tag (raw), tnodes[1] is the <a> (attr-bind)
+	const aNode = root.tnodes[1] as AttrBindTNode;
+	assertEquals(aNode.type, 'attr-bind');
+	const staticParts = aNode.parts.filter(p => p.type === 'static');
+	const hasLoc = staticParts.some(p => p.raw.includes('data-loc="test.html#card:1:'));
+	assertEquals(hasLoc, true);
+});
+
+Deno.test("includeLocs: b-for element gets data-loc attribute", async () => {
+	const src = '<ul b-name="list"><li b-for="item in items">{{ item }}</li></ul>';
+	const { compiled } = await compileFile(src, undefined, 'test.html', { includeLocs: true });
+	const root = compiled.partials.get("list")!;
+	// tnodes[0] is <ul> raw, tnodes[1] is for node
+	const forNode = root.tnodes[1] as ForTNode;
+	assertEquals(forNode.type, 'for');
+	const liNode = forNode.tnodes[0] as RawTNode;
+	assertEquals(liNode.type, 'raw');
+	assertStringIncludes(liNode.raw, 'data-loc="test.html#list:1:');
+});
+
+Deno.test("includeLocs: b-if element gets data-loc attribute", async () => {
+	const src = '<div b-name="card"><span b-if="show">visible</span></div>';
+	const { compiled } = await compileFile(src, undefined, 'test.html', { includeLocs: true });
+	const root = compiled.partials.get("card")!;
+	// tnodes[0] is <div> raw, tnodes[1] is if node
+	const ifNode = root.tnodes[1] as IfTNode;
+	assertEquals(ifNode.type, 'if');
+	const spanNode = ifNode.branches[0].tnodes[0] as RawTNode;
+	assertEquals(spanNode.type, 'raw');
+	assertStringIncludes(spanNode.raw, 'data-loc="test.html#card:1:');
+});
+
+Deno.test("includeLocs: disabled by default", async () => {
+	const src = '<div b-name="card"><p>hello</p></div>';
+	const { compiled } = await compileFile(src, undefined, 'test.html');
+	const root = compiled.partials.get("card")!;
+	const rawNode = root.tnodes[0] as RawTNode;
+	assertEquals(rawNode.raw.includes('data-loc'), false);
+});
+
+Deno.test("includeLocs: format is file#partial:line:col", async () => {
+	const src = '<div b-name="card"><p>hello</p></div>';
+	const { compiled } = await compileFile(src, undefined, 'partials/card.html', { includeLocs: true });
+	const root = compiled.partials.get("card")!;
+	const rawNode = root.tnodes[0] as RawTNode;
+	// Should match pattern: partials/card.html#card:line:col
+	const match = rawNode.raw.match(/data-loc="partials\/card\.html#card:\d+:\d+"/);
+	assertEquals(match !== null, true);
 });

@@ -23,6 +23,7 @@ import { parseBPartValue } from './parse-bpart.js';
 import { getHover, findElementsForSelector, findRulesForElement } from './hover.js';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
+import * as crypto from 'node:crypto';
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
@@ -103,7 +104,7 @@ async function recompile(): Promise<void> {
 	if (!templateRoot) return;
 
 	try {
-		const { directory, errors } = await compileDirectory(templateRoot);
+		const { directory, errors } = await compileDirectory(templateRoot, { includeLocs: true });
 		compiledFiles = directory.files;
 		projectIndex = buildIndex(directory);
 		connection.console.log(`[backflip] recompile: ${directory.files.size} files, ${errors.length} errors, ${projectIndex.partialDefs.size} partials, ${projectIndex.partialRefs.length} refs`);
@@ -346,11 +347,13 @@ connection.onRequest('backflip/previewPartial', async (params: { uri: string; pa
 	if (!compiledFile) return null;
 
 	try {
+		const nonce = crypto.randomBytes(16).toString('hex');
 		const result = await previewPartial({
 			partialName: params.partialName,
 			compiledFile,
 			allFiles: compiledFiles,
 			fileName: relPath,
+			nonce,
 		});
 		return {
 			html: result.html,
@@ -358,6 +361,7 @@ connection.onRequest('backflip/previewPartial', async (params: { uri: string; pa
 			mockData: result.mockData,
 			errors: result.errors,
 			stylesheetPath: stylesheetPath ?? undefined,
+			templateRoot,
 		};
 	} catch (err) {
 		connection.console.error(`[backflip] preview error: ${err instanceof Error ? err.message : err}`);

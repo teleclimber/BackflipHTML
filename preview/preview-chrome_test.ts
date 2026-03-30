@@ -76,3 +76,42 @@ Deno.test("document-level: omits reload script by default", () => {
 	const html = wrapInChrome(input, 'page');
 	assertEquals(html.includes('EventSource'), false);
 });
+
+// --- CSP and context menu script injection ---
+
+Deno.test("fragment: no CSP or context menu script without nonce", () => {
+	const html = wrapInChrome('<p>hello</p>', 'test');
+	assertEquals(html.includes('Content-Security-Policy'), false);
+	assertEquals(html.includes('acquireVsCodeApi'), false);
+});
+
+Deno.test("fragment: nonce adds CSP meta tag with correct policy", () => {
+	const html = wrapInChrome('<p>hello</p>', 'test', { nonce: 'abc123' });
+	assertStringIncludes(html, 'Content-Security-Policy');
+	assertStringIncludes(html, "default-src 'none'");
+	assertStringIncludes(html, "style-src 'unsafe-inline' https: vscode-resource:");
+	assertStringIncludes(html, "script-src 'nonce-abc123'");
+});
+
+Deno.test("fragment: nonce adds context menu script with correct nonce", () => {
+	const html = wrapInChrome('<p>hello</p>', 'test', { nonce: 'abc123' });
+	assertStringIncludes(html, '<script nonce="abc123">');
+	assertStringIncludes(html, 'acquireVsCodeApi');
+	assertStringIncludes(html, 'jumpToSource');
+	assertStringIncludes(html, 'contextmenu');
+});
+
+Deno.test("document-level: nonce adds CSP and context menu script", () => {
+	const input = '<html><head><title>Test</title></head><body><p>hello</p></body></html>';
+	const html = wrapInChrome(input, 'test', { nonce: 'def456' });
+	assertStringIncludes(html, "script-src 'nonce-def456'");
+	assertStringIncludes(html, '<script nonce="def456">');
+	assertStringIncludes(html, 'jumpToSource');
+});
+
+Deno.test("fragment: context menu script parses data-loc format", () => {
+	const html = wrapInChrome('<p>hello</p>', 'test', { nonce: 'n1' });
+	// The script should contain the parseLoc function that handles file#partial:line:col
+	assertStringIncludes(html, 'parseLoc');
+	assertStringIncludes(html, 'indexOf');
+});

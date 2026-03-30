@@ -72,6 +72,10 @@ For nested partials referenced via `b-part`:
 
 A webview panel opens beside the editor showing the rendered preview. The preview auto-refreshes when you save the file.
 
+### Jump to Source
+
+Right-click on any element in the preview to see a **Go to Source** option that navigates to the corresponding line in the HTML template. This works by injecting `data-loc` attributes into rendered elements during compilation (via the `includeLocs` option). The LSP enables this automatically for preview.
+
 ---
 
 ## Programmatic API
@@ -82,7 +86,7 @@ The preview module can be used independently of the LSP and VSCode:
 import { compileDirectory } from '@backflip/html';
 import { previewPartial } from '@backflip/html';
 
-const { directory } = await compileDirectory('./templates');
+const { directory } = await compileDirectory('./templates', { includeLocs: true });
 
 const result = await previewPartial({
     partialName: 'card',

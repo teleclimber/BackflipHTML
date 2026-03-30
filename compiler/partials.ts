@@ -1,6 +1,6 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { compileFile, collectSlots, type CompiledFile, type PartialRegistry, type PartialRefTNode, type RootTNode, BackflipError } from './compiler.js';
+import { compileFile, collectSlots, type CompiledFile, type CompileOptions, type PartialRegistry, type PartialRefTNode, type RootTNode, BackflipError } from './compiler.js';
 
 export interface CompiledDirectory {
     files: Map<string, CompiledFile>  // key: relative file path e.g. "blog/general.html"
@@ -275,7 +275,7 @@ function validateTNode(
  * Cycle check: Build dependency graph and detect circular cross-file references.
  * Pass 2: Compile each file in parallel with the full registry, then validate cross-file refs.
  */
-export async function compileDirectory(dir: string): Promise<{ directory: CompiledDirectory, errors: BackflipError[] }> {
+export async function compileDirectory(dir: string, options?: CompileOptions): Promise<{ directory: CompiledDirectory, errors: BackflipError[] }> {
     const allErrors: BackflipError[] = [];
 
     // Pass 1: collect files and build registry
@@ -311,7 +311,7 @@ export async function compileDirectory(dir: string): Promise<{ directory: Compil
     const compiledPairs = await Promise.all(
         relPaths.map(async (relPath): Promise<[string, CompiledFile]> => {
             const html = fileContents.get(relPath)!;
-            const { compiled, errors } = await compileFile(html, registry, relPath);
+            const { compiled, errors } = await compileFile(html, registry, relPath, options);
             allErrors.push(...errors);
             return [relPath, compiled];
         })

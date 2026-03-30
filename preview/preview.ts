@@ -15,6 +15,7 @@ export interface PreviewOptions {
 	fileName?: string;
 	cssHref?: string;
 	liveReload?: boolean;
+	nonce?: string;
 	dataOverrides?: Record<string, unknown>;
 	tmpDir?: string;
 }
@@ -29,7 +30,7 @@ export interface PreviewResult {
  * Preview a partial by compiling it, generating mock data, and rendering to HTML.
  */
 export async function previewPartial(options: PreviewOptions): Promise<PreviewResult> {
-	const { partialName, compiledFile, allFiles, fileName, cssHref, liveReload, dataOverrides, tmpDir } = options;
+	const { partialName, compiledFile, allFiles, fileName, cssHref, liveReload, nonce, dataOverrides, tmpDir } = options;
 	const errors: string[] = [];
 
 	// 1. Find the partial
@@ -67,7 +68,7 @@ export async function previewPartial(options: PreviewOptions): Promise<PreviewRe
 	}
 
 	// 6. Wrap in chrome
-	const html = wrapInChrome(rendered, partialName, { cssHref, fileName, liveReload });
+	const html = wrapInChrome(rendered, partialName, { cssHref, fileName, liveReload, nonce });
 
 	return { html, mockData, errors };
 }
