@@ -72,6 +72,8 @@ For nested partials referenced via `b-part`:
 
 A webview panel opens beside the editor showing the rendered preview. The preview auto-refreshes when you save the file.
 
+**Note:** VSCode injects its own default styles (font-size, font-family, colors, etc.) into webview panels via `@layer vscode-default`. These styles affect the preview and cannot be reliably overridden. The standalone preview server (`npm run preview`) is not affected. If accurate styling matters, use the standalone server or ensure your project's CSS explicitly sets base styles like `font-size` on `body`.
+
 ### Jump to Source
 
 Right-click on any element in the preview to see a **Go to Source** option that navigates to the corresponding line in the HTML template. This works by injecting `data-loc` attributes into rendered elements during compilation (via the `includeLocs` option). The LSP enables this automatically for preview.
