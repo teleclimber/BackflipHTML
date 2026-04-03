@@ -42,12 +42,14 @@ export interface PartialRefRNode {
 
 export type AttrRPart =
 	| { type: 'static'; raw: string }
-	| { type: 'dynamic'; name: string; expr: rfn; isBoolean: boolean }
+	| { type: 'dynamic'; name: string; expr: rfn; isBoolean: boolean; isAsset?: boolean }
 
 export interface AttrBindRNode {
 	type: 'attr-bind',
 	tagOpen: string,
-	parts: AttrRPart[]
+	parts: AttrRPart[],
+	assetMap?: Record<string, string>,
+	selfClosing?: boolean
 }
 
 export type RNode = RawRNode | PrintRNode | ForRNode | IfRNode | SlotRNode | PartialRefRNode | AttrBindRNode;
@@ -168,13 +170,23 @@ function* streamRenderSlot(node: SlotRNode, slots: SlotMap | undefined) :Generat
 	}
 }
 
+function replaceAssetPaths(value: string, assetMap: Record<string, string>): string {
+	for (const [name, prefix] of Object.entries(assetMap)) {
+		value = value.replaceAll(`@${name}/`, prefix);
+	}
+	return value;
+}
+
 function renderAttrBind(n: AttrBindRNode, ctx: any): string {
 	let out = n.tagOpen;
 	for (const p of n.parts) {
 		if (p.type === 'static') {
 			out += p.raw;
 		} else {
-			const val = execFn(p.expr, ctx);
+			let val = execFn(p.expr, ctx);
+			if (p.isAsset && n.assetMap && val !== null && val !== undefined && val !== false) {
+				val = replaceAssetPaths(String(val), n.assetMap);
+			}
 			if (p.isBoolean) {
 				if (val) out += ` ${p.name}`;
 			} else {
@@ -184,7 +196,7 @@ function renderAttrBind(n: AttrBindRNode, ctx: any): string {
 			}
 		}
 	}
-	return out + '>';
+	return out + (n.selfClosing ? ' />' : '>');
 }
 
 function execFn(fData :rfn, ctx: any) :any {

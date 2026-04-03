@@ -11,18 +11,18 @@ export function nodeToJsExport(n :TNode|RootTNode) :string {
 	return `export const nodes = ${nodeToJS(n)};`;
 }
 
-export function nodeToJS(n :TNode|RootTNode) :string {
+export function nodeToJS(n :TNode|RootTNode, assetMap?: Map<string, string>) :string {
 	let out = '';
 
 	switch(n.type) {
 		case 'root':
-			out = '{ type:"root", nodes: [\n'+ n.tnodes!.map( (nn) => nodeToJS(nn) ).join(',\n') + '] }';
+			out = '{ type:"root", nodes: [\n'+ n.tnodes!.map( (nn) => nodeToJS(nn, assetMap) ).join(',\n') + '] }';
 			break;
 		case 'for':
-			out = forToJS(n);
+			out = forToJS(n, assetMap);
 			break;
 		case 'if':
-			out = ifToJS(n);
+			out = ifToJS(n, assetMap);
 			break;
 		case 'print':
 			out = printToJS(n);
@@ -34,10 +34,10 @@ export function nodeToJS(n :TNode|RootTNode) :string {
 			out = slotToJS(n);
 			break;
 		case 'partial-ref':
-			out = partialRefToJS(n);
+			out = partialRefToJS(n, assetMap);
 			break;
 		case 'attr-bind':
-			out = attrBindToJS(n);
+			out = attrBindToJS(n, assetMap);
 			break;
 		default:
 			throw new Error("unhandled node type");
@@ -46,25 +46,25 @@ export function nodeToJS(n :TNode|RootTNode) :string {
 	return out;
 }
 
-function forToJS(for_node: ForTNode) :string {
+function forToJS(for_node: ForTNode, assetMap?: Map<string, string>) :string {
 	return `{ type:'for',
 	iterable: ${backcodeToJS(for_node.iterable)},
 	valName: '${for_node.valName}',
-	nodes: [\n ${for_node.tnodes?.map( n => nodeToJS(n)).join(',\n')} ]
+	nodes: [\n ${for_node.tnodes?.map( n => nodeToJS(n, assetMap)).join(',\n')} ]
 }`;
 }
 
-function ifToJS(if_node: IfTNode) :string {
-	const branches = if_node.branches.map(b => branchToJS(b)).join(',\n');
+function ifToJS(if_node: IfTNode, assetMap?: Map<string, string>) :string {
+	const branches = if_node.branches.map(b => branchToJS(b, assetMap)).join(',\n');
 	return `{ type:'if',
 	branches: [\n ${branches} ]
 }`;
 }
 
-function branchToJS(branch: IfBranch) :string {
+function branchToJS(branch: IfBranch, assetMap?: Map<string, string>) :string {
 	const condition = branch.condition ? backcodeToJS(branch.condition) : 'undefined';
 	return `{ condition: ${condition},
-	nodes: [\n ${branch.tnodes.map(n => nodeToJS(n)).join(',\n')} ]
+	nodes: [\n ${branch.tnodes.map(n => nodeToJS(n, assetMap)).join(',\n')} ]
 }`;
 }
 
@@ -85,7 +85,7 @@ function slotToJS(n: SlotTNode) :string {
 	return `{ type: 'slot', name: ${name} }`;
 }
 
-function partialRefToJS(n: PartialRefTNode) :string {
+function partialRefToJS(n: PartialRefTNode, assetMap?: Map<string, string>) :string {
 	const partialIdent = n.file === null
 		? sanitizeName(n.partialName)
 		: importAliasFor(n.file, n.partialName);
@@ -95,7 +95,7 @@ function partialRefToJS(n: PartialRefTNode) :string {
 		: `{ open: '${escapeStr(n.wrapper.open)}', close: '${escapeStr(n.wrapper.close)}' }`;
 
 	const slots = Object.entries(n.slots)
-		.map(([name, tnodes]) => `'${name}': [\n${tnodes.map(t => nodeToJS(t)).join(',\n')}\n]`)
+		.map(([name, tnodes]) => `'${name}': [\n${tnodes.map(t => nodeToJS(t, assetMap)).join(',\n')}\n]`)
 		.join(',\n');
 
 	const bindings = n.bindings
@@ -110,13 +110,20 @@ function partialRefToJS(n: PartialRefTNode) :string {
 }`;
 }
 
-function attrBindToJS(n: AttrBindTNode): string {
+function attrBindToJS(n: AttrBindTNode, assetMap?: Map<string, string>): string {
+	const hasAsset = n.parts.some(p => p.type === 'dynamic' && p.isAsset);
 	const parts = n.parts.map(p =>
 		p.type === 'static'
 			? `{ type: 'static', raw: '${escapeStr(p.raw)}' }`
-			: `{ type: 'dynamic', name: '${p.name}', expr: ${backcodeToJS(p.expr)}, isBoolean: ${p.isBoolean} }`
+			: `{ type: 'dynamic', name: '${p.name}', expr: ${backcodeToJS(p.expr)}, isBoolean: ${p.isBoolean}${p.isAsset ? ', isAsset: true' : ''} }`
 	).join(',\n');
-	return `{ type: 'attr-bind', tagOpen: '${escapeStr(n.tagOpen)}', parts: [\n${parts}\n] }`;
+	let assetMapStr = '';
+	if (hasAsset && assetMap && assetMap.size > 0) {
+		const entries = Array.from(assetMap).map(([k, v]) => `'${escapeStr(k)}': '${escapeStr(v)}'`).join(', ');
+		assetMapStr = `, assetMap: { ${entries} }`;
+	}
+	const selfClosingStr = n.selfClosing ? ', selfClosing: true' : '';
+	return `{ type: 'attr-bind', tagOpen: '${escapeStr(n.tagOpen)}'${assetMapStr}${selfClosingStr}, parts: [\n${parts}\n] }`;
 }
 
 function escapeStr(s: string): string {
@@ -175,7 +182,7 @@ function topoSortPartials(partials: Map<string, RootTNode>): string[] {
 	return sorted;
 }
 
-export function fileToJsModule(file: CompiledFile, filePath: string): string {
+export function fileToJsModule(file: CompiledFile, filePath: string, assetMap?: Map<string, string>): string {
 	const currentJs = filePath.replace(/\.html$/, '.js');
 
 	// Collect all cross-file refs across all partials in this file
@@ -205,7 +212,7 @@ export function fileToJsModule(file: CompiledFile, filePath: string): string {
 	const exports: string[] = [];
 	for (const name of sorted) {
 		const root = file.partials.get(name)!;
-		exports.push(`export const ${sanitizeName(name)} = ${nodeToJS(root)};`);
+		exports.push(`export const ${sanitizeName(name)} = ${nodeToJS(root, assetMap)};`);
 	}
 
 	return [...imports, '', ...exports].join('\n');

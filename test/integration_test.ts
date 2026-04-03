@@ -413,6 +413,22 @@ Deno.test("attr-bind: bind attr on b-name root element omits attr when false", (
     );
 });
 
+Deno.test("attr-bind: self-closing slash preserved on void element with bind", () => {
+    const mod = getModule("binds.html");
+    assertEquals(
+        normalize(renderRoot(mod.self_closing_bind, { url: "pic.png" })),
+        `<div><img src="pic.png" /></div>`
+    );
+});
+
+Deno.test("attr-bind: self-closing slash preserved on void element without bind", () => {
+    const mod = getModule("binds.html");
+    assertEquals(
+        normalize(renderRoot(mod.self_closing_raw, {})),
+        `<div><img src="static.png" /></div>`
+    );
+});
+
 // ---------------------------------------------------------------------------
 // unary.html — unary operators: !, -, +
 // ---------------------------------------------------------------------------
@@ -499,4 +515,53 @@ Deno.test("unary: +value coerces string to number", () => {
         normalize(renderRoot(getModule("unary.html").plus_print, { value: "42" })),
         "<span>42</span>"
     );
+});
+
+// ---------------------------------------------------------------------------
+// Asset integration tests
+// ---------------------------------------------------------------------------
+
+const ASSETS_DIR = new URL("./assets/images", import.meta.url).pathname;
+const assetMap = new Map([["images", "/img/"]]);
+const assetDirs = new Map([["images", ASSETS_DIR]]);
+const { directory: assetCompiled } = await compileDirectory(TEMPLATES_DIR, { assetMap, assetDirs });
+
+function getAssetModule(filename: string): Record<string, RootRNode> {
+    const file = assetCompiled.files.get(filename);
+    if (!file) throw new Error(`File not compiled: ${filename}`);
+    const js = fileToJsModule(file, filename, assetMap);
+    const exportNames: string[] = [];
+    const pattern = /^export const (\w+)/gm;
+    let m;
+    while ((m = pattern.exec(js)) !== null) exportNames.push(m[1]);
+    const code = js.replace(/^export const /gm, "const ");
+    return new Function(code + `\nreturn { ${exportNames.join(", ")} };`)();
+}
+
+Deno.test("asset: static src~ renders with replaced prefix", () => {
+    const html = normalize(renderRoot(getAssetModule("assets.html").static_asset, {}));
+    assertStringIncludes(html, 'src="/img/photo.jpg"');
+    assertEquals(html.includes("~"), false);
+    assertEquals(html.includes("@images"), false);
+});
+
+Deno.test("asset: static src~ with subpath renders correctly", () => {
+    const html = normalize(renderRoot(getAssetModule("assets.html").subpath_asset, {}));
+    assertStringIncludes(html, 'src="/img/sub/nested.jpg"');
+});
+
+Deno.test("asset: srcset~ renders with replaced prefixes", () => {
+    const html = normalize(renderRoot(getAssetModule("assets.html").srcset_asset, {}));
+    assertStringIncludes(html, 'srcset="/img/photo.jpg 1x, /img/icon.png 2x"');
+});
+
+Deno.test("asset: dynamic :src~ replaces @name/ at runtime", () => {
+    const html = normalize(renderRoot(getAssetModule("assets.html").dynamic_asset, { file: "@images/photo.jpg" }));
+    assertStringIncludes(html, 'src="/img/photo.jpg"');
+});
+
+Deno.test("asset: mixed static asset and dynamic bind on same tag", () => {
+    const html = normalize(renderRoot(getAssetModule("assets.html").mixed_asset, { cls: "hero" }));
+    assertStringIncludes(html, 'src="/img/photo.jpg"');
+    assertStringIncludes(html, 'class="hero"');
 });

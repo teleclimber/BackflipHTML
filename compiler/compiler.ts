@@ -1,5 +1,7 @@
 import {RewritingStream} from 'parse5-html-rewriting-stream';
 import stream from 'node:stream';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 import { interpretBackcode } from './backcode.js';
 import type { Parsed } from './backcode.js';
@@ -94,12 +96,13 @@ export type PartialRegistry = Map<string, Set<string>>
 
 export type AttrPart =
 	| { type: 'static'; raw: string }
-	| { type: 'dynamic'; name: string; expr: Parsed; isBoolean: boolean; loc?: SourceLoc }
+	| { type: 'dynamic'; name: string; expr: Parsed; isBoolean: boolean; isAsset?: boolean; loc?: SourceLoc }
 
 export interface AttrBindTNode extends ChildTNode {
 	type: 'attr-bind'
 	tagOpen: string   // e.g. `<a`
 	parts: AttrPart[]
+	selfClosing?: boolean
 }
 
 export type TNode = RawTNode | PrintTNode | ForTNode | IfTNode | SlotTNode | PartialRefTNode | AttrBindTNode;
@@ -154,9 +157,9 @@ function errorLoc(filename?: string, loc?: { line?: number, col?: number }): { f
 	return { filename, line: loc?.line, col: loc?.col };
 }
 
-function attrErrorLoc(tag: { sourceCodeLocation?: unknown }, attrName: string, filename?: string): { filename?: string, line?: number, col?: number } | undefined {
+function attrErrorLoc(tag: { sourceCodeLocation?: unknown }, attrName: string, filename?: string): { filename?: string, line?: number, col?: number, endLine?: number, endCol?: number } | undefined {
 	const a = attrLoc(tag, attrName);
-	if (a) return { filename, line: a.startLine, col: a.startCol };
+	if (a) return { filename, line: a.startLine, col: a.startCol, endLine: a.endLine, endCol: a.endCol };
 	return errorLoc(filename, tagLoc(tag));
 }
 
@@ -429,8 +432,72 @@ export function generateStringStack(in_str:string, filename?:string) :Promise<{ 
 }
 
 
+// --- Asset attribute helpers ---
+
+function isAssetAttr(attrName: string): boolean {
+	return attrName.endsWith('~');
+}
+
+function stripAssetSuffix(attrName: string): string {
+	return attrName.slice(0, -1);
+}
+
+interface AssetRef {
+	name: string;    // the @name part
+	subpath: string; // everything after @name/
+}
+
+function parseAssetRef(value: string): AssetRef | null {
+	if (!value.startsWith('@')) return null;
+	const slashIdx = value.indexOf('/');
+	if (slashIdx === -1) return null;
+	return {
+		name: value.slice(1, slashIdx),
+		subpath: value.slice(slashIdx + 1),
+	};
+}
+
+function validateAssetRef(
+	ref: AssetRef,
+	assetMap: Map<string, string> | undefined,
+	assetDirs: Map<string, string> | undefined,
+	loc: { filename?: string; line?: number; col?: number } | undefined,
+): BackflipError | null {
+	if (assetMap && !assetMap.has(ref.name)) {
+		return new BackflipError(`unknown asset directory "@${ref.name}"`, loc);
+	}
+	if (ref.subpath.split('/').some(seg => seg === '..')) {
+		return new BackflipError(`path traversal is not allowed in asset path`, loc);
+	}
+	if (assetDirs) {
+		const dir = assetDirs.get(ref.name);
+		if (dir) {
+			const filePath = path.join(dir, ref.subpath);
+			try {
+				fs.statSync(filePath);
+			} catch {
+				return new BackflipError(`asset file not found: @${ref.name}/${ref.subpath}`, loc);
+			}
+		}
+	}
+	return null;
+}
+
+function replaceAssetRef(value: string, assetMap: Map<string, string>): string {
+	for (const [name, prefix] of assetMap) {
+		value = value.replaceAll(`@${name}/`, prefix);
+	}
+	return value;
+}
+
+function parseSrcsetEntries(value: string): string[] {
+	return value.split(',').map(entry => entry.trim().split(/\s+/)[0]).filter(url => url.length > 0);
+}
+
 export interface CompileOptions {
 	includeLocs?: boolean;
+	assetMap?: Map<string, string>;    // @name -> replacement prefix
+	assetDirs?: Map<string, string>;   // @name -> absolute dir path (for file existence checks)
 }
 
 export function compileFile(html: string, _registry?: PartialRegistry, filename?: string, options?: CompileOptions): Promise<{ compiled: CompiledFile, errors: BackflipError[] }> {
@@ -526,30 +593,75 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			}
 		}
 
-		// Helper: build tag prefix (no closing >) excluding certain attrs, b-data:*, and bind attrs
-		function buildTagPrefix(tag: {tagName:string, attrs:{name:string,value:string}[]}, excludeAttrs: string[]): string {
+		const assetMap = options?.assetMap;
+		const assetDirs = options?.assetDirs;
+
+		// Helper: process a static asset attribute value, validate and replace @name/
+		function processStaticAssetAttr(attrName: string, value: string, tag: { sourceCodeLocation?: unknown }, origAttrName: string): { replaced: string, error?: BackflipError } {
+			if (!assetMap) {
+				return { replaced: value, error: new BackflipError(`${attrName}~ used but no asset directories are configured`, attrErrorLoc(tag, origAttrName, filename)) };
+			}
+			if (attrName === 'style') {
+				return { replaced: value, error: new BackflipError(`style~ is not supported`, attrErrorLoc(tag, origAttrName, filename)) };
+			}
+			if (attrName === 'srcset') {
+				const entries = parseSrcsetEntries(value);
+				for (const url of entries) {
+					const ref = parseAssetRef(url);
+					if (!ref) {
+						return { replaced: value, error: new BackflipError(`asset path must start with @name: "${url}"`, attrErrorLoc(tag, origAttrName, filename)) };
+					}
+					const err = validateAssetRef(ref, assetMap, assetDirs, attrErrorLoc(tag, origAttrName, filename));
+					if (err) return { replaced: value, error: err };
+				}
+				return { replaced: assetMap ? replaceAssetRef(value, assetMap) : value };
+			}
+			// Single URL attribute
+			const ref = parseAssetRef(value);
+			if (!ref) {
+				return { replaced: value, error: new BackflipError(`asset path must start with @name`, attrErrorLoc(tag, origAttrName, filename)) };
+			}
+			const err = validateAssetRef(ref, assetMap, assetDirs, attrErrorLoc(tag, origAttrName, filename));
+			if (err) return { replaced: value, error: err };
+			return { replaced: assetMap ? replaceAssetRef(value, assetMap) : value };
+		}
+
+		// Helper: build tag prefix (no closing >) excluding certain attrs, b-data:*, bind attrs, and asset~ attrs
+		function buildTagPrefix(tag: {tagName:string, attrs:{name:string,value:string}[], sourceCodeLocation?: unknown}, excludeAttrs: string[]): string {
 			let tag_str = `<${tag.tagName}`;
-			const other_attrs = tag.attrs
-				.filter(attr => !excludeAttrs.includes(attr.name) && !attr.name.startsWith('b-data:') && !isBindAttr(attr.name))
-				.map(attr => `${attr.name}="${attr.value}"`)
-				.join(' ');
-			if (other_attrs) tag_str += ' ' + other_attrs;
+			const processed: string[] = [];
+			for (const attr of tag.attrs) {
+				if (excludeAttrs.includes(attr.name) || attr.name.startsWith('b-data:') || isBindAttr(attr.name)) continue;
+				if (isAssetAttr(attr.name)) {
+					const realName = stripAssetSuffix(attr.name);
+					const { replaced, error } = processStaticAssetAttr(realName, attr.value, tag, attr.name);
+					if (error) {
+						errors.push(error);
+						continue;
+					}
+					processed.push(`${realName}="${replaced}"`);
+				} else {
+					processed.push(`${attr.name}="${attr.value}"`);
+				}
+			}
+			if (processed.length > 0) tag_str += ' ' + processed.join(' ');
 			return tag_str;
 		}
 
 		// Helper: reconstruct tag string excluding certain attrs and all b-data: attrs
-		function reconstructTagExcluding(tag: {tagName:string, attrs:{name:string,value:string}[]}, excludeAttrs: string[]): string {
-			return buildTagPrefix(tag, excludeAttrs) + '>';
+		function reconstructTagExcluding(tag: {tagName:string, attrs:{name:string,value:string}[], selfClosing:boolean, sourceCodeLocation?: unknown}, excludeAttrs: string[]): string {
+			return buildTagPrefix(tag, excludeAttrs) + (tag.selfClosing ? ' />' : '>');
 		}
 
 		// Helper: make a RawTNode or AttrBindTNode for a tag's open element
-		function makeOpenTagNode(tag: {tagName:string, attrs:{name:string,value:string}[], sourceCodeLocation?: unknown}, excludeAttrs: string[], parent: ParentTNode): RawTNode | AttrBindTNode {
+		function makeOpenTagNode(tag: {tagName:string, attrs:{name:string,value:string}[], selfClosing:boolean, sourceCodeLocation?: unknown}, excludeAttrs: string[], parent: ParentTNode): RawTNode | AttrBindTNode {
 			if (tag.tagName === 'b-unwrap') {
 				return { type: 'raw', raw: '', parent };
 			}
+			const closeBracket = tag.selfClosing ? ' />' : '>';
 			const hasBind = tag.attrs.some(attr => isBindAttr(attr.name));
 			if (!hasBind) {
-				return { type: 'raw', raw: buildTagPrefix(tag, excludeAttrs) + dataLocAttr(tag) + '>', parent };
+				return { type: 'raw', raw: buildTagPrefix(tag, excludeAttrs) + dataLocAttr(tag) + closeBracket, parent };
 			}
 			const tagOpen = `<${tag.tagName}`;
 			const parts: AttrPart[] = [];
@@ -558,15 +670,40 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 				if (excludeAttrs.includes(attr.name) || attr.name.startsWith('b-data:')) continue;
 				if (isBindAttr(attr.name)) {
 					if (staticBuf) { parts.push({ type: 'static', raw: staticBuf }); staticBuf = ''; }
-					const name = getBindAttrName(attr.name);
-					parts.push({ type: 'dynamic', name, expr: interpretBackcode(attr.value), isBoolean: BOOLEAN_ATTRS.has(name), loc: attrLoc(tag, attr.name) });
+					let bindName = getBindAttrName(attr.name);
+					let isAssetBind = false;
+					if (isAssetAttr(bindName)) {
+						bindName = stripAssetSuffix(bindName);
+						if (!assetMap) {
+							errors.push(new BackflipError(`${bindName}~ used but no asset directories are configured`, attrErrorLoc(tag, attr.name, filename)));
+							continue;
+						}
+						if (bindName === 'style') {
+							errors.push(new BackflipError(`style~ is not supported`, attrErrorLoc(tag, attr.name, filename)));
+							continue;
+						}
+						isAssetBind = true;
+					}
+					const part: AttrPart = { type: 'dynamic', name: bindName, expr: interpretBackcode(attr.value), isBoolean: BOOLEAN_ATTRS.has(bindName), loc: attrLoc(tag, attr.name) };
+					if (isAssetBind) part.isAsset = true;
+					parts.push(part);
+				} else if (isAssetAttr(attr.name)) {
+					const realName = stripAssetSuffix(attr.name);
+					const { replaced, error } = processStaticAssetAttr(realName, attr.value, tag, attr.name);
+					if (error) {
+						errors.push(error);
+						continue;
+					}
+					staticBuf += ` ${realName}="${replaced}"`;
 				} else {
 					staticBuf += ` ${attr.name}="${attr.value}"`;
 				}
 			}
 			staticBuf += dataLocAttr(tag);
 			if (staticBuf) parts.push({ type: 'static', raw: staticBuf });
-			return { type: 'attr-bind', tagOpen, parts, parent };
+			const node: AttrBindTNode = { type: 'attr-bind', tagOpen, parts, parent };
+			if (tag.selfClosing) node.selfClosing = true;
+			return node;
 		}
 
 		function findPrecedingIfInFile(cur: TNode, loc?: { filename?: string, line?: number, col?: number }): IfTNode {
@@ -688,7 +825,7 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 				if (tag.tagName === 'b-unwrap') {
 					wrapper = null;
 				} else {
-					const open = buildTagPrefix(tag, ['b-part']) + dataLocAttr(tag) + '>';
+					const open = buildTagPrefix(tag, ['b-part']) + dataLocAttr(tag) + (tag.selfClosing ? ' />' : '>');
 					wrapper = { open, close: `</${tag.tagName}>` };
 				}
 
@@ -922,9 +1059,10 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 				}
 			}
 			else {
-				// Regular tag — check for bind attrs
-				const bindAttrs = tag.attrs.filter(attr => isBindAttr(attr.name));
-				if (bindAttrs.length > 0) {
+				// Regular tag — check for bind attrs or asset attrs
+				const hasBindAttrs = tag.attrs.some(attr => isBindAttr(attr.name));
+				const hasAssetAttrs = tag.attrs.some(attr => isAssetAttr(attr.name));
+				if (hasBindAttrs || hasAssetAttrs) {
 					const parent: ParentTNode = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
 					const node = makeOpenTagNode(tag, [], parent);
 					pushNodeHere(node);
@@ -934,7 +1072,7 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 					}
 				} else {
 					const loc = dataLocAttr(tag);
-					const tagRaw = loc ? raw.replace(/>$/, loc + '>') : raw;
+					const tagRaw = loc ? raw.replace(/(\s*\/?)>$/, loc + '$1>') : raw;  // preserves self-closing />
 					const new_cur = pushRawHere(tagRaw);
 					if (cur_tnode !== null) cur_tnode = new_cur;
 					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {

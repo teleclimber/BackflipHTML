@@ -3,20 +3,32 @@ import * as fs from 'node:fs/promises';
 
 export const CONFIG_FILENAME = 'backflip.json';
 
+export interface AssetDirConfig {
+	name: string;
+	path: string;
+	prefix: string;
+}
+
 export interface BackflipConfig {
 	root: string;
 	output?: string;
 	lang?: 'js' | 'php';
 	stylesheet?: string;
+	assets?: AssetDirConfig[];
 }
 
-export async function loadConfig(dir: string): Promise<BackflipConfig | null> {
+export interface LoadConfigResult {
+	config: BackflipConfig | null;
+	errors: string[];
+}
+
+export async function loadConfig(dir: string): Promise<LoadConfigResult> {
 	const filePath = path.join(dir, CONFIG_FILENAME);
 	let raw: string;
 	try {
 		raw = await fs.readFile(filePath, 'utf-8');
 	} catch (err: any) {
-		if (err.code === 'ENOENT') return null;
+		if (err.code === 'ENOENT') return { config: null, errors: [] };
 		throw err;
 	}
 
@@ -58,14 +70,84 @@ export async function loadConfig(dir: string): Promise<BackflipConfig | null> {
 		}
 	}
 
+	const configErrors: string[] = [];
+	const validAssets: Record<string, unknown>[] = [];
+
+	if (obj.assets !== undefined) {
+		if (!Array.isArray(obj.assets)) {
+			throw new Error(`${CONFIG_FILENAME}: "assets" must be an array`);
+		}
+		const nameRe = /^[a-zA-Z0-9_-]+$/;
+		const seenNames = new Set<string>();
+		for (let i = 0; i < obj.assets.length; i++) {
+			const entry = obj.assets[i];
+			if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+				throw new Error(`${CONFIG_FILENAME}: assets[${i}] must be an object`);
+			}
+			const e = entry as Record<string, unknown>;
+			if (typeof e.name !== 'string' || !nameRe.test(e.name)) {
+				throw new Error(`${CONFIG_FILENAME}: assets[${i}].name must be alphanumeric with dashes and underscores only`);
+			}
+			if (seenNames.has(e.name)) {
+				throw new Error(`${CONFIG_FILENAME}: duplicate asset name "${e.name}"`);
+			}
+			seenNames.add(e.name);
+			if (typeof e.path !== 'string') {
+				throw new Error(`${CONFIG_FILENAME}: assets[${i}].path must be a string`);
+			}
+			const resolvedPath = path.resolve(dir, e.path);
+			const resolvedDir = path.resolve(dir);
+			if (!resolvedPath.startsWith(resolvedDir + path.sep) && resolvedPath !== resolvedDir) {
+				throw new Error(`${CONFIG_FILENAME}: assets[${i}].path must not escape the project directory`);
+			}
+			if (typeof e.prefix !== 'string') {
+				throw new Error(`${CONFIG_FILENAME}: assets[${i}].prefix must be a string`);
+			}
+			if (!e.prefix.endsWith('/')) {
+				throw new Error(`${CONFIG_FILENAME}: assets[${i}].prefix must end with "/"`);
+			}
+			// Path existence checks are soft errors: record error but keep the asset
+			try {
+				const stat = await fs.stat(resolvedPath);
+				if (!stat.isDirectory()) {
+					configErrors.push(`${CONFIG_FILENAME}: assets[${i}].path is not a directory: ${e.path}`);
+				}
+			} catch (err: any) {
+				if (err.code === 'ENOENT') {
+					configErrors.push(`${CONFIG_FILENAME}: assets[${i}].path directory not found: ${e.path}`);
+				} else {
+					throw err;
+				}
+			}
+			validAssets.push(e);
+		}
+	}
+
 	const config: BackflipConfig = { root: obj.root };
 	if (obj.output !== undefined) config.output = obj.output as string;
 	if (obj.lang !== undefined) config.lang = obj.lang as 'js' | 'php';
 	if (obj.stylesheet !== undefined) config.stylesheet = obj.stylesheet as string;
+	if (validAssets.length > 0) {
+		config.assets = validAssets.map(e => ({
+			name: e.name as string,
+			path: e.path as string,
+			prefix: e.prefix as string,
+		}));
+	}
 
-	return config;
+	return { config, errors: configErrors };
 }
 
 export function resolveConfigRoot(configDir: string, config: BackflipConfig): string {
 	return path.resolve(configDir, config.root);
+}
+
+export function resolveAssetDirs(configDir: string, config: BackflipConfig): Map<string, string> {
+	const result = new Map<string, string>();
+	if (config.assets) {
+		for (const asset of config.assets) {
+			result.set(asset.name, path.resolve(configDir, asset.path));
+		}
+	}
+	return result;
 }

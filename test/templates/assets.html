@@ -1,0 +1,19 @@
+<div b-name="static-asset">
+    <img src~="@images/photo.jpg" />
+</div>
+
+<div b-name="subpath-asset">
+    <img src~="@images/sub/nested.jpg" />
+</div>
+
+<div b-name="srcset-asset">
+    <img srcset~="@images/photo.jpg 1x, @images/icon.png 2x" />
+</div>
+
+<div b-name="dynamic-asset">
+    <img :src~="file" />
+</div>
+
+<div b-name="mixed-asset">
+    <img src~="@images/photo.jpg" :class="cls" />
+</div>

@@ -18,6 +18,7 @@ export interface PreviewOptions {
 	nonce?: string;
 	dataOverrides?: Record<string, unknown>;
 	tmpDir?: string;
+	assetMap?: Map<string, string>;
 }
 
 export interface PreviewResult {
@@ -30,7 +31,7 @@ export interface PreviewResult {
  * Preview a partial by compiling it, generating mock data, and rendering to HTML.
  */
 export async function previewPartial(options: PreviewOptions): Promise<PreviewResult> {
-	const { partialName, compiledFile, allFiles, fileName, cssHref, liveReload, nonce, dataOverrides, tmpDir } = options;
+	const { partialName, compiledFile, allFiles, fileName, cssHref, liveReload, nonce, dataOverrides, tmpDir, assetMap } = options;
 	const errors: string[] = [];
 
 	// 1. Find the partial
@@ -50,7 +51,7 @@ export async function previewPartial(options: PreviewOptions): Promise<PreviewRe
 	// 4. Compile to JS and evaluate to get RootRNode
 	let rnode: RootRNode;
 	try {
-		rnode = await evalPartial(partialName, compiledFile, fileName ?? 'preview.html', allFiles, tmpDir);
+		rnode = await evalPartial(partialName, compiledFile, fileName ?? 'preview.html', allFiles, tmpDir, assetMap);
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		errors.push(`Eval error: ${msg}`);
@@ -83,8 +84,9 @@ async function evalPartial(
 	fileName: string,
 	allFiles?: Map<string, CompiledFile>,
 	tmpDir?: string,
+	assetMap?: Map<string, string>,
 ): Promise<RootRNode> {
-	const js = fileToJsModule(compiledFile, fileName);
+	const js = fileToJsModule(compiledFile, fileName, assetMap);
 	const hasCrossFile = js.includes('import ');
 
 	if (!hasCrossFile) {
@@ -110,7 +112,7 @@ async function evalPartial(
 		for (const [filePath, file] of allFiles) {
 			const jsPath = path.join(workDir, filePath.replace('.html', '.js'));
 			await fs.mkdir(path.dirname(jsPath), { recursive: true });
-			await fs.writeFile(jsPath, fileToJsModule(file, filePath), 'utf-8');
+			await fs.writeFile(jsPath, fileToJsModule(file, filePath, assetMap), 'utf-8');
 		}
 		// Also write the current file if not already in allFiles
 		if (!allFiles.has(fileName)) {

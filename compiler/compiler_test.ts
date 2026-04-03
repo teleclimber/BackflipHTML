@@ -1,4 +1,4 @@
-import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
+import { assert, assertEquals, assertExists, assertStringIncludes } from "jsr:@std/assert";
 
 import type { RootTNode, RawTNode, PrintTNode, ForTNode, IfTNode, SlotTNode, PartialRefTNode, AttrBindTNode, SourceLoc, CompileOptions } from "./compiler.ts";
 import { generateStringStack, compileFile, onText, pushRaw } from "./compiler.ts";
@@ -146,6 +146,28 @@ Deno.test("void elements do not corrupt tag matching", async () => {
 	// </span> would try to match <br> and fail
 	const raw = root.tnodes[0] as RawTNode;
 	assertEquals(raw.raw, '<div><br><span>hi</span></div>');
+});
+
+Deno.test("self-closing slash preserved on void elements", async () => {
+	const { root } = await generateStringStack('<div><br /><img src="a.png" /></div>');
+	const raw = root.tnodes[0] as RawTNode;
+	assertEquals(raw.raw, '<div><br /><img src="a.png" /></div>');
+});
+
+Deno.test("self-closing slash preserved on attr-bind void elements", async () => {
+	const { compiled } = await compileFile('<div b-name="test"><img :src="url" /></div>');
+	const root = compiled.partials.get('test')!;
+	const node = root.tnodes[1] as AttrBindTNode;
+	assertEquals(node.type, 'attr-bind');
+	assertEquals(node.selfClosing, true);
+});
+
+Deno.test("non-self-closing void element has no selfClosing flag", async () => {
+	const { compiled } = await compileFile('<div b-name="test"><img :src="url"></div>');
+	const root = compiled.partials.get('test')!;
+	const node = root.tnodes[1] as AttrBindTNode;
+	assertEquals(node.type, 'attr-bind');
+	assertEquals(node.selfClosing, undefined);
 });
 
 // Fix 4: top-level b-for followed by more content
@@ -901,4 +923,187 @@ Deno.test("includeLocs: format is file#partial:line:col", async () => {
 	// Should match pattern: partials/card.html#card:line:col
 	const match = rawNode.raw.match(/data-loc="partials\/card\.html#card:\d+:\d+"/);
 	assertEquals(match !== null, true);
+});
+
+// ---- asset attribute tests ----
+
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+
+const ASSET_TMPDIR = '/tmp/claude-1000/';
+
+async function makeAssetFixture(): Promise<{ assetMap: Map<string, string>, assetDirs: Map<string, string>, dir: string }> {
+	const dir = path.join(ASSET_TMPDIR, `asset_test_${Date.now()}`);
+	const imgDir = path.join(dir, 'images');
+	await fs.mkdir(imgDir, { recursive: true });
+	await fs.writeFile(path.join(imgDir, 'photo.jpg'), 'fake-image');
+	await fs.writeFile(path.join(imgDir, 'icon.png'), 'fake-icon');
+	await fs.mkdir(path.join(imgDir, 'sub'), { recursive: true });
+	await fs.writeFile(path.join(imgDir, 'sub', 'nested.jpg'), 'fake-nested');
+	const assetMap = new Map([['images', '/img/']]);
+	const assetDirs = new Map([['images', imgDir]]);
+	return { assetMap, assetDirs, dir };
+}
+
+Deno.test("asset: static src~ replaces @name/ with prefix", async () => {
+	const { assetMap, assetDirs } = await makeAssetFixture();
+	const { compiled } = await compileFile(
+		'<div b-name="hero"><img src~="@images/photo.jpg" /></div>',
+		undefined, 'test.html', { assetMap, assetDirs }
+	);
+	const root = compiled.partials.get("hero")!;
+	const allRaw = root.tnodes.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
+	assertStringIncludes(allRaw, 'src="/img/photo.jpg"');
+	assertEquals(allRaw.includes('~'), false);
+	assertEquals(allRaw.includes('@images'), false);
+});
+
+Deno.test("asset: static src~ with subpath", async () => {
+	const { assetMap, assetDirs } = await makeAssetFixture();
+	const { compiled } = await compileFile(
+		'<div b-name="hero"><img src~="@images/sub/nested.jpg" /></div>',
+		undefined, 'test.html', { assetMap, assetDirs }
+	);
+	const root = compiled.partials.get("hero")!;
+	const allRaw = root.tnodes.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
+	assertStringIncludes(allRaw, 'src="/img/sub/nested.jpg"');
+});
+
+Deno.test("asset: error when @name not in asset map", async () => {
+	const assetMap = new Map([['images', '/img/']]);
+	const { errors } = await compileFile(
+		'<div b-name="hero"><img src~="@unknown/photo.jpg" /></div>',
+		undefined, 'test.html', { assetMap }
+	);
+	assertEquals(errors.length, 1);
+	assertStringIncludes(errors[0].message, 'unknown asset directory "@unknown"');
+});
+
+Deno.test("asset: error when value doesn't start with @", async () => {
+	const assetMap = new Map([['images', '/img/']]);
+	const { errors } = await compileFile(
+		'<div b-name="hero"><img src~="photo.jpg" /></div>',
+		undefined, 'test.html', { assetMap }
+	);
+	assertEquals(errors.length, 1);
+	assertStringIncludes(errors[0].message, 'must start with @name');
+});
+
+Deno.test("asset: error on path traversal in subpath", async () => {
+	const { assetMap, assetDirs } = await makeAssetFixture();
+	const { errors } = await compileFile(
+		'<div b-name="hero"><img src~="@images/../../../etc/passwd" /></div>',
+		undefined, 'test.html', { assetMap, assetDirs }
+	);
+	assertEquals(errors.length, 1);
+	assertStringIncludes(errors[0].message, 'path traversal');
+});
+
+Deno.test("asset: error when file not found", async () => {
+	const { assetMap, assetDirs } = await makeAssetFixture();
+	const { errors } = await compileFile(
+		'<div b-name="hero"><img src~="@images/nonexistent.jpg" /></div>',
+		undefined, 'test.html', { assetMap, assetDirs }
+	);
+	assertEquals(errors.length, 1);
+	assertStringIncludes(errors[0].message, 'asset file not found');
+});
+
+Deno.test("asset: style~ is an error", async () => {
+	const assetMap = new Map([['images', '/img/']]);
+	const { errors } = await compileFile(
+		'<div b-name="hero"><div style~="@images/bg.jpg"></div></div>',
+		undefined, 'test.html', { assetMap }
+	);
+	assertEquals(errors.length, 1);
+	assertStringIncludes(errors[0].message, 'style~ is not supported');
+});
+
+Deno.test("asset: :src~ (bind) produces isAsset part", async () => {
+	const assetMap = new Map([['images', '/img/']]);
+	const { compiled } = await compileFile(
+		`<div b-name="hero"><img :src~="'@images/' + file + '.jpg'" /></div>`,
+		undefined, 'test.html', { assetMap }
+	);
+	const root = compiled.partials.get("hero")!;
+	const attrBind = root.tnodes.find(n => n.type === 'attr-bind') as AttrBindTNode | undefined;
+	assertEquals(attrBind !== undefined, true);
+	const dynamicPart = attrBind!.parts.find(p => p.type === 'dynamic');
+	assertEquals(dynamicPart!.type, 'dynamic');
+	if (dynamicPart!.type === 'dynamic') {
+		assertEquals(dynamicPart!.name, 'src');
+		assertEquals(dynamicPart!.isAsset, true);
+	}
+});
+
+Deno.test("asset: :style~ (bind) is an error", async () => {
+	const assetMap = new Map([['images', '/img/']]);
+	const { errors } = await compileFile(
+		`<div b-name="hero"><div :style~="'@images/bg.jpg'"></div></div>`,
+		undefined, 'test.html', { assetMap }
+	);
+	assertEquals(errors.length, 1);
+	assertStringIncludes(errors[0].message, 'style~ is not supported');
+});
+
+Deno.test("asset: srcset~ validates multiple entries", async () => {
+	const { assetMap, assetDirs } = await makeAssetFixture();
+	const { compiled, errors } = await compileFile(
+		'<div b-name="hero"><img srcset~="@images/photo.jpg 1x, @images/icon.png 2x" /></div>',
+		undefined, 'test.html', { assetMap, assetDirs }
+	);
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get("hero")!;
+	const allRaw = root.tnodes.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
+	assertStringIncludes(allRaw, 'srcset="/img/photo.jpg 1x, /img/icon.png 2x"');
+});
+
+Deno.test("asset: srcset~ error on missing file in one entry", async () => {
+	const { assetMap, assetDirs } = await makeAssetFixture();
+	const { errors } = await compileFile(
+		'<div b-name="hero"><img srcset~="@images/photo.jpg 1x, @images/missing.png 2x" /></div>',
+		undefined, 'test.html', { assetMap, assetDirs }
+	);
+	assertEquals(errors.length, 1);
+	assertStringIncludes(errors[0].message, 'asset file not found');
+});
+
+Deno.test("asset: no asset map produces error for ~ attribute", async () => {
+	const { errors } = await compileFile(
+		'<div b-name="hero"><img src~="@images/photo.jpg" /></div>',
+		undefined, 'test.html', {}
+	);
+	assertEquals(errors.length, 1);
+	assertStringIncludes(errors[0].message, 'no asset directories');
+});
+
+Deno.test("asset: error when using ~ attribute with no assets configured", async () => {
+	const { errors } = await compileFile(
+		'<div b-name="hero"><img src~="@images/photo.jpg" /></div>',
+		undefined, 'test.html'
+	);
+	assertEquals(errors.length, 1);
+	assertStringIncludes(errors[0].message, 'no asset directories');
+});
+
+Deno.test("asset: error when using :bind~ attribute with no assets configured", async () => {
+	const { errors } = await compileFile(
+		`<div b-name="hero"><img :src~="'@images/' + f" /></div>`,
+		undefined, 'test.html'
+	);
+	assertEquals(errors.length, 1);
+	assertStringIncludes(errors[0].message, 'no asset directories');
+});
+
+Deno.test("asset: error location spans the full attribute", async () => {
+	const assetMap = new Map([['images', '/img/']]);
+	const { errors } = await compileFile(
+		'<div b-name="hero"><img src~="@unknown/photo.jpg" /></div>',
+		undefined, 'test.html', { assetMap }
+	);
+	assertEquals(errors.length, 1);
+	// The error should have endLine/endCol spanning the full src~="..." attribute
+	assertExists(errors[0].endLine);
+	assertExists(errors[0].endCol);
+	assert(errors[0].endCol! > errors[0].col! + 1, `endCol (${errors[0].endCol}) should be greater than col+1 (${errors[0].col! + 1})`);
 });

@@ -2,27 +2,49 @@ import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
-import { loadConfig, resolveConfigRoot } from '../compiler/config.js';
+import { loadConfig, resolveConfigRoot, resolveAssetDirs } from '../compiler/config.js';
 import { compileDirectory, type CompiledDirectory } from '../compiler/partials.js';
 import { previewPartial } from './preview.js';
 import type { CompiledFile } from '../compiler/compiler.js';
 import { createWatcher } from '../lib/watch.js';
 
+const MIME_TYPES: Record<string, string> = {
+	'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+	'.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp',
+	'.ico': 'image/x-icon', '.avif': 'image/avif',
+	'.mp4': 'video/mp4', '.webm': 'video/webm',
+	'.woff': 'font/woff', '.woff2': 'font/woff2',
+	'.pdf': 'application/pdf', '.json': 'application/json',
+};
+
 export interface ServerContext {
 	directory: CompiledDirectory;
 	cssPath: string;
 	templateRoot: string;
+	assetDirs?: Map<string, string>;    // name -> absolute path
+	assetMap?: Map<string, string>;     // name -> preview prefix (__assets/name/)
 }
 
 /** Build the server context: compile templates and load CSS. */
 export async function buildContext(projectDir: string): Promise<ServerContext> {
-	const config = await loadConfig(projectDir);
+	const { config, errors: configErrors } = await loadConfig(projectDir);
 	if (!config) {
 		throw new Error('backflip.json not found — run from a project directory with a backflip.json');
 	}
+	for (const err of configErrors) console.error(err);
 
 	const inputDir = resolveConfigRoot(projectDir, config);
-	const { directory, errors } = await compileDirectory(inputDir);
+
+	let assetMap: Map<string, string> | undefined;
+	let assetDirsMap: Map<string, string> | undefined;
+	if (config.assets && config.assets.length > 0) {
+		assetDirsMap = resolveAssetDirs(projectDir, config);
+		assetMap = new Map(config.assets.map(a => [a.name, `/__assets/${a.name}/`]));
+	}
+
+	const { directory, errors } = await compileDirectory(inputDir,
+		assetMap || assetDirsMap ? { assetMap, assetDirs: assetDirsMap } : undefined
+	);
 	if (errors.length > 0) {
 		for (const err of errors) console.error(err.message);
 		throw new Error(`Compilation failed with ${errors.length} error(s)`);
@@ -33,7 +55,7 @@ export async function buildContext(projectDir: string): Promise<ServerContext> {
 		cssPath = path.resolve(projectDir, config.stylesheet);
 	}
 
-	return { directory, cssPath, templateRoot: inputDir };
+	return { directory, cssPath, templateRoot: inputDir, assetDirs: assetDirsMap, assetMap };
 }
 
 /** Build a tree structure from the compiled directory for the index page. */
@@ -128,6 +150,42 @@ export async function handleRequest(
 		return;
 	}
 
+	// Serve asset files
+	if (pathname.startsWith('/__assets/') && ctx.assetDirs) {
+		const rest = pathname.slice('/__assets/'.length);
+		const slashIdx = rest.indexOf('/');
+		if (slashIdx === -1) {
+			res.writeHead(404, { 'Content-Type': 'text/plain' });
+			res.end('Not found');
+			return;
+		}
+		const name = rest.slice(0, slashIdx);
+		const subpath = rest.slice(slashIdx + 1);
+		if (subpath.split('/').some(seg => seg === '..')) {
+			res.writeHead(403, { 'Content-Type': 'text/plain' });
+			res.end('Forbidden');
+			return;
+		}
+		const dir = ctx.assetDirs.get(name);
+		if (!dir) {
+			res.writeHead(404, { 'Content-Type': 'text/plain' });
+			res.end(`Unknown asset directory: ${name}`);
+			return;
+		}
+		const filePath = path.join(dir, subpath);
+		try {
+			const content = await fs.readFile(filePath);
+			const ext = path.extname(filePath).toLowerCase();
+			const contentType = MIME_TYPES[ext] ?? 'application/octet-stream';
+			res.writeHead(200, { 'Content-Type': contentType, 'Cache-Control': 'no-store' });
+			res.end(content);
+		} catch {
+			res.writeHead(404, { 'Content-Type': 'text/plain' });
+			res.end('Asset not found');
+		}
+		return;
+	}
+
 	// Serve CSS file
 	if (pathname === '/css/styles.css') {
 		if (!ctx.cssPath) {
@@ -175,6 +233,7 @@ export async function handleRequest(
 		allFiles: ctx.directory.files,
 		cssHref: ctx.cssPath ? '/css/styles.css' : undefined,
 		liveReload,
+		assetMap: ctx.assetMap,
 	});
 
 	if (result.errors.length > 0) {
@@ -245,6 +304,8 @@ if (import.meta.url === `file://${process.argv[1]}` ||
 		get directory() { return ctx.directory; },
 		get cssPath() { return ctx.cssPath; },
 		get templateRoot() { return ctx.templateRoot; },
+		get assetDirs() { return ctx.assetDirs; },
+		get assetMap() { return ctx.assetMap; },
 	};
 
 	const server = createServer(liveCtx, sseClients);
@@ -260,6 +321,7 @@ if (import.meta.url === `file://${process.argv[1]}` ||
 		templateRoot: ctx.templateRoot,
 		cssPath: ctx.cssPath || undefined,
 		configPath,
+		assetDirs: ctx.assetDirs ? Array.from(ctx.assetDirs.values()) : undefined,
 	}, async (category) => {
 		if (category === 'template' || category === 'config') {
 			try {

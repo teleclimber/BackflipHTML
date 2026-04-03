@@ -14,6 +14,7 @@ import * as fs from "node:fs/promises";
 
 const CLI_PATH = new URL("../cli.ts", import.meta.url).pathname;
 const TEMPLATES_DIR = new URL("./templates", import.meta.url).pathname;
+const ASSETS_DIR = new URL("./assets/images", import.meta.url).pathname;
 const TMPDIR = "/tmp/claude-1000";
 
 async function runCli(args: string[], cwd?: string): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -50,11 +51,16 @@ Deno.test("Config: auto-cleans output directory when not empty", async () => {
     const outDir = path.join(workDir, "out");
     await fs.mkdir(outDir, { recursive: true });
 
+    // Create a symlink to the assets directory so the config can reference it
+    const assetsLink = path.join(workDir, "images");
+    try { await fs.symlink(ASSETS_DIR, assetsLink); } catch { /* may already exist */ }
+
     // Create a config file pointing to templates and the output dir
     const config = {
         root: TEMPLATES_DIR,
         output: "out",
         lang: "js",
+        assets: [{ name: "images", path: "images", prefix: "/img/" }],
     };
     await fs.writeFile(path.join(workDir, "backflip.json"), JSON.stringify(config));
 

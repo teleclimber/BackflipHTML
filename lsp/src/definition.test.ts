@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
-import { deepStrictEqual, strictEqual } from 'node:assert';
-import { findDefinition } from './definition.js';
+import { deepStrictEqual, ok, strictEqual } from 'node:assert';
+import { findDefinition, findAssetDefinition } from './definition.js';
 import { makeLoc, makeIndex } from './test-helpers.js';
 
 describe('findDefinition', () => {
@@ -67,5 +67,64 @@ describe('findDefinition', () => {
 				end: { line: 2, character: 24 },
 			},
 		});
+	});
+});
+
+describe('findAssetDefinition', () => {
+	const assetDirs = new Map([
+		['images', '/workspace/assets/images'],
+		['icons', '/workspace/assets/icons'],
+	]);
+
+	it('resolves src~ to file path', () => {
+		const line = '<img src~="@images/photo.jpg" />';
+		const result = findAssetDefinition(line, 15, assetDirs);
+		deepStrictEqual(result, {
+			uri: 'file:///workspace/assets/images/photo.jpg',
+			range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+		});
+	});
+
+	it('resolves :src~ bind attribute', () => {
+		const line = '<img :src~="@icons/arrow.svg" />';
+		const result = findAssetDefinition(line, 16, assetDirs);
+		deepStrictEqual(result, {
+			uri: 'file:///workspace/assets/icons/arrow.svg',
+			range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+		});
+	});
+
+	it('resolves subpath with directories', () => {
+		const line = '<img src~="@images/sub/dir/photo.jpg" />';
+		const result = findAssetDefinition(line, 20, assetDirs);
+		deepStrictEqual(result, {
+			uri: 'file:///workspace/assets/images/sub/dir/photo.jpg',
+			range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+		});
+	});
+
+	it('returns null for unknown asset dir', () => {
+		const line = '<img src~="@unknown/photo.jpg" />';
+		const result = findAssetDefinition(line, 15, assetDirs);
+		strictEqual(result, null);
+	});
+
+	it('returns null when cursor is outside ~ attribute', () => {
+		const line = '<img src="normal.jpg" src~="@images/photo.jpg" />';
+		const result = findAssetDefinition(line, 12, assetDirs);
+		strictEqual(result, null);
+	});
+
+	it('returns null for non-~ attribute', () => {
+		const line = '<img src="@images/photo.jpg" />';
+		const result = findAssetDefinition(line, 15, assetDirs);
+		strictEqual(result, null);
+	});
+
+	it('resolves single-quoted src~ attribute', () => {
+		const line = "<img src~='@images/photo.jpg' />";
+		const result = findAssetDefinition(line, 15, assetDirs);
+		ok(result !== null, 'expected a definition');
+		ok(result!.uri.includes('/workspace/assets/images/photo.jpg'));
 	});
 });

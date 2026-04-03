@@ -937,3 +937,213 @@ describe('findElementsForSelector', () => {
 		strictEqual(result![0].matchType, 'conditional');
 	});
 });
+
+describe('asset ref hover', () => {
+	const assetDirs = new Map([
+		['images', '/workspace/assets/images'],
+		['icons', '/workspace/assets/icons'],
+	]);
+
+	it('shows resolved path for src~ attribute', () => {
+		const index = makeIndex([], []);
+		const doc = makeDoc(['<img src~="@images/photo.jpg" />']);
+		const result = getHover(doc, pos(0, 15), 'page.html', index, null, null, null, assetDirs);
+		const v = hoverValue(result);
+		ok(v.includes('**Asset**'));
+		ok(v.includes('@images/photo.jpg'));
+		ok(v.includes('/workspace/assets/images'));
+	});
+
+	it('shows resolved path for :src~ bind attribute', () => {
+		const index = makeIndex([], []);
+		const doc = makeDoc(['<img :src~="@images/banner.png" />']);
+		const result = getHover(doc, pos(0, 16), 'page.html', index, null, null, null, assetDirs);
+		const v = hoverValue(result);
+		ok(v.includes('**Asset**'));
+		ok(v.includes('@images/banner.png'));
+	});
+
+	it('shows unknown for unrecognized asset dir', () => {
+		const index = makeIndex([], []);
+		const doc = makeDoc(['<img src~="@unknown/photo.jpg" />']);
+		const result = getHover(doc, pos(0, 15), 'page.html', index, null, null, null, assetDirs);
+		const v = hoverValue(result);
+		ok(v.includes('unknown asset directory'));
+	});
+
+	it('returns null when cursor is outside ~ attribute', () => {
+		const index = makeIndex([], []);
+		const doc = makeDoc(['<img src="regular.jpg" src~="@images/photo.jpg" />']);
+		const result = getHover(doc, pos(0, 12), 'page.html', index, null, null, null, assetDirs);
+		strictEqual(result, null);
+	});
+
+	it('returns null when no asset dirs configured', () => {
+		const index = makeIndex([], []);
+		const doc = makeDoc(['<img src~="@images/photo.jpg" />']);
+		const result = getHover(doc, pos(0, 15), 'page.html', index, null, null, null, undefined);
+		strictEqual(result, null);
+	});
+
+	it('shows asset hover at every position across src~="..." with CSS rules active', () => {
+		const index = makeIndex([], []);
+		//                  0         1         2         3         4
+		//                  0123456789012345678901234567890123456789012345
+		const line =       '<img class="hero" src~="@images/photo.jpg" />';
+		const doc = makeDoc([line]);
+		const cssAnalysis = {
+			elementMatches: new Map([['page.html', [{
+				element: null, file: 'page.html', partialName: 'test',
+				startLine: 1, startCol: 1, startOffset: 0,
+				matches: [{
+					rule: { selectorText: '.hero', selectors: ['.hero'], properties: [], mediaConditions: [], sourceLine: 1, sourceCol: 1 },
+					selector: '.hero', specificity: [0, 1, 0] as [number, number, number], mediaConditions: [], matchType: 'definite',
+				}],
+			}]]]),
+			rules: [],
+		};
+		// src~="@images/photo.jpg" spans characters 18..41
+		// Every position from 18 to 41 should show asset hover, not CSS rules
+		for (let ch = 18; ch <= 41; ch++) {
+			const result = getHover(doc, pos(0, ch), 'page.html', index, cssAnalysis as any, null, null, assetDirs);
+			const v = hoverValue(result);
+			ok(v.includes('Asset'), `char ${ch} ('${line[ch]}'): expected asset hover, got: ${v}`);
+			ok(!v.includes('CSS Rules'), `char ${ch} ('${line[ch]}'): should not show CSS rules, got: ${v}`);
+		}
+	});
+
+	it('shows asset hover at every position across :src~="..." bind syntax', () => {
+		const index = makeIndex([], []);
+		//                  0         1         2         3         4
+		//                  01234567890123456789012345678901234567890123456
+		const line =       '<img class="hero" :src~="@images/photo.jpg" />';
+		const doc = makeDoc([line]);
+		const cssAnalysis = {
+			elementMatches: new Map([['page.html', [{
+				element: null, file: 'page.html', partialName: 'test',
+				startLine: 1, startCol: 1, startOffset: 0,
+				matches: [{
+					rule: { selectorText: '.hero', selectors: ['.hero'], properties: [], mediaConditions: [], sourceLine: 1, sourceCol: 1 },
+					selector: '.hero', specificity: [0, 1, 0] as [number, number, number], mediaConditions: [], matchType: 'definite',
+				}],
+			}]]]),
+			rules: [],
+		};
+		// :src~="@images/photo.jpg" spans from the : to the closing "
+		const attrStr = ':src~="@images/photo.jpg"';
+		const attrStart = line.indexOf(attrStr);
+		const attrEnd = attrStart + attrStr.length - 1;
+		for (let ch = attrStart; ch <= attrEnd; ch++) {
+			const result = getHover(doc, pos(0, ch), 'page.html', index, cssAnalysis as any, null, null, assetDirs);
+			const v = hoverValue(result);
+			ok(v.includes('Asset'), `char ${ch} ('${line[ch]}'): expected asset hover, got: ${v}`);
+			ok(!v.includes('CSS Rules'), `char ${ch} ('${line[ch]}'): should not show CSS rules, got: ${v}`);
+		}
+	});
+
+	it('still shows CSS rules when hovering on class attr (not asset attr)', () => {
+		const index = makeIndex([], []);
+		const line = '<img class="hero" src~="@images/photo.jpg" />';
+		const doc = makeDoc([line]);
+		const cssAnalysis = {
+			elementMatches: new Map([['page.html', [{
+				element: null, file: 'page.html', partialName: 'test',
+				startLine: 1, startCol: 1, startOffset: 0,
+				matches: [{
+					rule: { selectorText: '.hero', selectors: ['.hero'], properties: [], mediaConditions: [], sourceLine: 1, sourceCol: 1 },
+					selector: '.hero', specificity: [0, 1, 0] as [number, number, number], mediaConditions: [], matchType: 'definite',
+				}],
+			}]]]),
+			rules: [],
+		};
+		// Cursor on "hero" inside class="hero" (character 12)
+		const result = getHover(doc, pos(0, 12), 'page.html', index, cssAnalysis as any, null, null, assetDirs);
+		const v = hoverValue(result);
+		ok(v.includes('CSS Rules'), `Expected CSS rules on class attr, got: ${v}`);
+	});
+
+	it('shows asset hover when src~ comes before class', () => {
+		const index = makeIndex([], []);
+		const line = '<img src~="@images/photo.jpg" class="hero" />';
+		const doc = makeDoc([line]);
+		const cssAnalysis = {
+			elementMatches: new Map([['page.html', [{
+				element: null, file: 'page.html', partialName: 'test',
+				startLine: 1, startCol: 1, startOffset: 0,
+				matches: [{
+					rule: { selectorText: '.hero', selectors: ['.hero'], properties: [], mediaConditions: [], sourceLine: 1, sourceCol: 1 },
+					selector: '.hero', specificity: [0, 1, 0] as [number, number, number], mediaConditions: [], matchType: 'definite',
+				}],
+			}]]]),
+			rules: [],
+		};
+		const attrStr = 'src~="@images/photo.jpg"';
+		const attrStart = line.indexOf(attrStr);
+		const attrEnd = attrStart + attrStr.length - 1;
+		for (let ch = attrStart; ch <= attrEnd; ch++) {
+			const result = getHover(doc, pos(0, ch), 'page.html', index, cssAnalysis as any, null, null, assetDirs);
+			const v = hoverValue(result);
+			ok(v.includes('Asset'), `char ${ch} ('${line[ch]}'): expected asset hover, got: ${v}`);
+		}
+	});
+
+	it('shows asset hover for dynamic asset :src~="expr" with no @ref', () => {
+		const index = makeIndex([], []);
+		const line = '<img class="hero" :src~="file" />';
+		const doc = makeDoc([line]);
+		const cssAnalysis = {
+			elementMatches: new Map([['page.html', [{
+				element: null, file: 'page.html', partialName: 'test',
+				startLine: 1, startCol: 1, startOffset: 0,
+				matches: [{
+					rule: { selectorText: '.hero', selectors: ['.hero'], properties: [], mediaConditions: [], sourceLine: 1, sourceCol: 1 },
+					selector: '.hero', specificity: [0, 1, 0] as [number, number, number], mediaConditions: [], matchType: 'definite',
+				}],
+			}]]]),
+			rules: [],
+		};
+		// Cursor on the attribute name (:src~)
+		const attrStr = ':src~="file"';
+		const attrStart = line.indexOf(attrStr);
+		const result = getHover(doc, pos(0, attrStart + 1), 'page.html', index, cssAnalysis as any, null, null, assetDirs);
+		const v = hoverValue(result);
+		ok(v.includes('Asset'), `Expected asset hover, got: ${v}`);
+		ok(!v.includes('CSS Rules'), `Should not show CSS rules, got: ${v}`);
+	});
+
+	it('shows asset hover with single-quoted attributes', () => {
+		const index = makeIndex([], []);
+		const line = "<img class='hero' src~='@images/photo.jpg' />";
+		const doc = makeDoc([line]);
+		const cssAnalysis = {
+			elementMatches: new Map([['page.html', [{
+				element: null, file: 'page.html', partialName: 'test',
+				startLine: 1, startCol: 1, startOffset: 0,
+				matches: [{
+					rule: { selectorText: '.hero', selectors: ['.hero'], properties: [], mediaConditions: [], sourceLine: 1, sourceCol: 1 },
+					selector: '.hero', specificity: [0, 1, 0] as [number, number, number], mediaConditions: [], matchType: 'definite',
+				}],
+			}]]]),
+			rules: [],
+		};
+		const attrStr = "src~='@images/photo.jpg'";
+		const attrStart = line.indexOf(attrStr);
+		const attrEnd = attrStart + attrStr.length - 1;
+		for (let ch = attrStart; ch <= attrEnd; ch++) {
+			const result = getHover(doc, pos(0, ch), 'page.html', index, cssAnalysis as any, null, null, assetDirs);
+			const v = hoverValue(result);
+			ok(v.includes('Asset'), `char ${ch} ('${line[ch]}'): expected asset hover, got: ${v}`);
+			ok(!v.includes('CSS Rules'), `char ${ch} ('${line[ch]}'): should not show CSS rules, got: ${v}`);
+		}
+	});
+
+	it('shows resolved path for single-quoted src~ attribute', () => {
+		const index = makeIndex([], []);
+		const doc = makeDoc(["<img src~='@images/photo.jpg' />"]);
+		const result = getHover(doc, pos(0, 15), 'page.html', index, null, null, null, assetDirs);
+		const v = hoverValue(result);
+		ok(v.includes('**Asset**'));
+		ok(v.includes('@images/photo.jpg'));
+		ok(v.includes('/workspace/assets/images'));
+	});
+});

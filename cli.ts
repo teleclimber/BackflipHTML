@@ -1,7 +1,7 @@
 import { parseArgs } from '@std/cli/parse-args';
 import { join, dirname } from 'node:path';
 import { compileDirectory } from './compiler/partials.ts';
-import { loadConfig, resolveConfigRoot } from './compiler/config.ts';
+import { loadConfig, resolveConfigRoot, resolveAssetDirs } from './compiler/config.ts';
 import { fileToJsModule } from './compiler/generate/js/nodes2js.ts';
 import { fileToPhpFile } from './compiler/generate/php/nodes2php.ts';
 
@@ -51,7 +51,9 @@ let lang = args.lang as string | undefined;
 let outputDirFromConfig = false;
 
 // Load config as fallback for missing arguments
-const config = await loadConfig(Deno.cwd());
+const { config, errors: configErrors } = await loadConfig(Deno.cwd());
+let assetMap: Map<string, string> | undefined;
+let assetDirs: Map<string, string> | undefined;
 if (config) {
     if (!inputDir) inputDir = resolveConfigRoot(Deno.cwd(), config);
     if (!outputDir && config.output) {
@@ -59,6 +61,13 @@ if (config) {
         outputDirFromConfig = true;
     }
     if (!lang && config.lang) lang = config.lang;
+    if (config.assets && config.assets.length > 0) {
+        assetMap = new Map(config.assets.map(a => [a.name, a.prefix]));
+        assetDirs = resolveAssetDirs(Deno.cwd(), config);
+    }
+}
+for (const err of configErrors) {
+    console.error(err);
 }
 
 if (!inputDir) {
@@ -70,7 +79,7 @@ if (args.check) {
         printUsageAndExit('--check mode does not accept <output-dir> or --lang');
     }
 
-    const { errors } = await compileDirectory(inputDir);
+    const { errors } = await compileDirectory(inputDir, assetMap || assetDirs ? { assetMap, assetDirs } : undefined);
 
     if (args.json) {
         console.log(JSON.stringify({ errors: errors.map(e => e.message) }));
@@ -107,7 +116,8 @@ if (args.check) {
         }
     }
 
-    const { directory: result, errors } = await compileDirectory(inputDir);
+    const compileOpts = assetMap || assetDirs ? { assetMap, assetDirs } : undefined;
+    const { directory: result, errors } = await compileDirectory(inputDir, compileOpts);
 
     if (errors.length > 0) {
         for (const err of errors) {
@@ -122,8 +132,8 @@ if (args.check) {
         const outRelPath = relPath.replace(/\.html$/, ext);
         const outPath = join(outputDir, outRelPath);
         const generated = lang === 'js'
-            ? fileToJsModule(compiledFile, relPath)
-            : fileToPhpFile(compiledFile, relPath);
+            ? fileToJsModule(compiledFile, relPath, assetMap)
+            : fileToPhpFile(compiledFile, relPath, assetMap);
         Deno.mkdirSync(dirname(outPath), { recursive: true });
         Deno.writeTextFileSync(outPath, generated);
         count++;

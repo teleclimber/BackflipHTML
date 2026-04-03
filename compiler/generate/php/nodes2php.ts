@@ -7,18 +7,18 @@ export function sanitizeName(name: string): string {
 	return name.replace(/[^a-zA-Z0-9_$]/g, '_');
 }
 
-export function nodeToPhp(n: TNode | RootTNode): string {
+export function nodeToPhp(n: TNode | RootTNode, assetMap?: Map<string, string>): string {
 	let out = '';
 
 	switch (n.type) {
 		case 'root':
-			out = rootToPhp(n);
+			out = rootToPhp(n, assetMap);
 			break;
 		case 'for':
-			out = forToPhp(n);
+			out = forToPhp(n, assetMap);
 			break;
 		case 'if':
-			out = ifToPhp(n);
+			out = ifToPhp(n, assetMap);
 			break;
 		case 'print':
 			out = printToPhp(n);
@@ -30,10 +30,10 @@ export function nodeToPhp(n: TNode | RootTNode): string {
 			out = slotToPhp(n);
 			break;
 		case 'partial-ref':
-			out = partialRefToPhp(n);
+			out = partialRefToPhp(n, assetMap);
 			break;
 		case 'attr-bind':
-			out = attrBindToPhp(n);
+			out = attrBindToPhp(n, assetMap);
 			break;
 		default:
 			throw new Error("unhandled node type");
@@ -42,23 +42,23 @@ export function nodeToPhp(n: TNode | RootTNode): string {
 	return out;
 }
 
-function rootToPhp(n: RootTNode): string {
-	const nodes = n.tnodes.map(nn => nodeToPhp(nn)).join(',\n    ');
+function rootToPhp(n: RootTNode, assetMap?: Map<string, string>): string {
+	const nodes = n.tnodes.map(nn => nodeToPhp(nn, assetMap)).join(',\n    ');
 	return `['type' => 'root', 'nodes' => [\n    ${nodes}\n]]`;
 }
 
-function forToPhp(for_node: ForTNode): string {
+function forToPhp(for_node: ForTNode, assetMap?: Map<string, string>): string {
 	return `['type' => 'for',
     'iterable' => ${backcodeToPhp(for_node.iterable)},
     'valName' => '${for_node.valName}',
     'nodes' => [
-        ${for_node.tnodes?.map(n => nodeToPhp(n)).join(',\n        ')}
+        ${for_node.tnodes?.map(n => nodeToPhp(n, assetMap)).join(',\n        ')}
     ]
 ]`;
 }
 
-function ifToPhp(if_node: IfTNode): string {
-	const branches = if_node.branches.map(b => branchToPhp(b)).join(',\n        ');
+function ifToPhp(if_node: IfTNode, assetMap?: Map<string, string>): string {
+	const branches = if_node.branches.map(b => branchToPhp(b, assetMap)).join(',\n        ');
 	return `['type' => 'if',
     'branches' => [
         ${branches}
@@ -66,10 +66,10 @@ function ifToPhp(if_node: IfTNode): string {
 ]`;
 }
 
-function branchToPhp(branch: IfBranch): string {
+function branchToPhp(branch: IfBranch, assetMap?: Map<string, string>): string {
 	const condition = branch.condition ? backcodeToPhp(branch.condition) : 'null';
 	return `['condition' => ${condition}, 'nodes' => [
-            ${branch.tnodes.map(n => nodeToPhp(n)).join(',\n            ')}
+            ${branch.tnodes.map(n => nodeToPhp(n, assetMap)).join(',\n            ')}
         ]]`;
 }
 
@@ -89,7 +89,7 @@ function slotToPhp(n: SlotTNode): string {
 	return `['type' => 'slot', 'name' => ${name}]`;
 }
 
-function partialRefToPhp(n: PartialRefTNode): string {
+function partialRefToPhp(n: PartialRefTNode, assetMap?: Map<string, string>): string {
 	const partialIdent = n.file === null
 		? '$' + sanitizeName(n.partialName)
 		: '$' + importAliasFor(n.file, n.partialName);
@@ -99,7 +99,7 @@ function partialRefToPhp(n: PartialRefTNode): string {
 		: `['open' => '${escapeStr(n.wrapper.open)}', 'close' => '${escapeStr(n.wrapper.close)}']`;
 
 	const slots = Object.entries(n.slots)
-		.map(([name, tnodes]) => `'${name}' => [\n        ${tnodes.map(t => nodeToPhp(t)).join(',\n        ')}\n    ]`)
+		.map(([name, tnodes]) => `'${name}' => [\n        ${tnodes.map(t => nodeToPhp(t, assetMap)).join(',\n        ')}\n    ]`)
 		.join(',\n    ');
 
 	const bindings = n.bindings
@@ -114,13 +114,20 @@ function partialRefToPhp(n: PartialRefTNode): string {
 ]`;
 }
 
-function attrBindToPhp(n: AttrBindTNode): string {
+function attrBindToPhp(n: AttrBindTNode, assetMap?: Map<string, string>): string {
+	const hasAsset = n.parts.some(p => p.type === 'dynamic' && p.isAsset);
 	const parts = n.parts.map(p =>
 		p.type === 'static'
 			? `['type' => 'static', 'raw' => '${escapeStr(p.raw)}']`
-			: `['type' => 'dynamic', 'name' => '${escapeStr(p.name)}', 'expr' => ${backcodeToPhp(p.expr)}, 'isBoolean' => ${p.isBoolean ? 'true' : 'false'}]`
+			: `['type' => 'dynamic', 'name' => '${escapeStr(p.name)}', 'expr' => ${backcodeToPhp(p.expr)}, 'isBoolean' => ${p.isBoolean ? 'true' : 'false'}${p.isAsset ? ", 'isAsset' => true" : ''}]`
 	).join(',\n        ');
-	return `['type' => 'attr-bind', 'tagOpen' => '${escapeStr(n.tagOpen)}', 'parts' => [\n        ${parts}\n    ]]`;
+	let assetMapStr = '';
+	if (hasAsset && assetMap && assetMap.size > 0) {
+		const entries = Array.from(assetMap).map(([k, v]) => `'${escapeStr(k)}' => '${escapeStr(v)}'`).join(', ');
+		assetMapStr = `, 'assetMap' => [${entries}]`;
+	}
+	const selfClosingStr = n.selfClosing ? ", 'selfClosing' => true" : '';
+	return `['type' => 'attr-bind', 'tagOpen' => '${escapeStr(n.tagOpen)}'${assetMapStr}${selfClosingStr}, 'parts' => [\n        ${parts}\n    ]]`;
 }
 
 function escapeStr(s: string): string {
@@ -179,7 +186,7 @@ function topoSortPartials(partials: Map<string, RootTNode>): string[] {
 	return sorted;
 }
 
-export function fileToPhpFile(file: CompiledFile, filePath: string): string {
+export function fileToPhpFile(file: CompiledFile, filePath: string, assetMap?: Map<string, string>): string {
 	const currentPhp = filePath.replace(/\.html$/, '.php');
 
 	// Collect all cross-file refs across all partials in this file
@@ -212,7 +219,7 @@ export function fileToPhpFile(file: CompiledFile, filePath: string): string {
 	const assignments: string[] = [];
 	for (const name of sorted) {
 		const root = file.partials.get(name)!;
-		assignments.push(`$${sanitizeName(name)} = ${nodeToPhp(root)};`);
+		assignments.push(`$${sanitizeName(name)} = ${nodeToPhp(root, assetMap)};`);
 	}
 
 	// Build compact call

@@ -10,14 +10,18 @@ import {
 	ReferenceParams,
 	DocumentSymbolParams,
 	HoverParams,
+	CompletionParams,
+	CompletionItem,
+	CompletionItemKind,
+	DiagnosticSeverity,
 } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { compileDirectory, loadConfig, resolveConfigRoot, CONFIG_FILENAME, previewPartial, type BackflipError, type CompiledFile } from '@backflip/html';
+import { compileDirectory, loadConfig, resolveConfigRoot, resolveAssetDirs, CONFIG_FILENAME, previewPartial, type BackflipError, type CompiledFile, type CompileOptions, type LoadConfigResult } from '@backflip/html';
 import { analyzeCss, type CssAnalysisResult, type PartialSourceInfo } from '@backflip/css';
 import { buildIndex, type ProjectIndex } from './index.js';
 import { errorsToDiagnostics } from './diagnostics.js';
-import { findDefinition } from './definition.js';
-import { findReferences } from './references.js';
+import { findDefinition, findAssetDefinition } from './definition.js';
+import { findReferences, parseAssetRefAtCursor, findAssetReferences } from './references.js';
 import { getDocumentSymbols } from './symbols.js';
 import { parseBPartValue } from './parse-bpart.js';
 import { getHover, findElementsForSelector, findRulesForElement } from './hover.js';
@@ -36,6 +40,9 @@ let compiledFiles: Map<string, CompiledFile> = new Map();
 let cssAnalysis: CssAnalysisResult | null = null;
 let recompileTimer: ReturnType<typeof setTimeout> | null = null;
 let knownFiles: Set<string> = new Set();
+let assetMap: Map<string, string> | undefined;
+let assetDirs: Map<string, string> | undefined;
+let templateFileContents: Map<string, string> = new Map();
 
 connection.onInitialize((params: InitializeParams): InitializeResult => {
 	workspaceRoot = params.workspaceFolders?.[0]?.uri?.replace('file://', '') ?? '';
@@ -52,6 +59,9 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
 			referencesProvider: true,
 			documentSymbolProvider: true,
 			hoverProvider: true,
+			completionProvider: {
+				triggerCharacters: ['@', '/'],
+			},
 		},
 	};
 });
@@ -62,15 +72,21 @@ connection.onInitialized(async () => {
 	}
 });
 
+let configErrors: string[] = [];
+
 async function loadAndApplyConfig(): Promise<void> {
 	try {
-		const config = await loadConfig(workspaceRoot);
+		const result = await loadConfig(workspaceRoot);
+		configErrors = result.errors;
+		const config = result.config;
 		if (!config) {
 			connection.console.log(`[backflip] no ${CONFIG_FILENAME} found in ${workspaceRoot}, staying inactive`);
 			templateRoot = null;
 			stylesheetPath = null;
 			cssAnalysis = null;
 			compiledFiles = new Map();
+			assetMap = undefined;
+			assetDirs = undefined;
 			clearAllDiagnostics();
 			projectIndex = { partialDefs: new Map(), partialRefs: [] };
 			return;
@@ -79,7 +95,14 @@ async function loadAndApplyConfig(): Promise<void> {
 		stylesheetPath = config.stylesheet
 			? path.resolve(workspaceRoot, config.stylesheet)
 			: null;
-		connection.console.log(`[backflip] config loaded, template root: ${templateRoot}${stylesheetPath ? `, stylesheet: ${stylesheetPath}` : ''}`);
+		if (config.assets && config.assets.length > 0) {
+			assetMap = new Map(config.assets.map(a => [a.name, a.prefix]));
+			assetDirs = resolveAssetDirs(workspaceRoot, config);
+		} else {
+			assetMap = undefined;
+			assetDirs = undefined;
+		}
+		connection.console.log(`[backflip] config loaded, template root: ${templateRoot}${stylesheetPath ? `, stylesheet: ${stylesheetPath}` : ''}${assetMap ? `, assets: ${assetMap.size}` : ''}${configErrors.length > 0 ? `, config errors: ${configErrors.length}` : ''}`);
 		await recompile();
 	} catch (err) {
 		connection.console.error(`[backflip] config error: ${err instanceof Error ? err.message : err}`);
@@ -87,6 +110,9 @@ async function loadAndApplyConfig(): Promise<void> {
 		stylesheetPath = null;
 		cssAnalysis = null;
 		compiledFiles = new Map();
+		assetMap = undefined;
+		assetDirs = undefined;
+		configErrors = [];
 		clearAllDiagnostics();
 		projectIndex = { partialDefs: new Map(), partialRefs: [] };
 	}
@@ -104,22 +130,33 @@ async function recompile(): Promise<void> {
 	if (!templateRoot) return;
 
 	try {
-		const { directory, errors } = await compileDirectory(templateRoot, { includeLocs: true });
+		const compileOpts: CompileOptions = { includeLocs: true };
+		if (assetMap) compileOpts.assetMap = assetMap;
+		if (assetDirs) compileOpts.assetDirs = assetDirs;
+		const { directory, errors } = await compileDirectory(templateRoot, compileOpts);
 		compiledFiles = directory.files;
 		projectIndex = buildIndex(directory);
 		connection.console.log(`[backflip] recompile: ${directory.files.size} files, ${errors.length} errors, ${projectIndex.partialDefs.size} partials, ${projectIndex.partialRefs.length} refs`);
+
+		// Read template file contents (used for asset references and CSS analysis)
+		templateFileContents = new Map();
+		for (const [filePath] of directory.files) {
+			try {
+				const fullPath = path.join(templateRoot, filePath);
+				const html = await fs.readFile(fullPath, 'utf-8');
+				templateFileContents.set(filePath, html);
+			} catch {
+				// skip unreadable files
+			}
+		}
 
 		// Run CSS analysis if a stylesheet is configured
 		cssAnalysis = null;
 		if (stylesheetPath && templateRoot) {
 			try {
 				const cssContent = await fs.readFile(stylesheetPath, 'utf-8');
-				const templateFiles = new Map<string, string>();
 				const partialInfo = new Map<string, Map<string, PartialSourceInfo>>();
 				for (const [filePath, compiledFile] of directory.files) {
-					const fullPath = path.join(templateRoot, filePath);
-					const html = await fs.readFile(fullPath, 'utf-8');
-					templateFiles.set(filePath, html);
 					const fileInfo = new Map<string, PartialSourceInfo>();
 					for (const [name, root] of compiledFile.partials) {
 						if (root.meta) fileInfo.set(name, root.meta);
@@ -127,7 +164,7 @@ async function recompile(): Promise<void> {
 					partialInfo.set(filePath, fileInfo);
 				}
 				const cssStart = performance.now();
-				cssAnalysis = analyzeCss({ cssContent, templateFiles, partialInfo });
+				cssAnalysis = analyzeCss({ cssContent, templateFiles: templateFileContents, partialInfo });
 				const cssElapsed = performance.now() - cssStart;
 				const matchCount = Array.from(cssAnalysis.elementMatches.values())
 					.reduce((sum, arr) => sum + arr.length, 0);
@@ -166,6 +203,22 @@ async function recompile(): Promise<void> {
 				uri: `file://${templateRoot}`,
 				diagnostics: globalDiags,
 			});
+		}
+
+		// Publish config errors as diagnostics on backflip.json
+		const configUri = `file://${path.join(workspaceRoot, CONFIG_FILENAME)}`;
+		if (configErrors.length > 0) {
+			connection.sendDiagnostics({
+				uri: configUri,
+				diagnostics: configErrors.map(msg => ({
+					severity: DiagnosticSeverity.Error,
+					range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+					message: msg,
+					source: 'backflip',
+				})),
+			});
+		} else {
+			connection.sendDiagnostics({ uri: configUri, diagnostics: [] });
 		}
 		connection.sendNotification('backflip/analysisUpdated');
 	} catch (err) {
@@ -222,6 +275,12 @@ connection.onDefinition((params: DefinitionParams) => {
 		end: { line: params.position.line + 1, character: 0 },
 	});
 
+	// Check if cursor is on an asset reference
+	if (assetDirs) {
+		const assetDef = findAssetDefinition(line, params.position.character, assetDirs);
+		if (assetDef) return assetDef;
+	}
+
 	// Check if cursor is on a b-part attribute value
 	const bPartMatch = line.match(/b-part="([^"]*)"/);
 	if (!bPartMatch) return null;
@@ -256,6 +315,14 @@ connection.onReferences((params: ReferenceParams) => {
 		start: { line: params.position.line, character: 0 },
 		end: { line: params.position.line + 1, character: 0 },
 	});
+
+	// Check if cursor is on an asset reference
+	if (assetDirs && templateFileContents.size > 0) {
+		const assetRef = parseAssetRefAtCursor(line, params.position.character);
+		if (assetRef) {
+			return findAssetReferences(assetRef.name, assetRef.subpath, templateFileContents, templateRoot);
+		}
+	}
 
 	// Check if cursor is on a b-name attribute value
 	const bNameMatch = line.match(/b-name="([^"]*)"/);
@@ -298,7 +365,98 @@ connection.onHover((params: HoverParams) => {
 	const filePath = uri.replace('file://', '');
 	const relPath = path.relative(templateRoot, filePath);
 
-	return getHover(doc, params.position, relPath, projectIndex, cssAnalysis, stylesheetPath, templateRoot);
+	const line = doc.getText({
+		start: { line: params.position.line, character: 0 },
+		end: { line: params.position.line + 1, character: 0 },
+	});
+	const ch = params.position.character;
+	const hasAssetAttr = /~=["']/.test(line);
+	connection.console.log(`[hover] file=${relPath} line=${params.position.line} ch=${ch} assetDirs=${assetDirs ? assetDirs.size : 'null'} hasAssetAttr=${hasAssetAttr} line=${JSON.stringify(line.trimEnd())}`);
+
+	const result = getHover(doc, params.position, relPath, projectIndex, cssAnalysis, stylesheetPath, templateRoot, assetDirs);
+	if (result) {
+		const preview = typeof result.contents === 'object' && 'value' in result.contents
+			? result.contents.value.substring(0, 80)
+			: '(non-markdown)';
+		connection.console.log(`[hover] result: ${preview}`);
+	} else {
+		connection.console.log(`[hover] result: null`);
+	}
+	return result;
+});
+
+// Completion: asset dir names and file paths
+connection.onCompletion(async (params: CompletionParams): Promise<CompletionItem[]> => {
+	if (!assetDirs || assetDirs.size === 0) return [];
+
+	const doc = documents.get(params.textDocument.uri);
+	if (!doc) return [];
+
+	const line = doc.getText({
+		start: { line: params.position.line, character: 0 },
+		end: { line: params.position.line, character: params.position.character },
+	});
+
+	// Only complete inside ~ attributes
+	// Check if we're inside a ~=" or ~=' context
+	const tildeAttrMatch = line.match(/:?[a-zA-Z][a-zA-Z0-9-]*~=["']([^"']*)$/);
+	if (!tildeAttrMatch) return [];
+
+	const valueTyped = tildeAttrMatch[1];
+
+	// If user typed @ or part of @name, complete asset dir names
+	if (valueTyped === '@' || (valueTyped.startsWith('@') && !valueTyped.includes('/'))) {
+		const prefix = valueTyped.substring(1); // strip @
+		const items: CompletionItem[] = [];
+		for (const name of assetDirs.keys()) {
+			if (prefix && !name.startsWith(prefix)) continue;
+			items.push({
+				label: `@${name}/`,
+				kind: CompletionItemKind.Folder,
+				insertText: `@${name}/`,
+			});
+		}
+		return items;
+	}
+
+	// If user typed @name/ or @name/sub/path, complete files within the directory
+	const pathMatch = valueTyped.match(/^@([a-zA-Z0-9_-]+)\/(.*)$/);
+	if (!pathMatch) return [];
+
+	const dirName = pathMatch[1];
+	const subpath = pathMatch[2];
+	const dirPath = assetDirs.get(dirName);
+	if (!dirPath) return [];
+
+	try {
+		const searchDir = path.join(dirPath, path.dirname(subpath));
+		const prefix = path.basename(subpath);
+		const entries = await fs.readdir(searchDir, { withFileTypes: true });
+		const items: CompletionItem[] = [];
+		for (const entry of entries) {
+			if (prefix && !entry.name.startsWith(prefix)) continue;
+			if (entry.name.startsWith('.')) continue;
+			const relBase = subpath.includes('/')
+				? path.dirname(subpath) + '/' + entry.name
+				: entry.name;
+			if (entry.isDirectory()) {
+				items.push({
+					label: entry.name + '/',
+					kind: CompletionItemKind.Folder,
+					insertText: `@${dirName}/${relBase}/`,
+				});
+			} else {
+				items.push({
+					label: entry.name,
+					kind: CompletionItemKind.File,
+					insertText: `@${dirName}/${relBase}`,
+				});
+			}
+		}
+		return items;
+	} catch {
+		return [];
+	}
 });
 
 // Find All Matches: CSS selector → matching HTML elements

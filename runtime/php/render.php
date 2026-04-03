@@ -196,14 +196,26 @@ function backflip_streamRenderPartialRef(array $node, array $ctx): Generator
 /**
  * Render an attr-bind node (returns string, not streaming — produces a single chunk).
  */
+function backflip_replaceAssetPaths(string $value, array $assetMap): string
+{
+    foreach ($assetMap as $name => $prefix) {
+        $value = str_replace("@{$name}/", $prefix, $value);
+    }
+    return $value;
+}
+
 function backflip_renderAttrBind(array $node, array $ctx): string
 {
     $out = $node['tagOpen'];
+    $assetMap = $node['assetMap'] ?? null;
     foreach ($node['parts'] as $p) {
         if ($p['type'] === 'static') {
             $out .= $p['raw'];
         } else {
             $val = backflip_execFn($p['expr'], $ctx);
+            if (!empty($p['isAsset']) && $assetMap !== null && $val !== null && $val !== false) {
+                $val = backflip_replaceAssetPaths((string)$val, $assetMap);
+            }
             if ($p['isBoolean']) {
                 if (backflip_isTruthy($val)) {
                     $out .= ' ' . $p['name'];
@@ -215,7 +227,7 @@ function backflip_renderAttrBind(array $node, array $ctx): string
             }
         }
     }
-    return $out . '>';
+    return $out . (($node['selfClosing'] ?? false) ? ' />' : '>');
 }
 
 /**
