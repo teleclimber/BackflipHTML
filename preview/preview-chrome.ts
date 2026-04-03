@@ -86,7 +86,7 @@ function contextMenuScript(nonce: string): string {
 }
 
 function cspMeta(nonce: string): string {
-	return `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https: vscode-resource:; script-src 'nonce-${nonce}';">`;
+	return `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https: vscode-resource:; script-src 'nonce-${nonce}'; img-src https: vscode-resource:; media-src https: vscode-resource:;">`;
 }
 
 /**

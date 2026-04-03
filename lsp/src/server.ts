@@ -93,7 +93,7 @@ async function loadAndApplyConfig(): Promise<void> {
 		}
 		templateRoot = resolveConfigRoot(workspaceRoot, config);
 		if (config.assets && config.assets.length > 0) {
-			assetMap = new Map(config.assets.map(a => [a.name, a.prefix]));
+			assetMap = new Map(config.assets.map(a => [a.name, `/__assets/${a.name}/`]));
 			assetDirs = resolveAssetDirs(workspaceRoot, config);
 			cssPaths = discoverCssFiles(assetDirs).map(ref => ref.absolutePath);
 		} else {
@@ -520,7 +520,11 @@ connection.onRequest('backflip/previewPartial', async (params: { uri: string; pa
 			allFiles: compiledFiles,
 			fileName: relPath,
 			nonce,
+			assetMap,
 		});
+		const assetDirsObj: Record<string, string> | undefined = assetDirs
+			? Object.fromEntries(assetDirs)
+			: undefined;
 		return {
 			html: result.html,
 			partialName: params.partialName,
@@ -528,6 +532,7 @@ connection.onRequest('backflip/previewPartial', async (params: { uri: string; pa
 			errors: result.errors,
 			cssPaths: cssPaths.length > 0 ? cssPaths : undefined,
 			templateRoot,
+			assetDirs: assetDirsObj,
 		};
 	} catch (err) {
 		connection.console.error(`[backflip] preview error: ${err instanceof Error ? err.message : err}`);
