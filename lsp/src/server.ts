@@ -17,7 +17,7 @@ import {
 } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { compileDirectory, loadConfig, resolveConfigRoot, resolveAssetDirs, CONFIG_FILENAME, previewPartial, type BackflipError, type CompiledFile, type CompileOptions, type LoadConfigResult } from '@backflip/html';
-import { analyzeCss, type CssAnalysisResult, type PartialSourceInfo } from '@backflip/css';
+import { analyzeCss, discoverCssFiles, type CssAnalysisResult, type PartialSourceInfo } from '@backflip/css';
 import { buildIndex, type ProjectIndex } from './index.js';
 import { errorsToDiagnostics } from './diagnostics.js';
 import { findDefinition, findAssetDefinition } from './definition.js';
@@ -34,7 +34,7 @@ const documents = new TextDocuments(TextDocument);
 
 let workspaceRoot = '';
 let templateRoot: string | null = null;
-let stylesheetPath: string | null = null;
+let cssPaths: string[] = [];
 let projectIndex: ProjectIndex = { partialDefs: new Map(), partialRefs: [] };
 let compiledFiles: Map<string, CompiledFile> = new Map();
 let cssAnalysis: CssAnalysisResult | null = null;
@@ -82,7 +82,7 @@ async function loadAndApplyConfig(): Promise<void> {
 		if (!config) {
 			connection.console.log(`[backflip] no ${CONFIG_FILENAME} found in ${workspaceRoot}, staying inactive`);
 			templateRoot = null;
-			stylesheetPath = null;
+			cssPaths = [];
 			cssAnalysis = null;
 			compiledFiles = new Map();
 			assetMap = undefined;
@@ -92,22 +92,21 @@ async function loadAndApplyConfig(): Promise<void> {
 			return;
 		}
 		templateRoot = resolveConfigRoot(workspaceRoot, config);
-		stylesheetPath = config.stylesheet
-			? path.resolve(workspaceRoot, config.stylesheet)
-			: null;
 		if (config.assets && config.assets.length > 0) {
 			assetMap = new Map(config.assets.map(a => [a.name, a.prefix]));
 			assetDirs = resolveAssetDirs(workspaceRoot, config);
+			cssPaths = discoverCssFiles(assetDirs).map(ref => ref.absolutePath);
 		} else {
 			assetMap = undefined;
 			assetDirs = undefined;
+			cssPaths = [];
 		}
-		connection.console.log(`[backflip] config loaded, template root: ${templateRoot}${stylesheetPath ? `, stylesheet: ${stylesheetPath}` : ''}${assetMap ? `, assets: ${assetMap.size}` : ''}${configErrors.length > 0 ? `, config errors: ${configErrors.length}` : ''}`);
+		connection.console.log(`[backflip] config loaded, template root: ${templateRoot}${cssPaths.length > 0 ? `, css files: ${cssPaths.length}` : ''}${assetMap ? `, assets: ${assetMap.size}` : ''}${configErrors.length > 0 ? `, config errors: ${configErrors.length}` : ''}`);
 		await recompile();
 	} catch (err) {
 		connection.console.error(`[backflip] config error: ${err instanceof Error ? err.message : err}`);
 		templateRoot = null;
-		stylesheetPath = null;
+		cssPaths = [];
 		cssAnalysis = null;
 		compiledFiles = new Map();
 		assetMap = undefined;
@@ -128,6 +127,11 @@ function clearAllDiagnostics(): void {
 
 async function recompile(): Promise<void> {
 	if (!templateRoot) return;
+
+	// Re-discover CSS files in case assets changed
+	if (assetDirs) {
+		cssPaths = discoverCssFiles(assetDirs).map(ref => ref.absolutePath);
+	}
 
 	try {
 		const compileOpts: CompileOptions = { includeLocs: true };
@@ -150,11 +154,15 @@ async function recompile(): Promise<void> {
 			}
 		}
 
-		// Run CSS analysis if a stylesheet is configured
+		// Run CSS analysis if CSS files are discovered in asset dirs
 		cssAnalysis = null;
-		if (stylesheetPath && templateRoot) {
+		if (cssPaths.length > 0 && templateRoot) {
 			try {
-				const cssContent = await fs.readFile(stylesheetPath, 'utf-8');
+				const cssChunks: string[] = [];
+				for (const cssPath of cssPaths) {
+					cssChunks.push(await fs.readFile(cssPath, 'utf-8'));
+				}
+				const cssContent = cssChunks.join('\n');
 				const partialInfo = new Map<string, Map<string, PartialSourceInfo>>();
 				for (const [filePath, compiledFile] of directory.files) {
 					const fileInfo = new Map<string, PartialSourceInfo>();
@@ -168,7 +176,7 @@ async function recompile(): Promise<void> {
 				const cssElapsed = performance.now() - cssStart;
 				const matchCount = Array.from(cssAnalysis.elementMatches.values())
 					.reduce((sum, arr) => sum + arr.length, 0);
-				connection.console.log(`[backflip] css analysis: ${cssAnalysis.rules.length} rules, ${matchCount} element matches (${cssElapsed.toFixed(0)}ms)`);
+				connection.console.log(`[backflip] css analysis: ${cssPaths.length} file(s), ${cssAnalysis.rules.length} rules, ${matchCount} element matches (${cssElapsed.toFixed(0)}ms)`);
 			} catch (err) {
 				connection.console.error(`[backflip] css analysis failed: ${err instanceof Error ? err.message : err}`);
 			}
@@ -373,7 +381,7 @@ connection.onHover((params: HoverParams) => {
 	const hasAssetAttr = /~=["']/.test(line);
 	connection.console.log(`[hover] file=${relPath} line=${params.position.line} ch=${ch} assetDirs=${assetDirs ? assetDirs.size : 'null'} hasAssetAttr=${hasAssetAttr} line=${JSON.stringify(line.trimEnd())}`);
 
-	const result = getHover(doc, params.position, relPath, projectIndex, cssAnalysis, stylesheetPath, templateRoot, assetDirs);
+	const result = getHover(doc, params.position, relPath, projectIndex, cssAnalysis, cssPaths, templateRoot, assetDirs);
 	if (result) {
 		const preview = typeof result.contents === 'object' && 'value' in result.contents
 			? result.contents.value.substring(0, 80)
@@ -461,12 +469,12 @@ connection.onCompletion(async (params: CompletionParams): Promise<CompletionItem
 
 // Find All Matches: CSS selector → matching HTML elements
 connection.onRequest('backflip/findMatchesForSelector', (params: { uri: string; line: number }) => {
-	if (!templateRoot || !cssAnalysis || !stylesheetPath) return null;
+	if (!templateRoot || !cssAnalysis || cssPaths.length === 0) return null;
 
 	const filePath = params.uri.replace('file://', '');
 	const relPath = path.relative(templateRoot, filePath);
 
-	const matches = findElementsForSelector(relPath, params.line, cssAnalysis, stylesheetPath, templateRoot);
+	const matches = findElementsForSelector(relPath, params.line, cssAnalysis, cssPaths, templateRoot);
 	if (!matches) return null;
 	return { matches, templateRoot };
 });
@@ -491,7 +499,7 @@ connection.onRequest('backflip/findSelectorsForElement', (params: { uri: string;
 
 	return {
 		...result,
-		stylesheetPath,
+		cssPaths,
 	};
 });
 
@@ -518,7 +526,7 @@ connection.onRequest('backflip/previewPartial', async (params: { uri: string; pa
 			partialName: params.partialName,
 			mockData: result.mockData,
 			errors: result.errors,
-			stylesheetPath: stylesheetPath ?? undefined,
+			cssPaths: cssPaths.length > 0 ? cssPaths : undefined,
 			templateRoot,
 		};
 	} catch (err) {

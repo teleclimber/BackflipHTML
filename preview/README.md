@@ -27,7 +27,7 @@ The server watches for changes to templates, CSS, and `backflip.json`. When a fi
 - **Mock data generation** — printed variables become their name as a string, booleans become `true`, iterables become arrays of 3 items, attributes get sensible defaults (`href` → `"#"`, `src` → placeholder image URL)
 - **Cross-partial data resolution** — when a partial passes data to a child via `b-data:`, the mock data is shaped to match the child partial's requirements
 - **Slot placeholders** — unfilled slots render as grey placeholder blocks
-- **CSS inclusion** — includes the project's stylesheet if configured in `backflip.json`
+- **CSS inclusion** — automatically includes CSS files from configured asset directories
 - **Live reload** — file changes trigger recompilation and browser reload via SSE
 
 ## Key files

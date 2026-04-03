@@ -28,14 +28,18 @@ Deno.test("document-level: no banner, doctype prepended, single head/body", () =
 	assertEquals(bodyCount, 1, 'should have exactly one <body>');
 });
 
-Deno.test("document-level: injects styles into head", () => {
+Deno.test("fragment: injects CSS links from asset dirs", () => {
+	const html = wrapInChrome('<div>hello</div>', 'card', {
+		cssHrefs: ['/__assets/styles/main.css', '/__assets/styles/theme.css'],
+	});
+	assertStringIncludes(html, '<link rel="stylesheet" href="/__assets/styles/main.css">');
+	assertStringIncludes(html, '<link rel="stylesheet" href="/__assets/styles/theme.css">');
+});
+
+Deno.test("document-level: does not inject CSS links (template handles its own)", () => {
 	const input = '<html><head><title>Hi</title></head><body></body></html>';
-	const html = wrapInChrome(input, 'page', { cssHref: '/css/app.css' });
-	assertStringIncludes(html, '<link rel="stylesheet" href="/css/app.css">');
-	// CSS link should be inside <head>
-	const headEnd = html.indexOf('</head>');
-	const linkPos = html.indexOf('/css/app.css');
-	assertEquals(linkPos < headEnd, true, 'CSS link should be inside <head>');
+	const html = wrapInChrome(input, 'page', { cssHrefs: ['/__assets/styles/main.css'] });
+	assertEquals(html.includes('/__assets/styles/main.css'), false, 'document-level should not inject CSS');
 });
 
 Deno.test("html with only <body> (no <head>) gets fragment wrapping", () => {

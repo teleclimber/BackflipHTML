@@ -7,7 +7,7 @@ const TEMPLATES_DIR = new URL("../test/templates", import.meta.url).pathname;
 
 // Compile once for all tests
 const { directory } = await compileDirectory(TEMPLATES_DIR);
-const ctx: ServerContext = { directory, cssPath: '', templateRoot: TEMPLATES_DIR };
+const ctx: ServerContext = { directory, cssHrefs: [], templateRoot: TEMPLATES_DIR };
 
 // --- Minimal mock for http.IncomingMessage / http.ServerResponse ---
 
@@ -93,35 +93,15 @@ Deno.test("GET unknown route returns 404", async () => {
 	assertEquals(res._status, 404);
 });
 
-// --- CSS serving ---
+// --- CSS from asset dirs ---
 
-Deno.test("preview includes CSS link when cssPath is set", async () => {
-	const ctxWithCss: ServerContext = { directory, cssPath: '/some/styles.css', templateRoot: TEMPLATES_DIR };
+Deno.test("preview includes CSS links when cssHrefs are set", async () => {
+	const ctxWithCss: ServerContext = { directory, cssHrefs: ['/__assets/styles/main.css', '/__assets/styles/theme.css'], templateRoot: TEMPLATES_DIR };
 	const res = mockRes();
 	await handleRequest(mockReq('/preview/simple.html/greeting'), res, ctxWithCss);
 	assertEquals(res._status, 200);
-	assertStringIncludes(res._body, '<link rel="stylesheet" href="/css/styles.css">');
-});
-
-Deno.test("GET /css/styles.css serves CSS file", async () => {
-	const tmpCss = await Deno.makeTempFile({ suffix: '.css' });
-	await Deno.writeTextFile(tmpCss, 'body { color: blue; }');
-	try {
-		const ctxWithCss: ServerContext = { directory, cssPath: tmpCss, templateRoot: TEMPLATES_DIR };
-		const res = mockRes();
-		await handleRequest(mockReq('/css/styles.css'), res, ctxWithCss);
-		assertEquals(res._status, 200);
-		assertStringIncludes(res._headers['Content-Type'], 'text/css');
-		assertStringIncludes(res._body, 'body { color: blue; }');
-	} finally {
-		await Deno.remove(tmpCss).catch(() => {});
-	}
-});
-
-Deno.test("GET /css/styles.css returns 404 when no stylesheet configured", async () => {
-	const res = mockRes();
-	await handleRequest(mockReq('/css/styles.css'), res, ctx);
-	assertEquals(res._status, 404);
+	assertStringIncludes(res._body, '<link rel="stylesheet" href="/__assets/styles/main.css">');
+	assertStringIncludes(res._body, '<link rel="stylesheet" href="/__assets/styles/theme.css">');
 });
 
 // --- SSE and live reload ---
@@ -194,15 +174,3 @@ Deno.test("responses include Cache-Control: no-store", async () => {
 	assertEquals(res._headers['Cache-Control'], 'no-store');
 });
 
-Deno.test("CSS response includes Cache-Control: no-store", async () => {
-	const tmpCss = await Deno.makeTempFile({ suffix: '.css' });
-	await Deno.writeTextFile(tmpCss, 'body { color: red; }');
-	try {
-		const ctxWithCss: ServerContext = { directory, cssPath: tmpCss, templateRoot: TEMPLATES_DIR };
-		const res = mockRes();
-		await handleRequest(mockReq('/css/styles.css'), res, ctxWithCss);
-		assertEquals(res._headers['Cache-Control'], 'no-store');
-	} finally {
-		await Deno.remove(tmpCss).catch(() => {});
-	}
-});

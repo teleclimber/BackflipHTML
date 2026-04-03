@@ -67,22 +67,24 @@ Deno.test("ignores non-.html files in template root", async () => {
 	}
 });
 
-Deno.test("watches CSS file", async () => {
+Deno.test("watches CSS file in asset directory", async () => {
 	const dir = await Deno.makeTempDir();
-	const cssFile = `${dir}/styles.css`;
+	const assetDir = `${dir}/assets`;
+	await Deno.mkdir(assetDir);
+	const cssFile = `${assetDir}/styles.css`;
 	await Deno.writeTextFile(cssFile, 'body { color: red; }');
 	const templateDir = `${dir}/templates`;
 	await Deno.mkdir(templateDir);
 
 	const { callback, promise, cleanup } = waitFor(3000);
-	const watcher = createWatcher({ templateRoot: templateDir, cssPath: cssFile, debounceMs: 50 }, callback);
+	const watcher = createWatcher({ templateRoot: templateDir, assetDirs: [assetDir], debounceMs: 50 }, callback);
 
 	try {
 		await new Promise((r) => setTimeout(r, 100));
 		await Deno.writeTextFile(cssFile, 'body { color: blue; }');
 		const events = await promise;
-		assertEquals(events.length > 0, true, 'should receive css event');
-		assertEquals(events[0], 'css');
+		assertEquals(events.length > 0, true, 'should receive asset event for CSS change');
+		assertEquals(events[0], 'asset');
 	} finally {
 		cleanup();
 		watcher.close();

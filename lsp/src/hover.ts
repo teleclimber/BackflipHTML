@@ -16,7 +16,7 @@ export function getHover(
 	filePath: string,
 	index: ProjectIndex,
 	cssAnalysis?: CssAnalysisResult | null,
-	stylesheetPath?: string | null,
+	cssPaths?: string[] | null,
 	templateRoot?: string | null,
 	assetDirs?: Map<string, string> | null,
 ): Hover | null {
@@ -25,14 +25,14 @@ export function getHover(
 		end: { line: position.line + 1, character: 0 },
 	});
 
-	return hoverCssSelector(line, position, filePath, cssAnalysis, stylesheetPath, templateRoot)
+	return hoverCssSelector(line, position, filePath, cssAnalysis, cssPaths, templateRoot)
 		?? hoverAssetRef(line, position, assetDirs)
 		?? hoverBPart(line, position, filePath, index)
 		?? hoverBName(line, position, filePath, index)
 		?? hoverBIn(doc, line, position, filePath, index)
 		?? hoverBSlot(doc, line, position, filePath, index)
 		?? hoverBData(line, position, filePath, index)
-		?? hoverCssRules(line, position, filePath, cssAnalysis, stylesheetPath)
+		?? hoverCssRules(line, position, filePath, cssAnalysis, cssPaths)
 		?? null;
 }
 
@@ -423,11 +423,14 @@ export function findElementsForSelector(
 	filePath: string,
 	lspLine0: number,
 	cssAnalysis: CssAnalysisResult,
-	stylesheetPath: string,
+	cssPaths: string[],
 	templateRoot: string,
 ): ElementMatchInfo[] | null {
-	const relStylesheet = path.relative(templateRoot, stylesheetPath);
-	if (filePath !== relStylesheet && filePath !== stylesheetPath) return null;
+	const isCssFile = cssPaths.some(p => {
+		const rel = path.relative(templateRoot, p);
+		return filePath === rel || filePath === p;
+	});
+	if (!isCssFile) return null;
 
 	const lspLine = lspLine0 + 1; // convert to 1-based
 
@@ -466,12 +469,12 @@ function hoverCssSelector(
 	position: Position,
 	filePath: string,
 	cssAnalysis?: CssAnalysisResult | null,
-	stylesheetPath?: string | null,
+	cssPaths?: string[] | null,
 	templateRoot?: string | null,
 ): Hover | null {
-	if (!cssAnalysis || !stylesheetPath || !templateRoot) return null;
+	if (!cssAnalysis || !cssPaths || cssPaths.length === 0 || !templateRoot) return null;
 
-	const unique = findElementsForSelector(filePath, position.line, cssAnalysis, stylesheetPath, templateRoot);
+	const unique = findElementsForSelector(filePath, position.line, cssAnalysis, cssPaths, templateRoot);
 	if (!unique) return null;
 
 	const partialSet = new Set(unique.map(e => `${e.file}#${e.partialName}`));
@@ -568,7 +571,7 @@ function hoverCssRules(
 	position: Position,
 	filePath: string,
 	cssAnalysis?: CssAnalysisResult | null,
-	stylesheetPath?: string | null,
+	cssPaths?: string[] | null,
 ): Hover | null {
 	if (!cssAnalysis) return null;
 
@@ -580,15 +583,18 @@ function hoverCssRules(
 	lines.push(`**CSS Rules** (${ruleCount} rule${ruleCount !== 1 ? 's' : ''})`);
 	lines.push('');
 
+	// Use the first CSS path for location links (best effort)
+	const primaryCssPath = cssPaths && cssPaths.length > 0 ? cssPaths[0] : null;
+
 	for (const m of result.rules) {
 		const spec = `(${m.specificity.join(', ')})`;
 		const typeTag = m.matchType !== 'definite' ? ` · *${m.matchType}*` : '';
 
 		let locationLink = '';
-		if (stylesheetPath && m.sourceLine > 0) {
-			const fileName = path.basename(stylesheetPath);
+		if (primaryCssPath && m.sourceLine > 0) {
+			const fileName = path.basename(primaryCssPath);
 			const args = encodeURIComponent(JSON.stringify({
-				path: stylesheetPath,
+				path: primaryCssPath,
 				line: m.sourceLine - 1,
 				col: m.sourceCol - 1,
 			}));

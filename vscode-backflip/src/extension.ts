@@ -137,12 +137,12 @@ export function activate(context: ExtensionContext): void {
 			};
 			lastPreviewQuery = params;
 
-			const result = await client.sendRequest<{ html: string; partialName: string; stylesheetPath?: string; templateRoot?: string } | null>('backflip/previewPartial', params);
+			const result = await client.sendRequest<{ html: string; partialName: string; cssPaths?: string[]; templateRoot?: string } | null>('backflip/previewPartial', params);
 			if (!result) {
 				vscode.window.showInformationMessage('Could not generate preview for this partial.');
 				return;
 			}
-			showPreviewPanel(result.html, result.partialName, context, result.stylesheetPath, result.templateRoot);
+			showPreviewPanel(result.html, result.partialName, context, result.cssPaths, result.templateRoot);
 		},
 	);
 	context.subscriptions.push(previewPartialDisposable);
@@ -218,9 +218,9 @@ export function activate(context: ExtensionContext): void {
 			}
 
 			if (isPreviewOpen() && lastPreviewQuery) {
-				const result = await client.sendRequest<{ html: string; partialName: string; stylesheetPath?: string; templateRoot?: string } | null>('backflip/previewPartial', lastPreviewQuery);
+				const result = await client.sendRequest<{ html: string; partialName: string; cssPaths?: string[]; templateRoot?: string } | null>('backflip/previewPartial', lastPreviewQuery);
 				if (result) {
-					refreshPreviewPanel(result.html, result.partialName, result.stylesheetPath, result.templateRoot);
+					refreshPreviewPanel(result.html, result.partialName, result.cssPaths, result.templateRoot);
 				}
 			}
 		});

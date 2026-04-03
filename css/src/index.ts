@@ -11,6 +11,8 @@ export type {
 	PartialSourceInfo,
 } from './types.js';
 
+export { discoverCssFiles, type CssFileRef } from './discover.js';
+
 import type { CssAnalysisInput, CssAnalysisResult, ContextSpine } from './types.js';
 import { parseCssFile } from './parse-css.js';
 import { parseTemplate } from './parse-dom.js';

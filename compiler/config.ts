@@ -13,7 +13,6 @@ export interface BackflipConfig {
 	root: string;
 	output?: string;
 	lang?: 'js' | 'php';
-	stylesheet?: string;
 	assets?: AssetDirConfig[];
 }
 
@@ -55,19 +54,6 @@ export async function loadConfig(dir: string): Promise<LoadConfigResult> {
 
 	if (obj.lang !== undefined && obj.lang !== 'js' && obj.lang !== 'php') {
 		throw new Error(`${CONFIG_FILENAME}: "lang" must be "js" or "php"`);
-	}
-
-	if (obj.stylesheet !== undefined && typeof obj.stylesheet !== 'string') {
-		throw new Error(`${CONFIG_FILENAME}: "stylesheet" must be a string`);
-	}
-
-	if (typeof obj.stylesheet === 'string') {
-		const stylesheetPath = path.resolve(dir, obj.stylesheet);
-		try {
-			await fs.stat(stylesheetPath);
-		} catch {
-			throw new Error(`${CONFIG_FILENAME}: stylesheet not found: ${obj.stylesheet}`);
-		}
 	}
 
 	const configErrors: string[] = [];
@@ -126,7 +112,6 @@ export async function loadConfig(dir: string): Promise<LoadConfigResult> {
 	const config: BackflipConfig = { root: obj.root };
 	if (obj.output !== undefined) config.output = obj.output as string;
 	if (obj.lang !== undefined) config.lang = obj.lang as 'js' | 'php';
-	if (obj.stylesheet !== undefined) config.stylesheet = obj.stylesheet as string;
 	if (validAssets.length > 0) {
 		config.assets = validAssets.map(e => ({
 			name: e.name as string,

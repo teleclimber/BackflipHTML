@@ -1,15 +1,13 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-export type WatchCategory = 'template' | 'css' | 'config' | 'asset';
+export type WatchCategory = 'template' | 'config' | 'asset';
 
 export type WatchCallback = (category: WatchCategory) => void;
 
 export interface WatchOptions {
 	/** Root directory containing templates (watched recursively for .html files). */
 	templateRoot: string;
-	/** Absolute path to a CSS file to watch. */
-	cssPath?: string;
 	/** Absolute path to backflip.json (or similar config file). */
 	configPath?: string;
 	/** Absolute paths to asset directories to watch. */
@@ -50,18 +48,6 @@ export function createWatcher(options: WatchOptions, callback: WatchCallback): W
 		watchers.push(tw);
 	} catch (err) {
 		console.error('Failed to watch template directory:', err);
-	}
-
-	// Watch CSS file.
-	if (options.cssPath) {
-		try {
-			const cw = fs.watch(options.cssPath, () => {
-				debounced('css');
-			});
-			watchers.push(cw);
-		} catch (err) {
-			console.error('Failed to watch CSS file:', err);
-		}
 	}
 
 	// Watch asset directories.

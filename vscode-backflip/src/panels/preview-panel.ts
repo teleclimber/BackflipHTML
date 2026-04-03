@@ -13,7 +13,7 @@ export function showPreviewPanel(
 	html: string,
 	partialName: string,
 	context: vscode.ExtensionContext,
-	stylesheetPath?: string,
+	cssPaths?: string[],
 	templateRootPath?: string,
 ): void {
 	templateRoot = templateRootPath ?? null;
@@ -22,8 +22,10 @@ export function showPreviewPanel(
 		panel.reveal();
 	} else {
 		const resourceRoots: vscode.Uri[] = [];
-		if (stylesheetPath) {
-			resourceRoots.push(vscode.Uri.file(path.dirname(stylesheetPath)));
+		if (cssPaths) {
+			for (const cssPath of cssPaths) {
+				resourceRoots.push(vscode.Uri.file(path.dirname(cssPath)));
+			}
 		}
 
 		panel = vscode.window.createWebviewPanel(
@@ -40,14 +42,14 @@ export function showPreviewPanel(
 	}
 
 	panel.title = `Preview: ${partialName}`;
-	panel.webview.html = injectCssLink(html, panel.webview, stylesheetPath);
+	panel.webview.html = injectCssLinks(html, panel.webview, cssPaths);
 }
 
-export function refreshPreviewPanel(html: string, partialName: string, stylesheetPath?: string, templateRootPath?: string): void {
+export function refreshPreviewPanel(html: string, partialName: string, cssPaths?: string[], templateRootPath?: string): void {
 	if (templateRootPath !== undefined) templateRoot = templateRootPath;
 	if (panel) {
 		panel.title = `Preview: ${partialName}`;
-		panel.webview.html = injectCssLink(html, panel.webview, stylesheetPath);
+		panel.webview.html = injectCssLinks(html, panel.webview, cssPaths);
 	}
 }
 
@@ -75,14 +77,16 @@ export function getNonce(): string {
 	return generateNonce();
 }
 
-function injectCssLink(html: string, webview: vscode.Webview, stylesheetPath?: string): string {
-	if (!stylesheetPath) return html;
-	const cssUri = webview.asWebviewUri(vscode.Uri.file(stylesheetPath));
-	const linkTag = `<link rel="stylesheet" href="${cssUri}">`;
+function injectCssLinks(html: string, webview: vscode.Webview, cssPaths?: string[]): string {
+	if (!cssPaths || cssPaths.length === 0) return html;
+	const linkTags = cssPaths.map(cssPath => {
+		const cssUri = webview.asWebviewUri(vscode.Uri.file(cssPath));
+		return `<link rel="stylesheet" href="${cssUri}">`;
+	}).join('\n');
 	if (html.includes('</head>')) {
-		return html.replace('</head>', linkTag + '\n</head>');
+		return html.replace('</head>', linkTags + '\n</head>');
 	}
-	return linkTag + '\n' + html;
+	return linkTags + '\n' + html;
 }
 
 export function isPreviewOpen(): boolean {

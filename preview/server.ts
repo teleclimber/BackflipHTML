@@ -7,8 +7,10 @@ import { compileDirectory, type CompiledDirectory } from '../compiler/partials.j
 import { previewPartial } from './preview.js';
 import type { CompiledFile } from '../compiler/compiler.js';
 import { createWatcher, type WatchCallback, type WatchOptions } from '../lib/watch.js';
+import { discoverCssFiles } from '../css/src/discover.js';
 
 const MIME_TYPES: Record<string, string> = {
+	'.css': 'text/css', '.js': 'text/javascript',
 	'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
 	'.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp',
 	'.ico': 'image/x-icon', '.avif': 'image/avif',
@@ -19,7 +21,8 @@ const MIME_TYPES: Record<string, string> = {
 
 export interface ServerContext {
 	directory: CompiledDirectory;
-	cssPath: string;
+	/** CSS hrefs for fragment preview (auto-discovered from asset dirs). */
+	cssHrefs: string[];
 	templateRoot: string;
 	assetDirs?: Map<string, string>;    // name -> absolute path
 	assetMap?: Map<string, string>;     // name -> preview prefix (__assets/name/)
@@ -50,12 +53,14 @@ export async function buildContext(projectDir: string): Promise<ServerContext> {
 		throw new Error(`Compilation failed with ${errors.length} error(s)`);
 	}
 
-	let cssPath = '';
-	if (config.stylesheet) {
-		cssPath = path.resolve(projectDir, config.stylesheet);
+	const cssHrefs: string[] = [];
+	if (assetDirsMap) {
+		for (const ref of discoverCssFiles(assetDirsMap)) {
+			cssHrefs.push(`/__assets/${ref.name}/${ref.subpath}`);
+		}
 	}
 
-	return { directory, cssPath, templateRoot: inputDir, assetDirs: assetDirsMap, assetMap };
+	return { directory, cssHrefs, templateRoot: inputDir, assetDirs: assetDirsMap, assetMap };
 }
 
 /** Build a tree structure from the compiled directory for the index page. */
@@ -186,24 +191,6 @@ export async function handleRequest(
 		return;
 	}
 
-	// Serve CSS file
-	if (pathname === '/css/styles.css') {
-		if (!ctx.cssPath) {
-			res.writeHead(404, { 'Content-Type': 'text/plain' });
-			res.end('No stylesheet configured');
-			return;
-		}
-		try {
-			const content = await fs.readFile(ctx.cssPath, 'utf-8');
-			res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8', 'Cache-Control': 'no-store' });
-			res.end(content);
-		} catch {
-			res.writeHead(404, { 'Content-Type': 'text/plain' });
-			res.end('Stylesheet not found');
-		}
-		return;
-	}
-
 	// Match /preview/<file>/<partial>
 	const match = pathname.match(/^\/preview\/(.+?)\/([^/]+)$/);
 	if (!match) {
@@ -231,7 +218,7 @@ export async function handleRequest(
 		compiledFile,
 		fileName: filePath,
 		allFiles: ctx.directory.files,
-		cssHref: ctx.cssPath ? '/css/styles.css' : undefined,
+		cssHrefs: ctx.cssHrefs.length > 0 ? ctx.cssHrefs : undefined,
 		liveReload,
 		assetMap: ctx.assetMap,
 	});
@@ -302,7 +289,7 @@ if (import.meta.url === `file://${process.argv[1]}` ||
 	// Use a proxy so the http handler always sees the latest ctx after recompilation.
 	const liveCtx: ServerContext = {
 		get directory() { return ctx.directory; },
-		get cssPath() { return ctx.cssPath; },
+		get cssHrefs() { return ctx.cssHrefs; },
 		get templateRoot() { return ctx.templateRoot; },
 		get assetDirs() { return ctx.assetDirs; },
 		get assetMap() { return ctx.assetMap; },
@@ -320,14 +307,13 @@ if (import.meta.url === `file://${process.argv[1]}` ||
 	function watcherOptions(): WatchOptions {
 		return {
 			templateRoot: ctx.templateRoot,
-			cssPath: ctx.cssPath || undefined,
 			configPath,
 			assetDirs: ctx.assetDirs ? Array.from(ctx.assetDirs.values()) : undefined,
 		};
 	}
 
 	const onWatch: WatchCallback = async (category) => {
-		if (category === 'template' || category === 'config') {
+		if (category === 'template' || category === 'config' || category === 'asset') {
 			try {
 				console.log('Recompiling templates...');
 				ctx = await buildContext(projectDir);

@@ -7,7 +7,7 @@ export interface SelectorsData {
 	partialName: string;
 	startLine: number;
 	startCol: number;
-	stylesheetPath: string;
+	cssPaths: string[];
 	rules: Array<{
 		selector: string;
 		specificity: [number, number, number];
@@ -64,7 +64,8 @@ export function isSelectorsOpen(): boolean {
 }
 
 function renderHtml(data: SelectorsData): string {
-	const fileName = path.basename(data.stylesheetPath);
+	const primaryCssPath = data.cssPaths.length > 0 ? data.cssPaths[0] : '';
+	const fileName = primaryCssPath ? path.basename(primaryCssPath) : 'styles.css';
 	const rows = data.rules.map(r => {
 		const spec = `(${r.specificity.join(', ')})`;
 		const typeClass = r.matchType !== 'definite' ? ` match-${r.matchType}` : '';
@@ -78,7 +79,7 @@ function renderHtml(data: SelectorsData): string {
 				<code class="selector">${esc(r.selector)}</code>
 				<span class="spec">${spec}</span>
 				${typeLabel}
-				<a class="location" href="#" data-path="${esc(data.stylesheetPath)}" data-line="${r.sourceLine - 1}" data-col="${r.sourceCol - 1}">${esc(fileName)}:${r.sourceLine}</a>
+				<a class="location" href="#" data-path="${esc(primaryCssPath)}" data-line="${r.sourceLine - 1}" data-col="${r.sourceCol - 1}">${esc(fileName)}:${r.sourceLine}</a>
 			</div>
 			<div class="props">${props}</div>
 			${media}

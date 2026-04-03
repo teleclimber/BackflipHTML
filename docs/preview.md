@@ -12,7 +12,7 @@ The preview system:
 2. **Generates mock data** from the partial's inferred data shape (the types and usage patterns of its variables)
 3. **Fills slots** with grey placeholder blocks (since no caller provides slot content)
 4. **Renders** the partial using the JS runtime, producing an HTML preview
-5. **Includes the project's CSS** if a `stylesheet` is configured in `backflip.json`
+5. **Includes the project's CSS** — any `.css` files found in [asset directories](assets.md) are automatically injected into fragment previews
 
 ---
 
@@ -95,7 +95,7 @@ const result = await previewPartial({
     compiledFile: directory.files.get('components.html'),
     allFiles: directory.files,       // needed for cross-file b-part refs
     fileName: 'components.html',
-    cssContent: 'body { margin: 0; }', // optional project CSS
+    cssHrefs: ['/assets/styles.css'],    // optional CSS links for fragment preview
     dataOverrides: { title: 'Custom' }, // optional overrides
 });
 

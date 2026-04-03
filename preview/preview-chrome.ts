@@ -1,5 +1,5 @@
 export interface ChromeOptions {
-	cssHref?: string;
+	cssHrefs?: string[];
 	fileName?: string;
 	liveReload?: boolean;
 	nonce?: string;
@@ -96,7 +96,7 @@ function cspMeta(nonce: string): string {
  * Document-level partials get no preview banner; fragments do.
  */
 export function wrapInChrome(html: string, partialName: string, options?: ChromeOptions): string {
-	const cssHref = options?.cssHref ?? '';
+	const cssHrefs = options?.cssHrefs ?? [];
 	const fileName = options?.fileName ?? '';
 	const hasHead = /<head[\s>]/i.test(html);
 	const hasBody = /<body[\s>]/i.test(html);
@@ -105,15 +105,17 @@ export function wrapInChrome(html: string, partialName: string, options?: Chrome
 	const nonce = options?.nonce;
 
 	if (hasHead && hasBody) {
-		return wrapDocumentLevel(html, cssHref, liveReload, nonce);
+		return wrapDocumentLevel(html, liveReload, nonce);
 	}
-	return wrapFragment(html, partialName, fileName, cssHref, liveReload, nonce);
+	return wrapFragment(html, partialName, fileName, cssHrefs, liveReload, nonce);
 }
 
-function wrapFragment(html: string, partialName: string, fileName: string, cssHref: string, liveReload: boolean, nonce?: string): string {
+function wrapFragment(html: string, partialName: string, fileName: string, cssHrefs: string[], liveReload: boolean, nonce?: string): string {
 	const label = fileName
 		? `${escapeHtml(fileName)} &rsaquo; <code>${escapeHtml(partialName)}</code>`
 		: `<code>${escapeHtml(partialName)}</code>`;
+
+	const cssLinks = cssHrefs.map(href => `<link rel="stylesheet" href="${escapeHtml(href)}">`).join('\n');
 
 	return `<!DOCTYPE html>
 <html>
@@ -123,7 +125,7 @@ function wrapFragment(html: string, partialName: string, fileName: string, cssHr
 ${nonce ? cspMeta(nonce) : ''}
 <title>Preview: ${escapeHtml(partialName)}</title>
 <style>${PREVIEW_STYLES}${SLOT_PLACEHOLDER_STYLE}</style>
-${cssHref ? `<link rel="stylesheet" href="${escapeHtml(cssHref)}">` : ''}
+${cssLinks}
 </head>
 <body>
 <div class="backflip-preview-bar">Preview: ${label}</div>
@@ -134,21 +136,12 @@ ${nonce ? contextMenuScript(nonce) : ''}
 </html>`;
 }
 
-function wrapDocumentLevel(html: string, cssHref: string, liveReload: boolean, nonce?: string): string {
+function wrapDocumentLevel(html: string, liveReload: boolean, nonce?: string): string {
 	let result = '<!DOCTYPE html>\n' + html;
 
 	if (nonce) {
 		if (result.includes('</head>')) {
 			result = result.replace('</head>', cspMeta(nonce) + '\n</head>');
-		}
-	}
-
-	if (cssHref) {
-		const linkTag = `<link rel="stylesheet" href="${escapeHtml(cssHref)}">`;
-		if (result.includes('</head>')) {
-			result = result.replace('</head>', linkTag + '\n</head>');
-		} else {
-			result = linkTag + '\n' + result;
 		}
 	}
 

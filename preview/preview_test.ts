@@ -140,14 +140,15 @@ Deno.test("preview cross-file partial with slot content", async () => {
 
 // --- CSS injection ---
 
-Deno.test("preview with cssHref includes link tag in output", async () => {
+Deno.test("preview with cssHrefs includes link tags in output", async () => {
 	const result = await previewPartial({
 		partialName: 'greeting',
 		compiledFile: getFile('simple.html'),
 		fileName: 'simple.html',
-		cssHref: '/css/styles.css',
+		cssHrefs: ['/__assets/styles/main.css', '/__assets/styles/theme.css'],
 	});
-	assertStringIncludes(result.html, '<link rel="stylesheet" href="/css/styles.css">');
+	assertStringIncludes(result.html, '<link rel="stylesheet" href="/__assets/styles/main.css">');
+	assertStringIncludes(result.html, '<link rel="stylesheet" href="/__assets/styles/theme.css">');
 });
 
 // --- Preview chrome ---

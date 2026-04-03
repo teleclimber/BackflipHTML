@@ -407,7 +407,7 @@ describe('getHover', () => {
 			strictEqual(result, null);
 		});
 
-		it('shows CSS file name and line number when stylesheetPath is provided', () => {
+		it('shows CSS file name and line number when cssPaths is provided', () => {
 			const index = makeIndex([], []);
 			const cssAnalysis = makeCssAnalysis('page.html', [{
 				startLine: 1,
@@ -417,7 +417,7 @@ describe('getHover', () => {
 				],
 			}]);
 			const doc = makeDoc(['<div class="card">Hello</div>']);
-			const result = getHover(doc, pos(0, 5), 'page.html', index, cssAnalysis as any, '/workspace/styles.css');
+			const result = getHover(doc, pos(0, 5), 'page.html', index, cssAnalysis as any, ['/workspace/styles.css']);
 			const v = hoverValue(result);
 			ok(v.includes('styles.css:10'), 'should include file name and line number');
 			ok(v.includes('command:backflipHTML.openCssRule'), 'should include command URI');
@@ -434,13 +434,13 @@ describe('getHover', () => {
 				],
 			}]);
 			const doc = makeDoc(['<div class="a b">Hello</div>']);
-			const result = getHover(doc, pos(0, 5), 'page.html', index, cssAnalysis as any, '/workspace/theme.css');
+			const result = getHover(doc, pos(0, 5), 'page.html', index, cssAnalysis as any, ['/workspace/theme.css']);
 			const v = hoverValue(result);
 			ok(v.includes('theme.css:5'), 'should include first rule line');
 			ok(v.includes('theme.css:12'), 'should include second rule line');
 		});
 
-		it('does not show file link when stylesheetPath is not provided', () => {
+		it('does not show file link when cssPaths is not provided', () => {
 			const index = makeIndex([], []);
 			const cssAnalysis = makeCssAnalysis('page.html', [{
 				startLine: 1,
@@ -452,7 +452,7 @@ describe('getHover', () => {
 			const doc = makeDoc(['<div class="card">Hello</div>']);
 			const result = getHover(doc, pos(0, 5), 'page.html', index, cssAnalysis as any);
 			const v = hoverValue(result);
-			ok(!v.includes('command:'), 'should not include command URI without stylesheetPath');
+			ok(!v.includes('command:'), 'should not include command URI without cssPaths');
 		});
 
 		it('returns null when cursor not on HTML tag', () => {
@@ -515,7 +515,7 @@ describe('CSS selector hover (hover in CSS file)', () => {
 		return { elementMatches, rules: [] };
 	}
 
-	// stylesheetPath is absolute, templateRoot is absolute
+	// cssPaths are absolute, templateRoot is absolute
 	// filePath passed to getHover is path.relative(templateRoot, absoluteFilePath)
 	// So for stylesheet at /workspace/styles.css and templateRoot /workspace/templates,
 	// filePath would be ../styles.css
@@ -534,7 +534,7 @@ describe('CSS selector hover (hover in CSS file)', () => {
 			'  color: red;',
 			'}',
 		]);
-		const result = getHover(doc, pos(1, 3), ssRelPath, index, cssAnalysis as any, ssPath, tplRoot);
+		const result = getHover(doc, pos(1, 3), ssRelPath, index, cssAnalysis as any, [ssPath], tplRoot);
 		const v = hoverValue(result);
 		ok(v.includes('**Matched elements**'), 'should show matched elements header');
 		ok(v.includes('card'), 'should show partial name');
@@ -548,7 +548,7 @@ describe('CSS selector hover (hover in CSS file)', () => {
 			{ file: 'other.html', partialName: 'header', startLine: 3, startCol: 1, selector: '.title', ruleLine: 1 },
 		]);
 		const doc = makeDoc(['.title { font-size: 16px; }']);
-		const result = getHover(doc, pos(0, 3), ssRelPath, index, cssAnalysis as any, ssPath, tplRoot);
+		const result = getHover(doc, pos(0, 3), ssRelPath, index, cssAnalysis as any, [ssPath], tplRoot);
 		const v = hoverValue(result);
 		ok(v.includes('card'), 'should show first partial');
 		ok(v.includes('header'), 'should show second partial');
@@ -562,7 +562,7 @@ describe('CSS selector hover (hover in CSS file)', () => {
 			{ file: 'page.html', partialName: 'card', startLine: 5, startCol: 3, selector: '.card', ruleLine: 1 },
 		]);
 		const doc = makeDoc(['.card { color: red; }']);
-		const result = getHover(doc, pos(0, 3), ssRelPath, index, cssAnalysis as any, ssPath, tplRoot);
+		const result = getHover(doc, pos(0, 3), ssRelPath, index, cssAnalysis as any, [ssPath], tplRoot);
 		const v = hoverValue(result);
 		ok(v.includes('command:backflipHTML.openCssRule'), 'should include command URI');
 		// Path is URL-encoded in the command URI
@@ -575,7 +575,7 @@ describe('CSS selector hover (hover in CSS file)', () => {
 			{ file: 'page.html', partialName: 'card', startLine: 5, startCol: 3, selector: '.card', ruleLine: 1, matchType: 'conditional' },
 		]);
 		const doc = makeDoc(['.card { color: red; }']);
-		const result = getHover(doc, pos(0, 3), ssRelPath, index, cssAnalysis as any, ssPath, tplRoot);
+		const result = getHover(doc, pos(0, 3), ssRelPath, index, cssAnalysis as any, [ssPath], tplRoot);
 		const v = hoverValue(result);
 		ok(v.includes('conditional'), 'should show match type');
 	});
@@ -590,7 +590,7 @@ describe('CSS selector hover (hover in CSS file)', () => {
 			'  color: red;',
 			'}',
 		]);
-		const result = getHover(doc, pos(1, 5), ssRelPath, index, cssAnalysis as any, ssPath, tplRoot);
+		const result = getHover(doc, pos(1, 5), ssRelPath, index, cssAnalysis as any, [ssPath], tplRoot);
 		strictEqual(result, null);
 	});
 
@@ -600,7 +600,7 @@ describe('CSS selector hover (hover in CSS file)', () => {
 			{ file: 'page.html', partialName: 'card', startLine: 5, startCol: 3, selector: '.card', ruleLine: 1 },
 		]);
 		const doc = makeDoc(['.card { color: red; }']);
-		const result = getHover(doc, pos(0, 3), 'other.css', index, cssAnalysis as any, ssPath, tplRoot);
+		const result = getHover(doc, pos(0, 3), 'other.css', index, cssAnalysis as any, [ssPath], tplRoot);
 		strictEqual(result, null);
 	});
 
@@ -611,7 +611,7 @@ describe('CSS selector hover (hover in CSS file)', () => {
 		]);
 		const doc = makeDoc(['.unmatched { color: red; }']);
 		// Rule is on line 3, but we're hovering line 1 (0-based 0)
-		const result = getHover(doc, pos(0, 3), ssRelPath, index, cssAnalysis as any, ssPath, tplRoot);
+		const result = getHover(doc, pos(0, 3), ssRelPath, index, cssAnalysis as any, [ssPath], tplRoot);
 		strictEqual(result, null);
 	});
 });
@@ -730,7 +730,7 @@ describe('CSS selector hover integration (analyzeCss + getHover on CSS file)', (
 		});
 		const doc = makeDoc(css.split('\n'));
 		// Hover on .card-body selector (line 0, 0-based) — rule is on line 1 (1-based)
-		const result = getHover(doc, pos(0, 3), '../styles.css', makeIndex([], []), cssAnalysis, '/workspace/styles.css', '/workspace/templates');
+		const result = getHover(doc, pos(0, 3), '../styles.css', makeIndex([], []), cssAnalysis, ['/workspace/styles.css'], '/workspace/templates');
 		const v = hoverValue(result);
 		ok(v.includes('**Matched elements**'), 'should show matched elements header');
 		ok(v.includes('card'), 'should show partial name');
@@ -757,7 +757,7 @@ describe('CSS selector hover integration (analyzeCss + getHover on CSS file)', (
 			]),
 		});
 		const doc = makeDoc(css.split('\n'));
-		const result = getHover(doc, pos(0, 3), '../styles.css', makeIndex([], []), cssAnalysis, '/workspace/styles.css', '/workspace/templates');
+		const result = getHover(doc, pos(0, 3), '../styles.css', makeIndex([], []), cssAnalysis, ['/workspace/styles.css'], '/workspace/templates');
 		const v = hoverValue(result);
 		ok(v.includes('card'), 'should show card partial');
 		ok(v.includes('page'), 'should show page partial');
@@ -895,7 +895,7 @@ describe('findElementsForSelector', () => {
 			{ file: 'page.html', partialName: 'card', startLine: 5, startCol: 3, selector: '.card', ruleLine: 1 },
 			{ file: 'page.html', partialName: 'header', startLine: 10, startCol: 1, selector: '.card', ruleLine: 1 },
 		]);
-		const result = findElementsForSelector(ssRelPath, 0, cssAnalysis as any, ssPath, tplRoot);
+		const result = findElementsForSelector(ssRelPath, 0, cssAnalysis as any, [ssPath], tplRoot);
 		ok(result, 'should return matches');
 		strictEqual(result!.length, 2);
 		strictEqual(result![0].partialName, 'card');
@@ -907,7 +907,7 @@ describe('findElementsForSelector', () => {
 			{ file: 'page.html', partialName: 'card', startLine: 5, startCol: 3, selector: '.a', ruleLine: 1 },
 			{ file: 'page.html', partialName: 'card', startLine: 5, startCol: 3, selector: '.b', ruleLine: 1 },
 		]);
-		const result = findElementsForSelector(ssRelPath, 0, cssAnalysis as any, ssPath, tplRoot);
+		const result = findElementsForSelector(ssRelPath, 0, cssAnalysis as any, [ssPath], tplRoot);
 		ok(result, 'should return matches');
 		strictEqual(result!.length, 1, 'should deduplicate');
 	});
@@ -916,7 +916,7 @@ describe('findElementsForSelector', () => {
 		const cssAnalysis = makeCssAnalysisWithElements([
 			{ file: 'page.html', partialName: 'card', startLine: 5, startCol: 3, selector: '.card', ruleLine: 1 },
 		]);
-		const result = findElementsForSelector('other.css', 0, cssAnalysis as any, ssPath, tplRoot);
+		const result = findElementsForSelector('other.css', 0, cssAnalysis as any, [ssPath], tplRoot);
 		strictEqual(result, null);
 	});
 
@@ -924,7 +924,7 @@ describe('findElementsForSelector', () => {
 		const cssAnalysis = makeCssAnalysisWithElements([
 			{ file: 'page.html', partialName: 'card', startLine: 5, startCol: 3, selector: '.card', ruleLine: 3 },
 		]);
-		const result = findElementsForSelector(ssRelPath, 0, cssAnalysis as any, ssPath, tplRoot);
+		const result = findElementsForSelector(ssRelPath, 0, cssAnalysis as any, [ssPath], tplRoot);
 		strictEqual(result, null);
 	});
 
@@ -932,7 +932,7 @@ describe('findElementsForSelector', () => {
 		const cssAnalysis = makeCssAnalysisWithElements([
 			{ file: 'page.html', partialName: 'card', startLine: 5, startCol: 3, selector: '.card', ruleLine: 1, matchType: 'conditional' },
 		]);
-		const result = findElementsForSelector(ssRelPath, 0, cssAnalysis as any, ssPath, tplRoot);
+		const result = findElementsForSelector(ssRelPath, 0, cssAnalysis as any, [ssPath], tplRoot);
 		ok(result);
 		strictEqual(result![0].matchType, 'conditional');
 	});

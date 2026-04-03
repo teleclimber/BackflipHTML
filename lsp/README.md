@@ -9,11 +9,11 @@
 - **Find All References** — from a `b-name` definition, find all `b-part` usages
 - **Document Symbols** — lists partials in the editor outline/breadcrumbs
 - **Hover (HTML)** — hover over `b-part`, `b-name`, `b-in`, `b-slot`, `b-data:` attributes or HTML elements to see directive info and matching CSS rules
-- **Hover (CSS)** — hover over a selector in the stylesheet to see which partials contain matching elements
+- **Hover (CSS)** — hover over a selector in a CSS file to see which partials contain matching elements
 
 ## How it works
 
-The server requires a `backflip.json` in the workspace root to activate (see [`docs/configuration.md`](../docs/configuration.md)). On file open/save, it runs `compileDirectory()` on the template directory and builds a project index of partial definitions and references. CSS analysis is provided by [`@backflip/css`](../css/README.md) when a `stylesheet` is configured.
+The server requires a `backflip.json` in the workspace root to activate (see [`docs/configuration.md`](../docs/configuration.md)). On file open/save, it runs `compileDirectory()` on the template directory and builds a project index of partial definitions and references. CSS analysis is provided by [`@backflip/css`](../css/README.md) — CSS files are automatically discovered from configured asset directories.
 
 File changes trigger recompilation with a 300ms debounce. The server also watches for `backflip.json` changes to reload configuration.
 
