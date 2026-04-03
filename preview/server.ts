@@ -6,7 +6,7 @@ import { loadConfig, resolveConfigRoot, resolveAssetDirs } from '../compiler/con
 import { compileDirectory, type CompiledDirectory } from '../compiler/partials.js';
 import { previewPartial } from './preview.js';
 import type { CompiledFile } from '../compiler/compiler.js';
-import { createWatcher } from '../lib/watch.js';
+import { createWatcher, type WatchCallback, type WatchOptions } from '../lib/watch.js';
 
 const MIME_TYPES: Record<string, string> = {
 	'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
@@ -317,12 +317,16 @@ if (import.meta.url === `file://${process.argv[1]}` ||
 	const projectDir = process.cwd();
 	const configPath = path.join(projectDir, 'backflip.json');
 
-	createWatcher({
-		templateRoot: ctx.templateRoot,
-		cssPath: ctx.cssPath || undefined,
-		configPath,
-		assetDirs: ctx.assetDirs ? Array.from(ctx.assetDirs.values()) : undefined,
-	}, async (category) => {
+	function watcherOptions(): WatchOptions {
+		return {
+			templateRoot: ctx.templateRoot,
+			cssPath: ctx.cssPath || undefined,
+			configPath,
+			assetDirs: ctx.assetDirs ? Array.from(ctx.assetDirs.values()) : undefined,
+		};
+	}
+
+	const onWatch: WatchCallback = async (category) => {
 		if (category === 'template' || category === 'config') {
 			try {
 				console.log('Recompiling templates...');
@@ -332,6 +336,13 @@ if (import.meta.url === `file://${process.argv[1]}` ||
 				console.error('Recompilation failed:', err instanceof Error ? err.message : err);
 			}
 		}
+		if (category === 'config') {
+			// Config may have changed watched directories — recreate the watcher.
+			watcher.close();
+			watcher = createWatcher(watcherOptions(), onWatch);
+		}
 		broadcastReload(sseClients);
-	});
+	};
+
+	let watcher = createWatcher(watcherOptions(), onWatch);
 }
