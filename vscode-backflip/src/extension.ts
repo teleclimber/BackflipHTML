@@ -1,3 +1,4 @@
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { workspace, ExtensionContext } from 'vscode';
@@ -10,13 +11,52 @@ import {
 import { showSelectorsPanel, refreshSelectorsPanel, isSelectorsOpen, type SelectorsData } from './panels/selectors-panel.js';
 import { MatchesTreeProvider, type MatchInfo } from './panels/matches-tree.js';
 import { showPreviewPanel, refreshPreviewPanel, isPreviewOpen } from './panels/preview-panel.js';
+import { showAssetReportPanel, refreshAssetReportPanel, isAssetReportOpen } from './panels/asset-report-panel.js';
 
 let client: LanguageClient;
+
+/** Walk asset directories and collect all subdirectory paths into a map for use with VS Code's `in` operator in `when` clauses. */
+async function buildAssetDirPathMap(assetDirs: Record<string, string>): Promise<Record<string, boolean>> {
+	const map: Record<string, boolean> = {};
+	async function walk(dir: string): Promise<void> {
+		map[dir] = true;
+		try {
+			const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+			for (const entry of entries) {
+				if (entry.isDirectory() && entry.name !== 'node_modules') {
+					await walk(path.join(dir, entry.name));
+				}
+			}
+		} catch {
+			// ignore permission errors etc.
+		}
+	}
+	for (const dirPath of Object.values(assetDirs)) {
+		await walk(dirPath);
+	}
+	return map;
+}
+
+async function updateAssetDirContext(): Promise<void> {
+	if (!client?.isRunning()) return;
+	try {
+		const assetDirsResult = await client.sendRequest<Record<string, string> | null>('backflip/getAssetDirs');
+		if (assetDirsResult) {
+			const pathMap = await buildAssetDirPathMap(assetDirsResult);
+			vscode.commands.executeCommand('setContext', 'backflipHTML.assetDirPaths', pathMap);
+		} else {
+			vscode.commands.executeCommand('setContext', 'backflipHTML.assetDirPaths', undefined);
+		}
+	} catch {
+		// ignore
+	}
+}
 
 // Store last query params for auto-refresh
 let lastSelectorsQuery: { uri: string; line: number; character: number } | null = null;
 let lastMatchesQuery: { uri: string; line: number } | null = null;
 let lastPreviewQuery: { uri: string; partialName: string } | null = null;
+let lastAssetReportQuery: { uri?: string } | null = null;
 
 export function activate(context: ExtensionContext): void {
 	// Register command to open a CSS file at a specific line/column
@@ -147,6 +187,31 @@ export function activate(context: ExtensionContext): void {
 	);
 	context.subscriptions.push(previewPartialDisposable);
 
+	// Asset Usage Report command
+	const assetUsageReportDisposable = vscode.commands.registerCommand(
+		'backflipHTML.assetUsageReport',
+		async (resourceUri?: vscode.Uri) => {
+			if (!client?.isRunning()) return;
+
+			const params: { uri?: string } = {};
+			if (resourceUri) {
+				params.uri = resourceUri.toString();
+			}
+			lastAssetReportQuery = params;
+
+			const result = await client.sendRequest<{ html: string; assetName?: string; assetDirs?: Record<string, string> } | null>('backflip/assetUsageReport', params);
+			if (!result) {
+				vscode.window.showInformationMessage('No asset directories configured.');
+				return;
+			}
+			const title = result.assetName
+				? `Assets: ${result.assetName}`
+				: 'Asset Usage Report';
+			showAssetReportPanel(result.html, title, context, result.assetDirs);
+		},
+	);
+	context.subscriptions.push(assetUsageReportDisposable);
+
 	// Server is bundled inside the extension at server/server.cjs
 	const serverModule = context.asAbsolutePath(
 		path.join('server', 'server.cjs')
@@ -200,9 +265,13 @@ export function activate(context: ExtensionContext): void {
 		clientOptions,
 	);
 
-	client.start().then(() => {
+	client.start().then(async () => {
+		await updateAssetDirContext();
+
 		// Listen for analysis updates to auto-refresh open panels
 		client.onNotification('backflip/analysisUpdated', async () => {
+			await updateAssetDirContext();
+
 			if (isSelectorsOpen() && lastSelectorsQuery) {
 				const result = await client.sendRequest<SelectorsData | null>('backflip/findSelectorsForElement', lastSelectorsQuery);
 				if (result) {
@@ -221,6 +290,14 @@ export function activate(context: ExtensionContext): void {
 				const result = await client.sendRequest<{ html: string; partialName: string; cssPaths?: string[]; templateRoot?: string; assetDirs?: Record<string, string> } | null>('backflip/previewPartial', lastPreviewQuery);
 				if (result) {
 					refreshPreviewPanel(result.html, result.partialName, result.cssPaths, result.templateRoot, result.assetDirs);
+				}
+			}
+
+			if (isAssetReportOpen() && lastAssetReportQuery) {
+				const result = await client.sendRequest<{ html: string; assetName?: string; assetDirs?: Record<string, string> } | null>('backflip/assetUsageReport', lastAssetReportQuery);
+				if (result) {
+					const title = result.assetName ? `Assets: ${result.assetName}` : 'Asset Usage Report';
+					refreshAssetReportPanel(result.html, title, result.assetDirs);
 				}
 			}
 		});

@@ -11,6 +11,7 @@
     "imports": {
         "acorn": "npm:acorn",
         "parse5-html-rewriting-stream": "npm:parse5-html-rewriting-stream",
+        "@backflip/assets": "./assets/src/index.ts",
         "@std/assert": "jsr:@std/assert",
         "@std/cli": "jsr:@std/cli@^1.0.28"
     }

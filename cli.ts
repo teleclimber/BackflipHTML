@@ -5,18 +5,22 @@ import { loadConfig, resolveConfigRoot, resolveAssetDirs } from './compiler/conf
 import { fileToJsModule } from './compiler/generate/js/nodes2js.ts';
 import { fileToPhpFile } from './compiler/generate/php/nodes2php.ts';
 import { resolveAssetRefs } from './compiler/compiler.ts';
+import { discoverAssetFileInfos, collectAssetReferences, buildAssetUsageReport, filterReport } from './assets/src/index.ts';
 
 const HELP = `Usage:
   backflip                                             Use backflip.json config
   backflip <input-dir> <output-dir> --lang <js|php>    Compile and generate files
   backflip <input-dir> --check [--json]                Check for errors
   backflip --check [--json]                            Check using backflip.json
+  backflip --assets-report [--json] [--unused-only]    Report asset usage
 
 Options:
-  --lang <js|php>   Output language (required for generate mode unless in config)
-  --check           Check for errors only, no output written
-  --json            Output errors as JSON (use with --check)
-  --help            Show this help message
+  --lang <js|php>     Output language (required for generate mode unless in config)
+  --check             Check for errors only, no output written
+  --assets-report     Show asset usage report (exits 1 if unused assets found)
+  --unused-only       Only show unused assets (use with --assets-report)
+  --json              Output as JSON (use with --check or --assets-report)
+  --help              Show this help message
 
 Config (backflip.json):
   { "root": "src/templates", "output": "dist", "lang": "js" }
@@ -36,7 +40,7 @@ async function isEmptyDir(dir: string): Promise<boolean> {
 }
 
 const args = parseArgs(Deno.args, {
-    boolean: ['check', 'json', 'help'],
+    boolean: ['check', 'json', 'help', 'assets-report', 'unused-only'],
     string: ['lang'],
     unknown: (arg, key) => { if (key !== undefined) printUsageAndExit(`Unknown flag: ${arg}`); },
 });
@@ -91,6 +95,43 @@ if (args.check) {
     }
 
     Deno.exit(errors.length > 0 ? 1 : 0);
+} else if (args['assets-report']) {
+    if (!assetDirs) {
+        console.error('No asset directories configured in backflip.json');
+        Deno.exit(1);
+    }
+    const compileOpts = assetMap || assetDirs ? { assetMap, assetDirs } : undefined;
+    const { directory, errors } = await compileDirectory(inputDir, compileOpts);
+    if (errors.length > 0) {
+        for (const err of errors) console.error(err.message);
+        Deno.exit(1);
+    }
+
+    const assets = discoverAssetFileInfos(assetDirs);
+    const refs = collectAssetReferences(directory.files);
+    let report = buildAssetUsageReport(assets, refs);
+    if (args['unused-only']) {
+        report = filterReport(report, { unusedOnly: true });
+    }
+
+    if (args.json) {
+        console.log(JSON.stringify(report, null, 2));
+    } else {
+        console.log(`Assets: ${report.summary.totalAssets} total, ${report.summary.usedAssets} used, ${report.summary.unusedAssets} unused`);
+        console.log(`References: ${report.summary.totalReferences} total`);
+        if (report.entries.length > 0) {
+            console.log('');
+            for (const entry of report.entries) {
+                const status = entry.isUsed ? '  used' : 'UNUSED';
+                console.log(`  [${status}] @${entry.asset.name}/${entry.asset.subpath}`);
+                for (const ref of entry.references) {
+                    console.log(`           <- ${ref.templateFile} (${ref.partialName}:${ref.line})`);
+                }
+            }
+        }
+    }
+
+    Deno.exit(report.summary.unusedAssets > 0 ? 1 : 0);
 } else {
     if (!outputDir) {
         printUsageAndExit('Missing <output-dir> argument (or set "output" in backflip.json)');

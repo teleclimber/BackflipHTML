@@ -10,6 +10,7 @@
     "test": "node --import tsx --test src/*.test.ts"
   },
   "dependencies": {
+    "@backflip/assets": "file:../assets",
     "@backflip/css": "file:../css",
     "@backflip/html": "file:..",
     "vscode-languageserver": "^9.0.1",

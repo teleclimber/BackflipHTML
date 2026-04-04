@@ -18,6 +18,7 @@ import {
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { compileDirectory, loadConfig, resolveConfigRoot, resolveAssetDirs, CONFIG_FILENAME, previewPartial, type BackflipError, type CompiledFile, type CompileOptions, type LoadConfigResult } from '@backflip/html';
 import { analyzeCss, discoverCssFiles, type CssAnalysisResult, type PartialSourceInfo } from '@backflip/css';
+import { discoverAssetFileInfos, collectAssetReferences, buildAssetUsageReport, filterReport, renderAssetReportHtml } from '@backflip/assets';
 import { buildIndex, type ProjectIndex } from './index.js';
 import { errorsToDiagnostics } from './diagnostics.js';
 import { findDefinition, findAssetDefinition } from './definition.js';
@@ -538,6 +539,54 @@ connection.onRequest('backflip/previewPartial', async (params: { uri: string; pa
 		connection.console.error(`[backflip] preview error: ${err instanceof Error ? err.message : err}`);
 		return null;
 	}
+});
+
+// Get asset directory configuration
+connection.onRequest('backflip/getAssetDirs', () => {
+	if (!assetDirs) return null;
+	return Object.fromEntries(assetDirs);
+});
+
+// Asset usage report
+connection.onRequest('backflip/assetUsageReport', (params: { uri?: string }) => {
+	if (!assetDirs || compiledFiles.size === 0) return null;
+
+	const assets = discoverAssetFileInfos(assetDirs);
+	const refs = collectAssetReferences(compiledFiles);
+	let report = buildAssetUsageReport(assets, refs);
+
+	// If a URI is provided, filter by asset dir and subpath
+	let filterName: string | undefined;
+	let scope: string | undefined;
+	if (params?.uri) {
+		const filePath = decodeURIComponent(params.uri.replace('file://', ''));
+		for (const [name, dirPath] of assetDirs) {
+			if (filePath === dirPath || filePath.startsWith(dirPath + '/')) {
+				filterName = name;
+				const relative = filePath.substring(dirPath.length + 1); // '' for root
+				if (relative === '') {
+					// Clicked on the asset dir root
+					scope = `@${name}`;
+					report = filterReport(report, { name });
+				} else {
+					// Check if it's a directory or file by looking for assets with this prefix
+					const isDir = assets.some(a => a.name === name && a.subpath.startsWith(relative + '/'));
+					if (isDir) {
+						scope = `@${name}/${relative}/`;
+						report = filterReport(report, { name, subpathPrefix: relative + '/' });
+					} else {
+						scope = `@${name}/${relative}`;
+						report = filterReport(report, { name, subpath: relative });
+					}
+				}
+				break;
+			}
+		}
+	}
+
+	const html = renderAssetReportHtml(report, { assetBaseUrl: '/__assets/', scope });
+	const assetDirsObj = Object.fromEntries(assetDirs);
+	return { html, assetName: scope ?? filterName, assetDirs: assetDirsObj };
 });
 
 connection.listen();

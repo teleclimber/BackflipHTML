@@ -8,6 +8,7 @@ import { previewPartial } from './preview.js';
 import type { CompiledFile } from '../compiler/compiler.js';
 import { createWatcher, type WatchCallback, type WatchOptions } from '../lib/watch.js';
 import { discoverCssFiles } from '../css/src/discover.js';
+import { discoverAssetFileInfos, collectAssetReferences, buildAssetUsageReport, renderAssetReportHtml } from '../assets/src/index.js';
 
 const MIME_TYPES: Record<string, string> = {
 	'.css': 'text/css', '.js': 'text/javascript',
@@ -82,7 +83,7 @@ function escapeHtml(s: string): string {
 }
 
 /** Render the index page listing all files and partials. */
-export function renderIndex(files: Map<string, CompiledFile>, liveReload = false): string {
+export function renderIndex(files: Map<string, CompiledFile>, liveReload = false, hasAssets = false): string {
 	const tree = buildTree(files);
 	let list = '';
 	for (const entry of tree) {
@@ -113,6 +114,7 @@ strong { font-weight: 600; }
 </head>
 <body>
 <h1>Backflip Previews</h1>
+${hasAssets ? '<p><a href="/__assets-report">Asset Usage Report</a></p>' : ''}
 <ul>${list}</ul>
 ${liveReload ? '<script>(function(){var es=new EventSource("/__events");es.addEventListener("reload",function(){location.reload()})})();</script>' : ''}
 </body>
@@ -151,7 +153,18 @@ export async function handleRequest(
 
 	if (pathname === '/') {
 		res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-		res.end(renderIndex(ctx.directory.files, liveReload));
+		res.end(renderIndex(ctx.directory.files, liveReload, !!ctx.assetDirs));
+		return;
+	}
+
+	// Asset usage report
+	if (pathname === '/__assets-report' && ctx.assetDirs) {
+		const assets = discoverAssetFileInfos(ctx.assetDirs);
+		const refs = collectAssetReferences(ctx.directory.files);
+		const report = buildAssetUsageReport(assets, refs);
+		const html = renderAssetReportHtml(report, { assetBaseUrl: '/__assets/', liveReload });
+		res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+		res.end(html);
 		return;
 	}
 

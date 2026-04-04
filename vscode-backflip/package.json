@@ -33,9 +33,20 @@
       {
         "command": "backflipHTML.previewPartial",
         "title": "BackflipHTML: Preview Partial"
+      },
+      {
+        "command": "backflipHTML.assetUsageReport",
+        "title": "BackflipHTML: Asset Usage Report"
       }
     ],
     "menus": {
+      "explorer/context": [
+        {
+          "command": "backflipHTML.assetUsageReport",
+          "when": "resourcePath in backflipHTML.assetDirPaths || resourceDirname in backflipHTML.assetDirPaths",
+          "group": "navigation@100"
+        }
+      ],
       "editor/context": [
         {
           "command": "backflipHTML.findAllSelectors",
