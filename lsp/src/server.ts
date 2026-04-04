@@ -586,7 +586,7 @@ connection.onRequest('backflip/assetUsageReport', (params: { uri?: string }) => 
 
 	const html = renderAssetReportHtml(report, { assetBaseUrl: '/__assets/', scope });
 	const assetDirsObj = Object.fromEntries(assetDirs);
-	return { html, assetName: scope ?? filterName, assetDirs: assetDirsObj };
+	return { html, assetName: scope ?? filterName, assetDirs: assetDirsObj, templateRoot };
 });
 
 connection.listen();

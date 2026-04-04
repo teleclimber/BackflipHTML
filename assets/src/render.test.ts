@@ -55,11 +55,42 @@ describe('renderAssetReportHtml', () => {
 		assert.ok(html.includes('badge unused'));
 	});
 
-	it('renders reference details', () => {
+	it('renders reference details as clickable links', () => {
 		const html = renderAssetReportHtml(makeReport());
 		assert.ok(html.includes('1 reference'));
+		assert.ok(html.includes('ref-link'));
+		assert.ok(html.includes('data-ref-file="index.html"'));
+		assert.ok(html.includes('data-ref-line="5"'));
+		assert.ok(html.includes('data-ref-col="10"'));
 		assert.ok(html.includes('index.html'));
 		assert.ok(html.includes('hero'));
+	});
+
+	it('renders asset links with data-asset-path', () => {
+		const html = renderAssetReportHtml(makeReport());
+		assert.ok(html.includes('asset-link'));
+		assert.ok(html.includes('data-asset-path="/a/photo.jpg"'));
+	});
+
+	it('shows first 4 refs and hides the rest behind show-more', () => {
+		const manyRefs = Array.from({ length: 6 }, (_, i) => ({
+			templateFile: `file${i}.html`, partialName: `part${i}`, line: i + 1, column: 1, assetName: 'images', assetSubpath: 'photo.jpg',
+		}));
+		const report = makeReport({
+			entries: [{
+				asset: { name: 'images', subpath: 'photo.jpg', absolutePath: '/a/photo.jpg', ext: '.jpg', size: 100, isImage: true },
+				references: manyRefs,
+				isUsed: true,
+			}],
+			summary: { totalAssets: 1, usedAssets: 1, unusedAssets: 0, totalReferences: 6 },
+		});
+		const html = renderAssetReportHtml(report);
+		// First 4 visible
+		assert.ok(html.includes('data-ref-file="file0.html"'));
+		assert.ok(html.includes('data-ref-file="file3.html"'));
+		// Rest hidden
+		assert.ok(html.includes('hidden-refs'));
+		assert.ok(html.includes('show 2 more'));
 	});
 
 	it('includes live-reload script when requested', () => {

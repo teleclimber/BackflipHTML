@@ -18,6 +18,8 @@ export function renderAssetReportHtml(
 ): string {
 	const { assetBaseUrl = '', liveReload = false, scope } = options;
 
+	const VISIBLE_REFS = 4;
+
 	const rows = report.entries.map(entry => {
 		const { asset, references, isUsed } = entry;
 		const badge = isUsed
@@ -32,18 +34,27 @@ export function renderAssetReportHtml(
 			thumbnail = `<div class="thumb placeholder">${escapeHtml(asset.ext || '?')}</div>`;
 		}
 
-		const refList = references.length > 0
-			? `<details><summary>${references.length} reference${references.length > 1 ? 's' : ''}</summary><ul>${
-				references.map(r =>
-					`<li><code>${escapeHtml(r.templateFile)}</code> partial <code>${escapeHtml(r.partialName)}</code> line ${r.line}</li>`
-				).join('')
-			}</ul></details>`
-			: '<span class="no-refs">no references</span>';
+		const assetLink = `<a class="asset-link" href="#" data-asset-path="${escapeAttr(asset.absolutePath)}">`;
+
+		let refList: string;
+		if (references.length > 0) {
+			const renderRef = (r: typeof references[0]) =>
+				`<li><a class="ref-link" href="#" data-ref-file="${escapeAttr(r.templateFile)}" data-ref-line="${r.line}" data-ref-col="${r.column}"><code>${escapeHtml(r.templateFile)}</code> partial <code>${escapeHtml(r.partialName)}</code> line ${r.line}</a></li>`;
+
+			const visible = references.slice(0, VISIBLE_REFS).map(renderRef).join('');
+			const hidden = references.length > VISIBLE_REFS
+				? `<li class="hidden-refs" style="display:none">${references.slice(VISIBLE_REFS).map(renderRef).join('')}</li>`
+					+ `<li><button class="show-more">show ${references.length - VISIBLE_REFS} more</button></li>`
+				: '';
+			refList = `<div class="refs">${references.length} reference${references.length > 1 ? 's' : ''}</div><ul>${visible}${hidden}</ul>`;
+		} else {
+			refList = '<span class="no-refs">no references</span>';
+		}
 
 		return `<div class="entry" data-name="${escapeAttr(asset.name)}" data-used="${isUsed}">`
-			+ thumbnail
+			+ assetLink + thumbnail + `</a>`
 			+ `<div class="info">`
-			+ `<div class="path">@${escapeHtml(asset.name)}/${escapeHtml(asset.subpath)}</div>`
+			+ `<div class="path">${assetLink}@${escapeHtml(asset.name)}/${escapeHtml(asset.subpath)}</a></div>`
 			+ `<div class="meta">${badge} ${formatSize(asset.size)}</div>`
 			+ refList
 			+ `</div></div>`;
@@ -72,22 +83,29 @@ h1 { margin-bottom: 8px; }
 .controls { margin-bottom: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
 .controls button { padding: 4px 12px; border: 1px solid #ccc; border-radius: 4px; background: #fff; cursor: pointer; }
 .controls button.active { background: #333; color: #fff; border-color: #333; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
-.entry { border: 1px solid #ddd; border-radius: 6px; padding: 12px; display: flex; gap: 12px; }
+.list { display: flex; flex-direction: column; gap: 12px; }
+.entry { border: 1px solid #ddd; border-radius: 6px; padding: 12px; display: flex; gap: 16px; }
 .entry[data-used="false"] { border-color: #e8a; background: #fff8f5; }
-.thumb { width: 64px; height: 64px; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
-.thumb.placeholder { display: flex; align-items: center; justify-content: center; background: #eee; color: #999; font-size: 12px; }
+.thumb { width: 120px; height: 120px; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
+.thumb.placeholder { display: flex; align-items: center; justify-content: center; background: #eee; color: #999; font-size: 1rem; width: 120px; height: 120px; }
+.asset-link { text-decoration: none; color: inherit; }
+.asset-link:hover .thumb { outline: 2px solid #06c; }
 .info { min-width: 0; flex: 1; }
-.path { font-family: monospace; font-size: 13px; word-break: break-all; }
-.meta { margin-top: 4px; font-size: 12px; color: #888; }
-.badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+.path { font-family: monospace; font-size: 1rem; word-break: break-all; }
+.path .asset-link { color: #06c; }
+.path .asset-link:hover { text-decoration: underline; }
+.meta { margin-top: 4px; font-size: 0.9rem; color: #888; }
+.badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 0.9rem; font-weight: 600; }
 .badge.used { background: #d4edda; color: #155724; }
 .badge.unused { background: #f8d7da; color: #721c24; }
-details { margin-top: 4px; font-size: 12px; }
-summary { cursor: pointer; color: #555; }
-ul { margin-top: 4px; padding-left: 16px; }
+.refs { margin-top: 6px; font-size: 1rem; color: #555; }
+ul { margin-top: 4px; padding-left: 16px; font-size: 1rem; }
 li { margin-bottom: 2px; }
-.no-refs { font-size: 12px; color: #aaa; }
+.ref-link { color: #06c; text-decoration: none; cursor: pointer; }
+.ref-link:hover { text-decoration: underline; }
+.show-more { border: none; background: none; color: #06c; cursor: pointer; font-size: 1rem; padding: 0; }
+.show-more:hover { text-decoration: underline; }
+.no-refs { font-size: 0.9rem; color: #aaa; }
 </style>
 </head>
 <body>
@@ -103,7 +121,7 @@ li { margin-bottom: 2px; }
 <button data-filter="unused">Unused only</button>
 ${getAssetDirButtons(report)}
 </div>
-<div class="grid">
+<div class="list">
 ${rows}
 </div>
 <script>
@@ -119,6 +137,36 @@ document.querySelector('.controls').addEventListener('click', (e) => {
 		else el.style.display = el.dataset.name === filter ? '' : 'none';
 	});
 });
+document.addEventListener('click', (e) => {
+	const showMore = e.target.closest('.show-more');
+	if (showMore) {
+		e.preventDefault();
+		const hidden = showMore.closest('ul').querySelector('.hidden-refs');
+		if (hidden) {
+			hidden.style.display = '';
+			hidden.replaceWith(...hidden.children);
+		}
+		showMore.closest('li').remove();
+		return;
+	}
+});
+(function() {
+	if (typeof acquireVsCodeApi !== 'function') return;
+	var vscode = acquireVsCodeApi();
+	document.addEventListener('click', function(e) {
+		var link = e.target.closest('.asset-link');
+		if (link) {
+			e.preventDefault();
+			vscode.postMessage({ command: 'openAsset', path: link.dataset.assetPath });
+			return;
+		}
+		var ref = e.target.closest('.ref-link');
+		if (ref) {
+			e.preventDefault();
+			vscode.postMessage({ command: 'openReference', file: ref.dataset.refFile, line: Number(ref.dataset.refLine), col: Number(ref.dataset.refCol) });
+		}
+	});
+})();
 </script>
 ${liveReloadScript}
 </body>

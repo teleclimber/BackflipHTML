@@ -199,7 +199,7 @@ export function activate(context: ExtensionContext): void {
 			}
 			lastAssetReportQuery = params;
 
-			const result = await client.sendRequest<{ html: string; assetName?: string; assetDirs?: Record<string, string> } | null>('backflip/assetUsageReport', params);
+			const result = await client.sendRequest<{ html: string; assetName?: string; assetDirs?: Record<string, string>; templateRoot?: string } | null>('backflip/assetUsageReport', params);
 			if (!result) {
 				vscode.window.showInformationMessage('No asset directories configured.');
 				return;
@@ -207,7 +207,7 @@ export function activate(context: ExtensionContext): void {
 			const title = result.assetName
 				? `Assets: ${result.assetName}`
 				: 'Asset Usage Report';
-			showAssetReportPanel(result.html, title, context, result.assetDirs);
+			showAssetReportPanel(result.html, title, context, result.assetDirs, result.templateRoot);
 		},
 	);
 	context.subscriptions.push(assetUsageReportDisposable);

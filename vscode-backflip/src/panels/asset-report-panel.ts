@@ -2,13 +2,17 @@ import * as vscode from 'vscode';
 import * as path from 'node:path';
 
 let panel: vscode.WebviewPanel | null = null;
+let currentTemplateRoot: string | undefined;
 
 export function showAssetReportPanel(
 	html: string,
 	title: string,
 	context: vscode.ExtensionContext,
 	assetDirs?: Record<string, string>,
+	templateRoot?: string,
 ): void {
+	currentTemplateRoot = templateRoot;
+
 	if (panel) {
 		panel.reveal();
 	} else {
@@ -29,6 +33,29 @@ export function showAssetReportPanel(
 			},
 		);
 		panel.onDidDispose(() => { panel = null; }, null, context.subscriptions);
+
+		panel.webview.onDidReceiveMessage(
+			(msg: { command: string; path?: string; file?: string; line?: number; col?: number }) => {
+				if (msg.command === 'openAsset' && msg.path) {
+					vscode.commands.executeCommand('backflipHTML.openCssRule', {
+						path: msg.path,
+						line: 0,
+						col: 0,
+					});
+				} else if (msg.command === 'openReference' && msg.file) {
+					const absPath = currentTemplateRoot
+						? path.join(currentTemplateRoot, msg.file)
+						: msg.file;
+					vscode.commands.executeCommand('backflipHTML.openCssRule', {
+						path: absPath,
+						line: (msg.line ?? 1) - 1,
+						col: (msg.col ?? 1) - 1,
+					});
+				}
+			},
+			undefined,
+			context.subscriptions,
+		);
 	}
 
 	panel.title = title;
