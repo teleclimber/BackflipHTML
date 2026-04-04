@@ -67,6 +67,7 @@ VSCode extension providing syntax highlighting, language server integration, and
 
 - [Directives reference](docs/directives.md) — all `b-*` directives and the expression language
 - [Partials](docs/partials.md) — defining, including, and composing partials with slots
+- [Assets](docs/assets.md) — configuring and referencing static assets like images and styles
 - [CLI](docs/cli.md) — compiling templates from the command line
 - [Configuration](docs/configuration.md) — `backflip.json` reference
 - [JS runtime](docs/runtime-js.md) — JavaScript runtime API and usage

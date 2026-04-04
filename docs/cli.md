@@ -74,6 +74,30 @@ backflip ./templates --check --json
 # => { "errors": ["In \"blog/post.html\": ..."] }
 ```
 
+## Asset reporting mode
+
+Scan templates for asset references and report on unused assets:
+
+```sh
+backflip <input-dir> --assets-report [--unused-only] [--json]
+```
+
+- `--assets-report` — show asset usage report (exits 1 if unused assets are found)
+- `--unused-only` — only list unused assets (implies `--assets-report`)
+- `--json` — output the report as JSON
+
+*Note: Requires asset directories to be configured in `backflip.json`.*
+
+**Examples:**
+
+```sh
+# Plain text summary and list
+backflip --assets-report
+
+# Fail CI if there are dead assets, output JSON for parsing
+backflip --assets-report --unused-only --json
+```
+
 ## Exit codes
 
 | Code | Meaning |

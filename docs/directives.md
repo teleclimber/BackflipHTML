@@ -102,6 +102,19 @@ Multiple bindings can appear on the same element:
 
 ---
 
+## Asset References (`~`)
+
+Append a tilde `~` to any attribute name (including bound attributes) to resolve asset paths against configured asset directories.
+
+```html
+<img src~="@images/logo.png">
+<img :src~="'@images/' + filename">
+```
+
+See [Assets](assets.md) for configuration and detailed usage.
+
+---
+
 ## `<b-unwrap>` — wrapper-free rendering
 
 `<b-unwrap>` is a special element that renders its children without itself. It is not a real HTML tag and never appears in the output.

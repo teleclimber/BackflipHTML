@@ -6,7 +6,14 @@ Create a `backflip.json` file at the root of your project:
 {
   "root": "src/templates",
   "output": "dist",
-  "lang": "js"
+  "lang": "js",
+  "assets": [
+    {
+      "name": "images",
+      "path": "src/assets/img",
+      "prefix": "/img/"
+    }
+  ]
 }
 ```
 
@@ -15,6 +22,7 @@ Create a `backflip.json` file at the root of your project:
 | `root`   | Yes      | Relative path to the directory containing `.html` templates |
 | `output` | No       | Relative path to the output directory (used by CLI)  |
 | `lang`   | No       | Output language: `"js"` or `"php"` (used by CLI)    |
+| `assets` | No       | Array of asset directory configurations (see [Assets](assets.md)) |
 
 ## CLI
 
