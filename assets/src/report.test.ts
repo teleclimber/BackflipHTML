@@ -46,6 +46,35 @@ describe('buildAssetUsageReport', () => {
 		assert.equal(report.entries.length, 0);
 		assert.equal(report.summary.totalAssets, 0);
 	});
+
+	it('filters out unused common OS files', () => {
+		const assets = [
+			makeAsset('images', 'photo.jpg'),
+			makeAsset('images', '.DS_Store'),
+			makeAsset('images', 'Thumbs.db'),
+			makeAsset('images', 'nested/.DS_Store')
+		];
+		const refs = [makeRef('images', 'photo.jpg')];
+		const report = buildAssetUsageReport(assets, refs);
+
+		assert.equal(report.entries.length, 1);
+		assert.equal(report.summary.totalAssets, 1);
+		assert.equal(report.summary.unusedAssets, 0);
+	});
+
+	it('includes common OS files if they are explicitly referenced', () => {
+		const assets = [
+			makeAsset('images', 'photo.jpg'),
+			makeAsset('images', '.DS_Store')
+		];
+		const refs = [makeRef('images', '.DS_Store')];
+		const report = buildAssetUsageReport(assets, refs);
+
+		assert.equal(report.entries.length, 2);
+		assert.equal(report.summary.totalAssets, 2);
+		assert.equal(report.summary.usedAssets, 1);
+		assert.equal(report.summary.unusedAssets, 1);
+	});
 });
 
 describe('filterReport', () => {

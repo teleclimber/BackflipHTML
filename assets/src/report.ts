@@ -1,5 +1,8 @@
 import type { AssetFileInfo, AssetReference, AssetUsageEntry, AssetUsageReport } from './types.js';
 
+/** Common OS files that should be ignored if they are unused. */
+const UNUSED_OS_FILES = new Set(['Thumbs.db', '.DS_Store']);
+
 /**
  * Cross-reference discovered asset files with template references
  * to produce a usage report.
@@ -27,6 +30,15 @@ export function buildAssetUsageReport(
 		const key = `${asset.name}/${asset.subpath}`;
 		const assetRefs = refsByKey.get(key) ?? [];
 		const isUsed = assetRefs.length > 0;
+
+		// Skip unused common OS files
+		if (!isUsed) {
+			const basename = asset.subpath.split('/').pop() || asset.subpath;
+			if (UNUSED_OS_FILES.has(basename)) {
+				continue;
+			}
+		}
+
 		if (isUsed) usedCount++;
 		entries.push({ asset, references: assetRefs, isUsed });
 	}
@@ -35,9 +47,9 @@ export function buildAssetUsageReport(
 		generatedAt: new Date().toISOString(),
 		entries,
 		summary: {
-			totalAssets: assets.length,
+			totalAssets: entries.length,
 			usedAssets: usedCount,
-			unusedAssets: assets.length - usedCount,
+			unusedAssets: entries.length - usedCount,
 			totalReferences: refs.length,
 		},
 	};
