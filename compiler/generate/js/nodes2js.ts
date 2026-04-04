@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, PartialBinding, AttrBindTNode, CompiledFile } from '../../compiler.js';
+import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, PartialBinding, AttrBindTNode, AttrPart, CompiledFile } from '../../compiler.js';
 import type { Parsed } from '../../backcode.js';
 import { generateFunction } from './generatejs.js';
 
@@ -39,6 +39,8 @@ export function nodeToJS(n :TNode|RootTNode, assetMap?: Map<string, string>) :st
 		case 'attr-bind':
 			out = attrBindToJS(n, assetMap);
 			break;
+		case 'asset-ref':
+			throw new Error("unresolved asset-ref node — call resolveAssetRefs() before code generation");
 		default:
 			throw new Error("unhandled node type");
 	}
@@ -111,8 +113,12 @@ function partialRefToJS(n: PartialRefTNode, assetMap?: Map<string, string>) :str
 }
 
 function attrBindToJS(n: AttrBindTNode, assetMap?: Map<string, string>): string {
-	const hasAsset = n.parts.some(p => p.type === 'dynamic' && p.isAsset);
-	const parts = n.parts.map(p =>
+	if (n.parts.some(p => p.type === 'asset')) {
+		throw new Error("unresolved asset AttrPart — call resolveAssetRefs() before code generation");
+	}
+	const resolvedParts = n.parts as Exclude<AttrPart, { type: 'asset' }>[];
+	const hasAsset = resolvedParts.some(p => p.type === 'dynamic' && p.isAsset);
+	const parts = resolvedParts.map(p =>
 		p.type === 'static'
 			? `{ type: 'static', raw: '${escapeStr(p.raw)}' }`
 			: `{ type: 'dynamic', name: '${p.name}', expr: ${backcodeToJS(p.expr)}, isBoolean: ${p.isBoolean}${p.isAsset ? ', isAsset: true' : ''} }`

@@ -1,7 +1,7 @@
 import { assert, assertEquals, assertExists, assertStringIncludes } from "jsr:@std/assert";
 
-import type { RootTNode, RawTNode, PrintTNode, ForTNode, IfTNode, SlotTNode, PartialRefTNode, AttrBindTNode, SourceLoc, CompileOptions } from "./compiler.ts";
-import { generateStringStack, compileFile, onText, pushRaw } from "./compiler.ts";
+import type { RootTNode, RawTNode, PrintTNode, ForTNode, IfTNode, SlotTNode, PartialRefTNode, AttrBindTNode, AssetRefTNode, SourceLoc, CompileOptions } from "./compiler.ts";
+import { generateStringStack, compileFile, onText, pushRaw, resolveAssetRefs } from "./compiler.ts";
 import { interpretBackcode } from "./backcode.ts";
 
 Deno.test( "pushRaw", () => {
@@ -945,14 +945,25 @@ async function makeAssetFixture(): Promise<{ assetMap: Map<string, string>, asse
 	return { assetMap, assetDirs, dir };
 }
 
-Deno.test("asset: static src~ replaces @name/ with prefix", async () => {
+Deno.test("asset: static src~ produces AssetRefTNode in stage 1", async () => {
 	const { assetMap, assetDirs } = await makeAssetFixture();
 	const { compiled } = await compileFile(
 		'<div b-name="hero"><img src~="@images/photo.jpg" /></div>',
 		undefined, 'test.html', { assetMap, assetDirs }
 	);
 	const root = compiled.partials.get("hero")!;
-	const allRaw = root.tnodes.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
+	const assetRefs = root.tnodes.filter(n => n.type === 'asset-ref') as AssetRefTNode[];
+	assertEquals(assetRefs.length, 1);
+	assertEquals(assetRefs[0].attrName, 'src');
+	assertEquals(assetRefs[0].originalValue, '@images/photo.jpg');
+	assertEquals(assetRefs[0].refs.length, 1);
+	assertEquals(assetRefs[0].refs[0].name, 'images');
+	assertEquals(assetRefs[0].refs[0].subpath, 'photo.jpg');
+
+	// Stage 2: resolveAssetRefs produces correct raw output
+	const resolved = resolveAssetRefs(compiled, assetMap);
+	const resolvedRoot = resolved.partials.get("hero")!;
+	const allRaw = resolvedRoot.tnodes.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
 	assertStringIncludes(allRaw, 'src="/img/photo.jpg"');
 	assertEquals(allRaw.includes('~'), false);
 	assertEquals(allRaw.includes('@images'), false);
@@ -965,7 +976,13 @@ Deno.test("asset: static src~ with subpath", async () => {
 		undefined, 'test.html', { assetMap, assetDirs }
 	);
 	const root = compiled.partials.get("hero")!;
-	const allRaw = root.tnodes.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
+	const assetRefs = root.tnodes.filter(n => n.type === 'asset-ref') as AssetRefTNode[];
+	assertEquals(assetRefs.length, 1);
+	assertEquals(assetRefs[0].refs[0].subpath, 'sub/nested.jpg');
+
+	const resolved = resolveAssetRefs(compiled, assetMap);
+	const resolvedRoot = resolved.partials.get("hero")!;
+	const allRaw = resolvedRoot.tnodes.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
 	assertStringIncludes(allRaw, 'src="/img/sub/nested.jpg"');
 });
 
@@ -1054,7 +1071,17 @@ Deno.test("asset: srcset~ validates multiple entries", async () => {
 	);
 	assertEquals(errors.length, 0);
 	const root = compiled.partials.get("hero")!;
-	const allRaw = root.tnodes.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
+	const assetRefs = root.tnodes.filter(n => n.type === 'asset-ref') as AssetRefTNode[];
+	assertEquals(assetRefs.length, 1);
+	assertEquals(assetRefs[0].attrName, 'srcset');
+	assertEquals(assetRefs[0].refs.length, 2);
+	assertEquals(assetRefs[0].refs[0].name, 'images');
+	assertEquals(assetRefs[0].refs[0].subpath, 'photo.jpg');
+	assertEquals(assetRefs[0].refs[1].subpath, 'icon.png');
+
+	const resolved = resolveAssetRefs(compiled, assetMap);
+	const resolvedRoot = resolved.partials.get("hero")!;
+	const allRaw = resolvedRoot.tnodes.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
 	assertStringIncludes(allRaw, 'srcset="/img/photo.jpg 1x, /img/icon.png 2x"');
 });
 
@@ -1106,4 +1133,48 @@ Deno.test("asset: error location spans the full attribute", async () => {
 	assertExists(errors[0].endLine);
 	assertExists(errors[0].endCol);
 	assert(errors[0].endCol! > errors[0].col! + 1, `endCol (${errors[0].endCol}) should be greater than col+1 (${errors[0].col! + 1})`);
+});
+
+Deno.test("asset: mixed static asset + bind produces asset AttrPart", async () => {
+	const assetMap = new Map([['images', '/img/']]);
+	const { compiled } = await compileFile(
+		`<div b-name="hero"><img src~="@images/photo.jpg" :alt="desc" /></div>`,
+		undefined, 'test.html', { assetMap }
+	);
+	const root = compiled.partials.get("hero")!;
+	const attrBind = root.tnodes.find(n => n.type === 'attr-bind') as AttrBindTNode;
+	assertEquals(attrBind !== undefined, true);
+	const assetPart = attrBind.parts.find(p => p.type === 'asset');
+	assertEquals(assetPart !== undefined, true);
+	if (assetPart?.type === 'asset') {
+		assertEquals(assetPart.attrName, 'src');
+		assertEquals(assetPart.originalValue, '@images/photo.jpg');
+		assertEquals(assetPart.refs[0].name, 'images');
+	}
+
+	// Stage 2: asset AttrPart resolved to static
+	const resolved = resolveAssetRefs(compiled, assetMap);
+	const resolvedRoot = resolved.partials.get("hero")!;
+	const resolvedBind = resolvedRoot.tnodes.find(n => n.type === 'attr-bind') as AttrBindTNode;
+	assertEquals(resolvedBind.parts.some(p => p.type === 'asset'), false);
+	const staticParts = resolvedBind.parts.filter(p => p.type === 'static');
+	const staticRaw = staticParts.map(p => p.type === 'static' ? p.raw : '').join('');
+	assertStringIncludes(staticRaw, 'src="/img/photo.jpg"');
+});
+
+Deno.test("asset: resolveAssetRefs does not mutate original", async () => {
+	const { assetMap, assetDirs } = await makeAssetFixture();
+	const { compiled } = await compileFile(
+		'<div b-name="hero"><img src~="@images/photo.jpg" /></div>',
+		undefined, 'test.html', { assetMap, assetDirs }
+	);
+	const root = compiled.partials.get("hero")!;
+	const assetRefsBefore = root.tnodes.filter(n => n.type === 'asset-ref').length;
+	assertEquals(assetRefsBefore, 1);
+
+	resolveAssetRefs(compiled, assetMap);
+
+	// Original should still have the AssetRefTNode
+	const assetRefsAfter = root.tnodes.filter(n => n.type === 'asset-ref').length;
+	assertEquals(assetRefsAfter, 1);
 });

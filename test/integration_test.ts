@@ -13,6 +13,7 @@ import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { compileDirectory } from "../compiler/partials.ts";
 import { fileToJsModule } from "../compiler/generate/js/nodes2js.ts";
+import { resolveAssetRefs } from "../compiler/compiler.ts";
 import { renderRoot } from "../runtime/js/render.ts";
 import type { RootRNode } from "../runtime/js/render.ts";
 
@@ -529,7 +530,8 @@ const { directory: assetCompiled } = await compileDirectory(TEMPLATES_DIR, { ass
 function getAssetModule(filename: string): Record<string, RootRNode> {
     const file = assetCompiled.files.get(filename);
     if (!file) throw new Error(`File not compiled: ${filename}`);
-    const js = fileToJsModule(file, filename, assetMap);
+    const resolved = resolveAssetRefs(file, assetMap);
+    const js = fileToJsModule(resolved, filename, assetMap);
     const exportNames: string[] = [];
     const pattern = /^export const (\w+)/gm;
     let m;

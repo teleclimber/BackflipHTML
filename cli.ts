@@ -4,6 +4,7 @@ import { compileDirectory } from './compiler/partials.ts';
 import { loadConfig, resolveConfigRoot, resolveAssetDirs } from './compiler/config.ts';
 import { fileToJsModule } from './compiler/generate/js/nodes2js.ts';
 import { fileToPhpFile } from './compiler/generate/php/nodes2php.ts';
+import { resolveAssetRefs } from './compiler/compiler.ts';
 
 const HELP = `Usage:
   backflip                                             Use backflip.json config
@@ -131,9 +132,10 @@ if (args.check) {
         const ext = lang === 'js' ? '.js' : '.php';
         const outRelPath = relPath.replace(/\.html$/, ext);
         const outPath = join(outputDir, outRelPath);
+        const resolved = assetMap ? resolveAssetRefs(compiledFile, assetMap) : compiledFile;
         const generated = lang === 'js'
-            ? fileToJsModule(compiledFile, relPath, assetMap)
-            : fileToPhpFile(compiledFile, relPath, assetMap);
+            ? fileToJsModule(resolved, relPath, assetMap)
+            : fileToPhpFile(resolved, relPath, assetMap);
         Deno.mkdirSync(dirname(outPath), { recursive: true });
         Deno.writeTextFileSync(outPath, generated);
         count++;

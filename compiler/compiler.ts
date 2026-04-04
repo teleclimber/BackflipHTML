@@ -97,6 +97,7 @@ export type PartialRegistry = Map<string, Set<string>>
 export type AttrPart =
 	| { type: 'static'; raw: string }
 	| { type: 'dynamic'; name: string; expr: Parsed; isBoolean: boolean; isAsset?: boolean; loc?: SourceLoc }
+	| { type: 'asset'; attrName: string; originalValue: string; refs: AssetRef[]; loc?: SourceLoc }
 
 export interface AttrBindTNode extends ChildTNode {
 	type: 'attr-bind'
@@ -105,7 +106,15 @@ export interface AttrBindTNode extends ChildTNode {
 	selfClosing?: boolean
 }
 
-export type TNode = RawTNode | PrintTNode | ForTNode | IfTNode | SlotTNode | PartialRefTNode | AttrBindTNode;
+export interface AssetRefTNode extends ChildTNode {
+	type: 'asset-ref'
+	attrName: string          // e.g. "src", "srcset"
+	originalValue: string     // e.g. "@images/photo.jpg"
+	refs: AssetRef[]          // parsed refs (1 for src~, N for srcset~)
+	loc?: SourceLoc
+}
+
+export type TNode = RawTNode | PrintTNode | ForTNode | IfTNode | SlotTNode | PartialRefTNode | AttrBindTNode | AssetRefTNode;
 export type ParentTNode = RootTNode | ForTNode | IfBranch;
 
 type TagMatcher = {
@@ -442,7 +451,7 @@ function stripAssetSuffix(attrName: string): string {
 	return attrName.slice(0, -1);
 }
 
-interface AssetRef {
+export interface AssetRef {
 	name: string;    // the @name part
 	subpath: string; // everything after @name/
 }
@@ -596,34 +605,36 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 		const assetMap = options?.assetMap;
 		const assetDirs = options?.assetDirs;
 
-		// Helper: process a static asset attribute value, validate and replace @name/
-		function processStaticAssetAttr(attrName: string, value: string, tag: { sourceCodeLocation?: unknown }, origAttrName: string): { replaced: string, error?: BackflipError } {
+		// Helper: validate a static asset attribute value, returning parsed refs (no replacement)
+		function validateStaticAssetAttr(attrName: string, value: string, tag: { sourceCodeLocation?: unknown }, origAttrName: string): { refs: AssetRef[], originalValue: string, error?: BackflipError } {
 			if (!assetMap) {
-				return { replaced: value, error: new BackflipError(`${attrName}~ used but no asset directories are configured`, attrErrorLoc(tag, origAttrName, filename)) };
+				return { refs: [], originalValue: value, error: new BackflipError(`${attrName}~ used but no asset directories are configured`, attrErrorLoc(tag, origAttrName, filename)) };
 			}
 			if (attrName === 'style') {
-				return { replaced: value, error: new BackflipError(`style~ is not supported`, attrErrorLoc(tag, origAttrName, filename)) };
+				return { refs: [], originalValue: value, error: new BackflipError(`style~ is not supported`, attrErrorLoc(tag, origAttrName, filename)) };
 			}
 			if (attrName === 'srcset') {
 				const entries = parseSrcsetEntries(value);
+				const refs: AssetRef[] = [];
 				for (const url of entries) {
 					const ref = parseAssetRef(url);
 					if (!ref) {
-						return { replaced: value, error: new BackflipError(`asset path must start with @name: "${url}"`, attrErrorLoc(tag, origAttrName, filename)) };
+						return { refs: [], originalValue: value, error: new BackflipError(`asset path must start with @name: "${url}"`, attrErrorLoc(tag, origAttrName, filename)) };
 					}
 					const err = validateAssetRef(ref, assetMap, assetDirs, attrErrorLoc(tag, origAttrName, filename));
-					if (err) return { replaced: value, error: err };
+					if (err) return { refs: [], originalValue: value, error: err };
+					refs.push(ref);
 				}
-				return { replaced: assetMap ? replaceAssetRef(value, assetMap) : value };
+				return { refs, originalValue: value };
 			}
 			// Single URL attribute
 			const ref = parseAssetRef(value);
 			if (!ref) {
-				return { replaced: value, error: new BackflipError(`asset path must start with @name`, attrErrorLoc(tag, origAttrName, filename)) };
+				return { refs: [], originalValue: value, error: new BackflipError(`asset path must start with @name`, attrErrorLoc(tag, origAttrName, filename)) };
 			}
 			const err = validateAssetRef(ref, assetMap, assetDirs, attrErrorLoc(tag, origAttrName, filename));
-			if (err) return { replaced: value, error: err };
-			return { replaced: assetMap ? replaceAssetRef(value, assetMap) : value };
+			if (err) return { refs: [], originalValue: value, error: err };
+			return { refs: [ref], originalValue: value };
 		}
 
 		// Helper: build tag prefix (no closing >) excluding certain attrs, b-data:*, bind attrs, and asset~ attrs
@@ -631,18 +642,8 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			let tag_str = `<${tag.tagName}`;
 			const processed: string[] = [];
 			for (const attr of tag.attrs) {
-				if (excludeAttrs.includes(attr.name) || attr.name.startsWith('b-data:') || isBindAttr(attr.name)) continue;
-				if (isAssetAttr(attr.name)) {
-					const realName = stripAssetSuffix(attr.name);
-					const { replaced, error } = processStaticAssetAttr(realName, attr.value, tag, attr.name);
-					if (error) {
-						errors.push(error);
-						continue;
-					}
-					processed.push(`${realName}="${replaced}"`);
-				} else {
-					processed.push(`${attr.name}="${attr.value}"`);
-				}
+				if (excludeAttrs.includes(attr.name) || attr.name.startsWith('b-data:') || isBindAttr(attr.name) || isAssetAttr(attr.name)) continue;
+				processed.push(`${attr.name}="${attr.value}"`);
 			}
 			if (processed.length > 0) tag_str += ' ' + processed.join(' ');
 			return tag_str;
@@ -653,16 +654,47 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			return buildTagPrefix(tag, excludeAttrs) + (tag.selfClosing ? ' />' : '>');
 		}
 
-		// Helper: make a RawTNode or AttrBindTNode for a tag's open element
-		function makeOpenTagNode(tag: {tagName:string, attrs:{name:string,value:string}[], selfClosing:boolean, sourceCodeLocation?: unknown}, excludeAttrs: string[], parent: ParentTNode): RawTNode | AttrBindTNode {
+		// Helper: make TNode(s) for a tag's open element.
+		// Returns an array because tags with static asset attrs produce interleaved RawTNode + AssetRefTNode nodes.
+		function makeOpenTagNode(tag: {tagName:string, attrs:{name:string,value:string}[], selfClosing:boolean, sourceCodeLocation?: unknown}, excludeAttrs: string[], parent: ParentTNode): TNode[] {
 			if (tag.tagName === 'b-unwrap') {
-				return { type: 'raw', raw: '', parent };
+				return [{ type: 'raw', raw: '', parent } as RawTNode];
 			}
 			const closeBracket = tag.selfClosing ? ' />' : '>';
 			const hasBind = tag.attrs.some(attr => isBindAttr(attr.name));
-			if (!hasBind) {
-				return { type: 'raw', raw: buildTagPrefix(tag, excludeAttrs) + dataLocAttr(tag) + closeBracket, parent };
+			const hasAsset = tag.attrs.some(attr => !excludeAttrs.includes(attr.name) && isAssetAttr(attr.name));
+
+			// Case A: no binds, no assets — single RawTNode
+			if (!hasBind && !hasAsset) {
+				return [{ type: 'raw', raw: buildTagPrefix(tag, excludeAttrs) + dataLocAttr(tag) + closeBracket, parent } as RawTNode];
 			}
+
+			// Case B: no binds, has static asset attrs — interleaved RawTNode + AssetRefTNode
+			if (!hasBind) {
+				const nodes: TNode[] = [];
+				let buf = `<${tag.tagName}`;
+				for (const attr of tag.attrs) {
+					if (excludeAttrs.includes(attr.name) || attr.name.startsWith('b-data:')) continue;
+					if (isAssetAttr(attr.name)) {
+						const realName = stripAssetSuffix(attr.name);
+						const { refs, originalValue, error } = validateStaticAssetAttr(realName, attr.value, tag, attr.name);
+						if (error) {
+							errors.push(error);
+							continue;
+						}
+						// Flush buffer as RawTNode before the asset ref
+						if (buf) { nodes.push({ type: 'raw', raw: buf, parent } as RawTNode); buf = ''; }
+						nodes.push({ type: 'asset-ref', attrName: realName, originalValue, refs, parent, loc: attrLoc(tag, attr.name) } as AssetRefTNode);
+					} else {
+						buf += ` ${attr.name}="${attr.value}"`;
+					}
+				}
+				buf += dataLocAttr(tag) + closeBracket;
+				nodes.push({ type: 'raw', raw: buf, parent } as RawTNode);
+				return nodes;
+			}
+
+			// Case C/D: has binds (possibly with static asset attrs and/or dynamic asset binds)
 			const tagOpen = `<${tag.tagName}`;
 			const parts: AttrPart[] = [];
 			let staticBuf = '';
@@ -689,12 +721,14 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 					parts.push(part);
 				} else if (isAssetAttr(attr.name)) {
 					const realName = stripAssetSuffix(attr.name);
-					const { replaced, error } = processStaticAssetAttr(realName, attr.value, tag, attr.name);
+					const { refs, originalValue, error } = validateStaticAssetAttr(realName, attr.value, tag, attr.name);
 					if (error) {
 						errors.push(error);
 						continue;
 					}
-					staticBuf += ` ${realName}="${replaced}"`;
+					// Flush staticBuf before pushing asset part
+					if (staticBuf) { parts.push({ type: 'static', raw: staticBuf }); staticBuf = ''; }
+					parts.push({ type: 'asset', attrName: realName, originalValue, refs, loc: attrLoc(tag, attr.name) });
 				} else {
 					staticBuf += ` ${attr.name}="${attr.value}"`;
 				}
@@ -703,7 +737,7 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			if (staticBuf) parts.push({ type: 'static', raw: staticBuf });
 			const node: AttrBindTNode = { type: 'attr-bind', tagOpen, parts, parent };
 			if (tag.selfClosing) node.selfClosing = true;
-			return node;
+			return [node];
 		}
 
 		function findPrecedingIfInFile(cur: TNode, loc?: { filename?: string, line?: number, col?: number }): IfTNode {
@@ -773,9 +807,10 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 						tag_stack.push({ tag: tag.tagName });
 					}
 				} else {
-					const openNode = makeOpenTagNode(tag, ['b-name', 'b-export'], partialRoot);
-					partialRoot.tnodes.push(openNode);
-					cur_tnode = openNode.type === 'raw' ? openNode : null;
+					const openNodes = makeOpenTagNode(tag, ['b-name', 'b-export'], partialRoot);
+					for (const n of openNodes) partialRoot.tnodes.push(n);
+					const lastOpen = openNodes[openNodes.length - 1];
+					cur_tnode = lastOpen?.type === 'raw' ? lastOpen as RawTNode : null;
 					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
 						tag_stack.push({ tag: tag.tagName });
 					} else {
@@ -979,16 +1014,17 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 					const parent: ParentTNode = sc_for ? sc_for.partialRef.parent : (cur_tnode ? cur_tnode.parent : currentPartialRoot!);
 					const for_node: ForTNode = { type: 'for', iterable: iterable_parsed, valName: value_name, tnodes: [], parent };
 					for_node.loc = attrLoc(tag, 'b-for');
-					const inner_tag = makeOpenTagNode(tag, ['b-for'], for_node);
-					for_node.tnodes.push(inner_tag);
+					const inner_tags = makeOpenTagNode(tag, ['b-for'], for_node);
+					for (const n of inner_tags) for_node.tnodes.push(n);
 					if (sc_for) {
 						pushNodeHere(for_node);
 					} else {
 						parent.tnodes!.push(for_node);
 					}
-					cur_tnode = inner_tag;
+					const lastFor = inner_tags[inner_tags.length - 1];
+					cur_tnode = lastFor ?? null;
 					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-						tag_stack.push({ tag: tag.tagName, tnode: inner_tag });
+						tag_stack.push({ tag: tag.tagName, tnode: lastFor });
 					}
 				}
 				else if (b_a.name === 'b-if') {
@@ -998,16 +1034,17 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 					const branch: IfBranch = { condition: interpretBackcode(b_a.value), tnodes: [], ifNode: if_node };
 					branch.loc = attrLoc(tag, 'b-if');
 					if_node.branches.push(branch);
-					const inner_tag = makeOpenTagNode(tag, ['b-if'], branch);
-					branch.tnodes.push(inner_tag);
+					const inner_tags_if = makeOpenTagNode(tag, ['b-if'], branch);
+					for (const n of inner_tags_if) branch.tnodes.push(n);
 					if (sc_if) {
 						pushNodeHere(if_node);
 					} else {
 						parent.tnodes!.push(if_node);
 					}
-					cur_tnode = inner_tag;
+					const lastIf = inner_tags_if[inner_tags_if.length - 1];
+					cur_tnode = lastIf ?? null;
 					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-						tag_stack.push({ tag: tag.tagName, tnode: inner_tag });
+						tag_stack.push({ tag: tag.tagName, tnode: lastIf });
 					}
 				}
 				else if (b_a.name === 'b-else-if' || b_a.name === 'b-else') {
@@ -1050,11 +1087,12 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 					const branch: IfBranch = { condition, tnodes: [], ifNode: if_node };
 					branch.loc = attrLoc(tag, b_a.name);
 					if_node.branches.push(branch);
-					const inner_tag = makeOpenTagNode(tag, [b_a.name], branch);
-					branch.tnodes.push(inner_tag);
-					cur_tnode = inner_tag;
+					const inner_tags_else = makeOpenTagNode(tag, [b_a.name], branch);
+					for (const n of inner_tags_else) branch.tnodes.push(n);
+					const lastElse = inner_tags_else[inner_tags_else.length - 1];
+					cur_tnode = lastElse ?? null;
 					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-						tag_stack.push({ tag: tag.tagName, tnode: inner_tag });
+						tag_stack.push({ tag: tag.tagName, tnode: lastElse });
 					}
 				}
 			}
@@ -1064,9 +1102,10 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 				const hasAssetAttrs = tag.attrs.some(attr => isAssetAttr(attr.name));
 				if (hasBindAttrs || hasAssetAttrs) {
 					const parent: ParentTNode = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
-					const node = makeOpenTagNode(tag, [], parent);
-					pushNodeHere(node);
-					cur_tnode = node;
+					const nodes = makeOpenTagNode(tag, [], parent);
+					for (const n of nodes) pushNodeHere(n);
+					const lastNode = nodes[nodes.length - 1];
+					cur_tnode = lastNode ?? null;
 					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
 						tag_stack.push({ tag: tag.tagName });
 					}
@@ -1307,4 +1346,153 @@ export function pushRaw(cur_tnode: TNode, raw :string) :TNode {
 		cur_tnode = raw_node;
 	}
 	return cur_tnode;
+}
+
+/**
+ * Stage 2: Resolve AssetRefTNode nodes in a compiled AST using an asset map.
+ * Returns a new CompiledFile with AssetRefTNodes replaced by RawTNodes
+ * and 'asset' AttrParts replaced by 'static' AttrParts.
+ * The input CompiledFile is not mutated.
+ */
+export function resolveAssetRefs(compiled: CompiledFile, assetMap: Map<string, string>): CompiledFile {
+	const newPartials = new Map<string, RootTNode>();
+	for (const [name, root] of compiled.partials) {
+		const newRoot: RootTNode = {
+			type: 'root',
+			tnodes: [],
+			...(root.loc ? { loc: root.loc } : {}),
+			...(root.exported !== undefined ? { exported: root.exported } : {}),
+			...(root.freeVars ? { freeVars: root.freeVars } : {}),
+			...(root.dataShape ? { dataShape: root.dataShape } : {}),
+			...(root.meta ? { meta: root.meta } : {}),
+		};
+		newRoot.tnodes = resolveTNodes(root.tnodes, newRoot, assetMap);
+		newPartials.set(name, newRoot);
+	}
+	return { partials: newPartials };
+}
+
+function resolveTNodes(tnodes: TNode[], parent: ParentTNode, assetMap: Map<string, string>): TNode[] {
+	const result: TNode[] = [];
+	for (const node of tnodes) {
+		switch (node.type) {
+			case 'asset-ref': {
+				const n = node as AssetRefTNode;
+				const resolved = replaceAssetRef(n.originalValue, assetMap);
+				const raw = ` ${n.attrName}="${resolved}"`;
+				// Merge into preceding RawTNode if possible
+				const prev = result[result.length - 1];
+				if (prev && prev.type === 'raw') {
+					(prev as RawTNode).raw += raw;
+				} else {
+					result.push({ type: 'raw', raw, parent } as RawTNode);
+				}
+				break;
+			}
+			case 'raw': {
+				const n = node as RawTNode;
+				// Merge into preceding RawTNode if possible
+				const prev = result[result.length - 1];
+				if (prev && prev.type === 'raw') {
+					(prev as RawTNode).raw += n.raw;
+				} else {
+					result.push({ type: 'raw', raw: n.raw, parent } as RawTNode);
+				}
+				break;
+			}
+			case 'print': {
+				const n = node as PrintTNode;
+				const newNode: PrintTNode = { type: 'print', data: n.data, parent };
+				if (n.loc) newNode.loc = n.loc;
+				result.push(newNode);
+				break;
+			}
+			case 'slot': {
+				const n = node as SlotTNode;
+				const newNode: SlotTNode = { type: 'slot', name: n.name, parent };
+				if (n.loc) newNode.loc = n.loc;
+				result.push(newNode);
+				break;
+			}
+			case 'for': {
+				const n = node as ForTNode;
+				const newNode: ForTNode = { type: 'for', iterable: n.iterable, valName: n.valName, tnodes: [], parent };
+				if (n.loc) newNode.loc = n.loc;
+				newNode.tnodes = resolveTNodes(n.tnodes, newNode, assetMap);
+				result.push(newNode);
+				break;
+			}
+			case 'if': {
+				const n = node as IfTNode;
+				const newNode: IfTNode = { type: 'if', branches: [], parent };
+				for (const branch of n.branches) {
+					const newBranch: IfBranch = { condition: branch.condition, tnodes: [], ifNode: newNode };
+					if (branch.loc) newBranch.loc = branch.loc;
+					newBranch.tnodes = resolveTNodes(branch.tnodes, newBranch, assetMap);
+					newNode.branches.push(newBranch);
+				}
+				result.push(newNode);
+				break;
+			}
+			case 'partial-ref': {
+				const n = node as PartialRefTNode;
+				const newSlots: { [slotName: string]: TNode[] } = {};
+				for (const [slotName, slotTnodes] of Object.entries(n.slots)) {
+					// Slot tnodes have the partial-ref's parent as their parent
+					newSlots[slotName] = resolveTNodes(slotTnodes, parent, assetMap);
+				}
+				const newNode: PartialRefTNode = {
+					type: 'partial-ref',
+					file: n.file,
+					partialName: n.partialName,
+					wrapper: n.wrapper,
+					slots: newSlots,
+					bindings: n.bindings,
+					parent,
+				};
+				if (n.slotLocs) newNode.slotLocs = n.slotLocs;
+				if (n.loc) newNode.loc = n.loc;
+				result.push(newNode);
+				break;
+			}
+			case 'attr-bind': {
+				const n = node as AttrBindTNode;
+				const newParts: AttrPart[] = resolveAttrParts(n.parts, assetMap);
+				const newNode: AttrBindTNode = { type: 'attr-bind', tagOpen: n.tagOpen, parts: newParts, parent };
+				if (n.selfClosing) newNode.selfClosing = true;
+				result.push(newNode);
+				break;
+			}
+		}
+	}
+	return result;
+}
+
+function resolveAttrParts(parts: AttrPart[], assetMap: Map<string, string>): AttrPart[] {
+	const result: AttrPart[] = [];
+	for (const part of parts) {
+		if (part.type === 'asset') {
+			const resolved = replaceAssetRef(part.originalValue, assetMap);
+			const raw = ` ${part.attrName}="${resolved}"`;
+			// Merge into preceding static part if possible
+			const prev = result[result.length - 1];
+			if (prev && prev.type === 'static') {
+				prev.raw += raw;
+			} else {
+				result.push({ type: 'static', raw });
+			}
+		} else if (part.type === 'static') {
+			// Merge into preceding static part if possible
+			const prev = result[result.length - 1];
+			if (prev && prev.type === 'static') {
+				prev.raw += part.raw;
+			} else {
+				result.push({ type: 'static', raw: part.raw });
+			}
+		} else {
+			// dynamic parts pass through unchanged
+			result.push({ ...part });
+		}
+	}
+	return result;
 }
