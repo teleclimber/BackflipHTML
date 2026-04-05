@@ -19,8 +19,8 @@
   "contributes": {
     "commands": [
       {
-        "command": "backflipHTML.openCssRule",
-        "title": "BackflipHTML: Open CSS Rule"
+        "command": "backflipHTML.openFileAtLocation",
+        "title": "BackflipHTML: Open File at Location"
       },
       {
         "command": "backflipHTML.findAllSelectors",

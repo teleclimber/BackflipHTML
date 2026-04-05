@@ -36,7 +36,7 @@ export function showSelectorsPanel(data: SelectorsData, context: vscode.Extensio
 		panel.webview.onDidReceiveMessage(
 			(msg: { command: string; path: string; line: number; col: number }) => {
 				if (msg.command === 'open') {
-					vscode.commands.executeCommand('backflipHTML.openCssRule', {
+					vscode.commands.executeCommand('backflipHTML.openFileAtLocation', {
 						path: msg.path,
 						line: msg.line,
 						col: msg.col,
@@ -79,7 +79,7 @@ function renderHtml(data: SelectorsData): string {
 				<code class="selector">${esc(r.selector)}</code>
 				<span class="spec">${spec}</span>
 				${typeLabel}
-				<a class="location" href="#" data-path="${esc(primaryCssPath)}" data-line="${r.sourceLine - 1}" data-col="${r.sourceCol - 1}">${esc(fileName)}:${r.sourceLine}</a>
+				<a class="location" href="javascript:void(0)" data-path="${esc(primaryCssPath)}" data-line="${r.sourceLine - 1}" data-col="${r.sourceCol - 1}">${esc(fileName)}:${r.sourceLine}</a>
 			</div>
 			<div class="props">${props}</div>
 			${media}

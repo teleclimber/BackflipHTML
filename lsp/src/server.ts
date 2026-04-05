@@ -18,7 +18,7 @@ import {
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { compileDirectory, loadConfig, resolveConfigRoot, resolveAssetDirs, CONFIG_FILENAME, previewPartial, type BackflipError, type CompiledFile, type CompileOptions, type LoadConfigResult } from '@backflip/html';
 import { analyzeCss, discoverCssFiles, type CssAnalysisResult, type PartialSourceInfo } from '@backflip/css';
-import { discoverAssetFileInfos, collectAssetReferences, buildAssetUsageReport, filterReport, renderAssetReportHtml } from '@backflip/assets';
+import { discoverAssetFileInfos, collectAllAssetReferences, buildAssetUsageReport, filterReport, renderAssetReportHtml } from '@backflip/assets';
 import { buildIndex, type ProjectIndex } from './index.js';
 import { errorsToDiagnostics } from './diagnostics.js';
 import { findDefinition, findAssetDefinition } from './definition.js';
@@ -552,7 +552,7 @@ connection.onRequest('backflip/assetUsageReport', (params: { uri?: string }) => 
 	if (!assetDirs || compiledFiles.size === 0) return null;
 
 	const assets = discoverAssetFileInfos(assetDirs);
-	const refs = collectAssetReferences(compiledFiles);
+	const refs = collectAllAssetReferences(compiledFiles, assetDirs);
 	let report = buildAssetUsageReport(assets, refs);
 
 	// If a URI is provided, filter by asset dir and subpath

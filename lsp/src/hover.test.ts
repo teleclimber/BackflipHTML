@@ -420,7 +420,7 @@ describe('getHover', () => {
 			const result = getHover(doc, pos(0, 5), 'page.html', index, cssAnalysis as any, ['/workspace/styles.css']);
 			const v = hoverValue(result);
 			ok(v.includes('styles.css:10'), 'should include file name and line number');
-			ok(v.includes('command:backflipHTML.openCssRule'), 'should include command URI');
+			ok(v.includes('command:backflipHTML.openFileAtLocation'), 'should include command URI');
 		});
 
 		it('shows correct line numbers for multiple rules', () => {
@@ -564,7 +564,7 @@ describe('CSS selector hover (hover in CSS file)', () => {
 		const doc = makeDoc(['.card { color: red; }']);
 		const result = getHover(doc, pos(0, 3), ssRelPath, index, cssAnalysis as any, [ssPath], tplRoot);
 		const v = hoverValue(result);
-		ok(v.includes('command:backflipHTML.openCssRule'), 'should include command URI');
+		ok(v.includes('command:backflipHTML.openFileAtLocation'), 'should include command URI');
 		// Path is URL-encoded in the command URI
 		ok(v.includes(encodeURIComponent('/workspace/templates/page.html')), 'should include full path to template');
 	});

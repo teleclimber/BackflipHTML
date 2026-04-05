@@ -1,8 +1,10 @@
 import * as vscode from 'vscode';
 import * as path from 'node:path';
+import * as fs from 'node:fs';
 
 let panel: vscode.WebviewPanel | null = null;
 let currentTemplateRoot: string | undefined;
+let currentAssetDirs: Record<string, string> | undefined;
 
 export function showAssetReportPanel(
 	html: string,
@@ -12,6 +14,7 @@ export function showAssetReportPanel(
 	templateRoot?: string,
 ): void {
 	currentTemplateRoot = templateRoot;
+	currentAssetDirs = assetDirs;
 
 	if (panel) {
 		panel.reveal();
@@ -37,16 +40,29 @@ export function showAssetReportPanel(
 		panel.webview.onDidReceiveMessage(
 			(msg: { command: string; path?: string; file?: string; line?: number; col?: number }) => {
 				if (msg.command === 'openAsset' && msg.path) {
-					vscode.commands.executeCommand('backflipHTML.openCssRule', {
-						path: msg.path,
-						line: 0,
-						col: 0,
-					});
+					vscode.commands.executeCommand('vscode.open', vscode.Uri.file(msg.path));
 				} else if (msg.command === 'openReference' && msg.file) {
-					const absPath = currentTemplateRoot
-						? path.join(currentTemplateRoot, msg.file)
-						: msg.file;
-					vscode.commands.executeCommand('backflipHTML.openCssRule', {
+					let absPath = '';
+					if (currentTemplateRoot) {
+						const p = path.join(currentTemplateRoot, msg.file);
+						if (fs.existsSync(p)) {
+							absPath = p;
+						}
+					}
+					if (!absPath && currentAssetDirs) {
+						for (const dirPath of Object.values(currentAssetDirs)) {
+							const p = path.join(dirPath, msg.file);
+							if (fs.existsSync(p)) {
+								absPath = p;
+								break;
+							}
+						}
+					}
+					if (!absPath) {
+						absPath = msg.file;
+					}
+
+					vscode.commands.executeCommand('backflipHTML.openFileAtLocation', {
 						path: absPath,
 						line: (msg.line ?? 1) - 1,
 						col: (msg.col ?? 1) - 1,
@@ -64,6 +80,7 @@ export function showAssetReportPanel(
 
 export function refreshAssetReportPanel(html: string, title: string, assetDirs?: Record<string, string>): void {
 	if (panel) {
+		currentAssetDirs = assetDirs;
 		panel.title = title;
 		panel.webview.html = rewriteAssetUrls(html, panel.webview, assetDirs);
 	}

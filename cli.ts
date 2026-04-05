@@ -5,7 +5,7 @@ import { loadConfig, resolveConfigRoot, resolveAssetDirs } from './compiler/conf
 import { fileToJsModule } from './compiler/generate/js/nodes2js.ts';
 import { fileToPhpFile } from './compiler/generate/php/nodes2php.ts';
 import { resolveAssetRefs } from './compiler/compiler.ts';
-import { discoverAssetFileInfos, collectAssetReferences, buildAssetUsageReport, filterReport } from './assets/src/index.ts';
+import { discoverAssetFileInfos, collectAllAssetReferences, buildAssetUsageReport, filterReport } from './assets/src/index.ts';
 
 const HELP = `Usage:
   backflip                                             Use backflip.json config
@@ -108,7 +108,7 @@ if (args.check) {
     }
 
     const assets = discoverAssetFileInfos(assetDirs);
-    const refs = collectAssetReferences(directory.files);
+    const refs = collectAllAssetReferences(directory.files, assetDirs);
     let report = buildAssetUsageReport(assets, refs);
     if (args['unused-only']) {
         report = filterReport(report, { unusedOnly: true });
@@ -125,7 +125,8 @@ if (args.check) {
                 const status = entry.isUsed ? '  used' : 'UNUSED';
                 console.log(`  [${status}] @${entry.asset.name}/${entry.asset.subpath}`);
                 for (const ref of entry.references) {
-                    console.log(`           <- ${ref.templateFile} (${ref.partialName}:${ref.line})`);
+                    const loc = ref.partialName ? ` (${ref.partialName}:${ref.line})` : ` (:${ref.line})`;
+                    console.log(`           <- ${ref.sourceFile}${loc}`);
                 }
             }
         }

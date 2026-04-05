@@ -9,9 +9,11 @@ export type {
 	SpineNode,
 	BDirectiveInfo,
 	PartialSourceInfo,
+	CssUrlReference,
 } from './types.js';
 
 export { discoverCssFiles, type CssFileRef } from './discover.js';
+export { extractAssetUrlsFromCss } from './urls.js';
 
 import type { CssAnalysisInput, CssAnalysisResult, ContextSpine } from './types.js';
 import { parseCssFile } from './parse-css.js';

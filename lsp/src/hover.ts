@@ -493,7 +493,7 @@ function hoverCssSelector(
 			line: el.startLine - 1,
 			col: el.startCol - 1,
 		}));
-		lines.push(`\`${el.file}\` **${el.partialName}** · [line ${el.startLine}](command:backflipHTML.openCssRule?${args})${typeTag}`);
+		lines.push(`\`${el.file}\` **${el.partialName}** · [line ${el.startLine}](command:backflipHTML.openFileAtLocation?${args})${typeTag}`);
 	}
 
 	return mkHover(lines);
@@ -598,7 +598,7 @@ function hoverCssRules(
 				line: m.sourceLine - 1,
 				col: m.sourceCol - 1,
 			}));
-			locationLink = ` · [${fileName}:${m.sourceLine}](command:backflipHTML.openCssRule?${args})`;
+			locationLink = ` · [${fileName}:${m.sourceLine}](command:backflipHTML.openFileAtLocation?${args})`;
 		}
 
 		lines.push(`\`${m.selector}\` — ${spec}${typeTag}${locationLink}`);

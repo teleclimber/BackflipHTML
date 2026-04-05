@@ -15,7 +15,7 @@ Scans the filesystem for asset files based on the `assets` configuration in `bac
 
 Analyzes compiled template ASTs to find all occurrences of asset references (attributes ending in `~` or starting with `@`). It tracks which partial and which line number contains each reference.
 
-- `collectAssetReferences()` — walks a `CompiledDirectory` to extract all asset usage.
+- `collectAllAssetReferences()` — walks a `CompiledDirectory` (and optionally configured asset directories) to extract all asset usage from templates and CSS files.
 
 ### Usage Reporting (`report.ts`)
 

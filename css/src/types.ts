@@ -155,6 +155,12 @@ export interface PartialSourceInfo {
 
 // --- Analysis Result ---
 
+export interface CssUrlReference {
+	url: string;
+	line: number;
+	column: number;
+}
+
 export interface CssAnalysisInput {
 	cssContent: string;
 	templateFiles: Map<string, string>;

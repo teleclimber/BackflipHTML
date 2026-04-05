@@ -8,7 +8,7 @@ import { previewPartial } from './preview.js';
 import type { CompiledFile } from '../compiler/compiler.js';
 import { createWatcher, type WatchCallback, type WatchOptions } from '../lib/watch.js';
 import { discoverCssFiles } from '../css/src/discover.js';
-import { discoverAssetFileInfos, collectAssetReferences, buildAssetUsageReport, renderAssetReportHtml } from '../assets/src/index.js';
+import { discoverAssetFileInfos, collectAllAssetReferences, buildAssetUsageReport, renderAssetReportHtml } from '../assets/src/index.js';
 
 const MIME_TYPES: Record<string, string> = {
 	'.css': 'text/css', '.js': 'text/javascript',
@@ -160,7 +160,7 @@ export async function handleRequest(
 	// Asset usage report
 	if (pathname === '/__assets-report' && ctx.assetDirs) {
 		const assets = discoverAssetFileInfos(ctx.assetDirs);
-		const refs = collectAssetReferences(ctx.directory.files);
+		const refs = collectAllAssetReferences(ctx.directory.files, ctx.assetDirs);
 		const report = buildAssetUsageReport(assets, refs);
 		const html = renderAssetReportHtml(report, { assetBaseUrl: '/__assets/', liveReload });
 		res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });

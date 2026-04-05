@@ -40,7 +40,7 @@ describe('collectAssetReferences', () => {
 		const refs = collectAssetReferences(directory.files);
 		const staticRef = refs.find(r => r.partialName === 'static-asset');
 		assert.ok(staticRef, 'should find reference in static-asset partial');
-		assert.ok(staticRef.templateFile.endsWith('assets.html'));
+		assert.ok(staticRef.sourceFile.endsWith('assets.html'));
 		assert.equal(staticRef.assetName, 'images');
 		assert.equal(staticRef.assetSubpath, 'photo.jpg');
 	});

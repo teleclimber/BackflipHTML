@@ -8,7 +8,7 @@ function makeAsset(name: string, subpath: string): AssetFileInfo {
 }
 
 function makeRef(assetName: string, assetSubpath: string, partial = 'main'): AssetReference {
-	return { templateFile: 'index.html', partialName: partial, line: 1, column: 1, assetName, assetSubpath };
+	return { sourceFile: 'index.html', partialName: partial, line: 1, column: 1, assetName, assetSubpath };
 }
 
 describe('buildAssetUsageReport', () => {

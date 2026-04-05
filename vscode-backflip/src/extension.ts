@@ -59,22 +59,27 @@ let lastPreviewQuery: { uri: string; partialName: string } | null = null;
 let lastAssetReportQuery: { uri?: string } | null = null;
 
 export function activate(context: ExtensionContext): void {
-	// Register command to open a CSS file at a specific line/column
-	const openCssRuleDisposable = vscode.commands.registerCommand(
-		'backflipHTML.openCssRule',
+	// Register command to open a file at a specific line/column
+	const openFileAtLocationDisposable = vscode.commands.registerCommand(
+		'backflipHTML.openFileAtLocation',
 		async (args: { path: string; line: number; col: number }) => {
 			const uri = vscode.Uri.file(args.path);
-			const position = new vscode.Position(args.line, args.col);
-			const doc = await vscode.workspace.openTextDocument(uri);
-			const editor = await vscode.window.showTextDocument(doc);
-			editor.selection = new vscode.Selection(position, position);
-			editor.revealRange(
-				new vscode.Range(position, position),
-				vscode.TextEditorRevealType.InCenter,
-			);
+			try {
+				const doc = await vscode.workspace.openTextDocument(uri);
+				const editor = await vscode.window.showTextDocument(doc);
+				const position = new vscode.Position(args.line, args.col);
+				editor.selection = new vscode.Selection(position, position);
+				editor.revealRange(
+					new vscode.Range(position, position),
+					vscode.TextEditorRevealType.InCenter,
+				);
+			} catch {
+				// Fallback for binary files (images, etc.) that can't be opened as text
+				await vscode.commands.executeCommand('vscode.open', uri);
+			}
 		},
 	);
-	context.subscriptions.push(openCssRuleDisposable);
+	context.subscriptions.push(openFileAtLocationDisposable);
 
 	// Set up the matches tree view
 	const matchesTreeProvider = new MatchesTreeProvider();
@@ -243,12 +248,12 @@ export function activate(context: ExtensionContext): void {
 				const trusted = (Array.isArray(result.contents) ? result.contents : [result.contents]).map(c => {
 					if (c instanceof vscode.MarkdownString) {
 						const md = new vscode.MarkdownString(c.value);
-						md.isTrusted = { enabledCommands: ['backflipHTML.openCssRule'] };
+						md.isTrusted = { enabledCommands: ['backflipHTML.openFileAtLocation'] };
 						return md;
 					}
 					if (typeof c === 'object' && 'value' in c) {
 						const md = new vscode.MarkdownString(c.value as string);
-						md.isTrusted = { enabledCommands: ['backflipHTML.openCssRule'] };
+						md.isTrusted = { enabledCommands: ['backflipHTML.openFileAtLocation'] };
 						return md;
 					}
 					return c;

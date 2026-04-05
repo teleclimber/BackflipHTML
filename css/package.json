@@ -16,6 +16,7 @@
     "specificity": "^1.0.0"
   },
   "devDependencies": {
+    "@types/css-tree": "^2.3.11",
     "@types/jsdom": "^28.0.1",
     "@types/node": "^22.15.21",
     "jsdom": "^29.0.1",

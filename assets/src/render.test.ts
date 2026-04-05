@@ -9,7 +9,7 @@ function makeReport(overrides?: Partial<AssetUsageReport>): AssetUsageReport {
 		entries: [
 			{
 				asset: { name: 'images', subpath: 'photo.jpg', absolutePath: '/a/photo.jpg', ext: '.jpg', size: 12345, isImage: true },
-				references: [{ templateFile: 'index.html', partialName: 'hero', line: 5, column: 10, assetName: 'images', assetSubpath: 'photo.jpg' }],
+				references: [{ sourceFile: 'index.html', partialName: 'hero', line: 5, column: 10, assetName: 'images', assetSubpath: 'photo.jpg' }],
 				isUsed: true,
 			},
 			{
@@ -74,7 +74,7 @@ describe('renderAssetReportHtml', () => {
 
 	it('shows first 4 refs and hides the rest behind show-more', () => {
 		const manyRefs = Array.from({ length: 6 }, (_, i) => ({
-			templateFile: `file${i}.html`, partialName: `part${i}`, line: i + 1, column: 1, assetName: 'images', assetSubpath: 'photo.jpg',
+			sourceFile: `file${i}.html`, partialName: `part${i}`, line: i + 1, column: 1, assetName: 'images', assetSubpath: 'photo.jpg',
 		}));
 		const report = makeReport({
 			entries: [{

@@ -34,12 +34,14 @@ export function renderAssetReportHtml(
 			thumbnail = `<div class="thumb placeholder">${escapeHtml(asset.ext || '?')}</div>`;
 		}
 
-		const assetLink = `<a class="asset-link" href="#" data-asset-path="${escapeAttr(asset.absolutePath)}">`;
+		const assetLink = `<a class="asset-link" href="javascript:void(0)" data-asset-path="${escapeAttr(asset.absolutePath)}">`;
 
 		let refList: string;
 		if (references.length > 0) {
-			const renderRef = (r: typeof references[0]) =>
-				`<li><a class="ref-link" href="#" data-ref-file="${escapeAttr(r.templateFile)}" data-ref-line="${r.line}" data-ref-col="${r.column}"><code>${escapeHtml(r.templateFile)}</code> partial <code>${escapeHtml(r.partialName)}</code> line ${r.line}</a></li>`;
+			const renderRef = (r: typeof references[0]) => {
+				const loc = r.partialName ? ` partial <code>${escapeHtml(r.partialName)}</code>` : '';
+				return `<li><a class="ref-link" href="javascript:void(0)" data-ref-file="${escapeAttr(r.sourceFile)}" data-ref-line="${r.line}" data-ref-col="${r.column}"><code>${escapeHtml(r.sourceFile)}</code>${loc} line ${r.line}</a></li>`;
+			};
 
 			const visible = references.slice(0, VISIBLE_REFS).map(renderRef).join('');
 			const hidden = references.length > VISIBLE_REFS

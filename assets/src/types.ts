@@ -23,10 +23,10 @@ export interface AssetFileInfo {
 }
 
 export interface AssetReference {
-	/** Template file path relative to template root. */
-	templateFile: string;
-	/** Partial that contains the reference. */
-	partialName: string;
+	/** Source file path relative to its root (template or asset dir). */
+	sourceFile: string;
+	/** Partial that contains the reference (for templates only). */
+	partialName?: string;
 	/** 1-based line number. */
 	line: number;
 	/** 1-based column number. */

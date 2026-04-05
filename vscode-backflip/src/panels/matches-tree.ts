@@ -77,7 +77,7 @@ export class MatchesTreeProvider implements vscode.TreeDataProvider<TreeItem> {
 				}
 				item.iconPath = new vscode.ThemeIcon('symbol-field');
 				item.command = {
-					command: 'backflipHTML.openCssRule',
+					command: 'backflipHTML.openFileAtLocation',
 					title: 'Go to element',
 					arguments: [{
 						path: this.templateRoot ? path.join(this.templateRoot, element.file) : element.file,
