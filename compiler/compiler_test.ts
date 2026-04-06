@@ -1111,15 +1111,6 @@ Deno.test("asset: no asset map produces error for ~ attribute", async () => {
 	assertStringIncludes(errors[0].message, 'no asset directories');
 });
 
-Deno.test("asset: error when using ~ attribute with no assets configured", async () => {
-	const { errors } = await compileFile(
-		'<div b-name="hero"><img src~="@images/photo.jpg" /></div>',
-		undefined, 'test.html'
-	);
-	assertEquals(errors.length, 1);
-	assertStringIncludes(errors[0].message, 'no asset directories');
-});
-
 Deno.test("asset: error when using :bind~ attribute with no assets configured", async () => {
 	const { errors } = await compileFile(
 		`<div b-name="hero"><img :src~="'@images/' + f" /></div>`,
