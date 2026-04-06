@@ -1,8 +1,15 @@
 import { assert, assertEquals, assertExists, assertStringIncludes } from "jsr:@std/assert";
 
 import type { RootTNode, RawTNode, PrintTNode, ForTNode, IfTNode, SlotTNode, PartialRefTNode, AttrBindTNode, AssetRefTNode, SourceLoc, CompileOptions } from "./compiler.ts";
-import { generateStringStack, compileFile, onText, pushRaw, resolveAssetRefs } from "./compiler.ts";
+import { compileFile, onText, pushRaw, resolveAssetRefs } from "./compiler.ts";
 import { interpretBackcode } from "./backcode.ts";
+
+/** Helper: compile a snippet of HTML as a single partial via b-unwrap, returning the root and errors. */
+async function compileSnippet(html: string): Promise<{ root: RootTNode, errors: import("./errors.ts").BackflipError[] }> {
+	const { compiled, errors } = await compileFile(`<b-unwrap b-name="test">${html}</b-unwrap>`);
+	const root = compiled.partials.get('test')!;
+	return { root, errors };
+}
 
 Deno.test( "pushRaw", () => {
 	const root :RootTNode = { type: 'root', tnodes: [] };
@@ -132,7 +139,7 @@ Deno.test( "onText-Raw+PrintTwo+Raw", () => {
 
 // Fix 1: Missing space in tag reconstruction
 Deno.test("b-for tag reconstruction has space before attrs", async () => {
-	const { root } = await generateStringStack('<div class="x" b-for="item in items">hello</div>');
+	const { root } = await compileSnippet('<div class="x" b-for="item in items">hello</div>');
 	const for_node = root.tnodes[1] as ForTNode;
 	const inner_raw = for_node.tnodes[0] as RawTNode;
 	// The inner raw starts with the reconstructed opening tag
@@ -141,7 +148,7 @@ Deno.test("b-for tag reconstruction has space before attrs", async () => {
 
 // Fix 2: Void elements should not corrupt tag stack
 Deno.test("void elements do not corrupt tag matching", async () => {
-	const { root } = await generateStringStack('<div><br><span>hi</span></div>');
+	const { root } = await compileSnippet('<div><br><span>hi</span></div>');
 	// Should not throw - if br is pushed to tag_stack without being popped,
 	// </span> would try to match <br> and fail
 	const raw = root.tnodes[0] as RawTNode;
@@ -149,7 +156,7 @@ Deno.test("void elements do not corrupt tag matching", async () => {
 });
 
 Deno.test("self-closing slash preserved on void elements", async () => {
-	const { root } = await generateStringStack('<div><br /><img src="a.png" /></div>');
+	const { root } = await compileSnippet('<div><br /><img src="a.png" /></div>');
 	const raw = root.tnodes[0] as RawTNode;
 	assertEquals(raw.raw, '<div><br /><img src="a.png" /></div>');
 });
@@ -172,7 +179,7 @@ Deno.test("non-self-closing void element has no selfClosing flag", async () => {
 
 // Fix 4: top-level b-for followed by more content
 Deno.test("b-for at root followed by more content", async () => {
-	const { root } = await generateStringStack('<ul b-for="item in items"><li>hello</li></ul><p>after</p>');
+	const { root } = await compileSnippet('<ul b-for="item in items"><li>hello</li></ul><p>after</p>');
 	// Should have: empty raw, for_node, raw with <p>after</p>
 	assertEquals(root.tnodes.length, 3);
 	assertEquals(root.tnodes[1].type, 'for');
@@ -207,13 +214,13 @@ Deno.test("onText-EmptyBraces", () => {
 
 // Fix 3: b-for without "in" keyword should error
 Deno.test("b-for without 'in' keyword reports error", async () => {
-	const { errors } = await generateStringStack('<div b-for="items">hello</div>');
+	const { errors } = await compileSnippet('<div b-for="items">hello</div>');
 	assertEquals(errors.length > 0, true);
 });
 
 // b-if tests
 Deno.test("simple b-if", async () => {
-	const { root } = await generateStringStack('<div b-if="show">hello</div>');
+	const { root } = await compileSnippet('<div b-if="show">hello</div>');
 	assertEquals(root.tnodes.length, 2); // empty raw + if_node
 	const if_node = root.tnodes[1] as IfTNode;
 	assertEquals(if_node.type, 'if');
@@ -224,7 +231,7 @@ Deno.test("simple b-if", async () => {
 });
 
 Deno.test("b-if + b-else", async () => {
-	const { root } = await generateStringStack('<div b-if="show">yes</div><div b-else>no</div>');
+	const { root } = await compileSnippet('<div b-if="show">yes</div><div b-else>no</div>');
 	const if_node = root.tnodes[1] as IfTNode;
 	assertEquals(if_node.type, 'if');
 	assertEquals(if_node.branches.length, 2);
@@ -237,7 +244,7 @@ Deno.test("b-if + b-else", async () => {
 });
 
 Deno.test("b-if + b-else-if + b-else", async () => {
-	const { root } = await generateStringStack('<p b-if="a">1</p><p b-else-if="b">2</p><p b-else>3</p>');
+	const { root } = await compileSnippet('<p b-if="a">1</p><p b-else-if="b">2</p><p b-else>3</p>');
 	const if_node = root.tnodes[1] as IfTNode;
 	assertEquals(if_node.branches.length, 3);
 	assertEquals(if_node.branches[0].condition, interpretBackcode('a'));
@@ -246,17 +253,17 @@ Deno.test("b-if + b-else-if + b-else", async () => {
 });
 
 Deno.test("b-else without preceding b-if reports error", async () => {
-	const { errors } = await generateStringStack('<div b-else>no</div>');
+	const { errors } = await compileSnippet('<div b-else>no</div>');
 	assertEquals(errors.length > 0, true);
 });
 
 Deno.test("b-else-if without preceding b-if reports error", async () => {
-	const { errors } = await generateStringStack('<div b-else-if="x">no</div>');
+	const { errors } = await compileSnippet('<div b-else-if="x">no</div>');
 	assertEquals(errors.length > 0, true);
 });
 
 Deno.test("nested b-if inside b-if", async () => {
-	const { root } = await generateStringStack('<div b-if="a"><span b-if="b">inner</span></div>');
+	const { root } = await compileSnippet('<div b-if="a"><span b-if="b">inner</span></div>');
 	const outer = root.tnodes[1] as IfTNode;
 	assertEquals(outer.type, 'if');
 	assertEquals(outer.branches.length, 1);
@@ -272,7 +279,7 @@ Deno.test("nested b-if inside b-if", async () => {
 });
 
 Deno.test("nested b-if with b-else inside b-if", async () => {
-	const { root } = await generateStringStack('<div b-if="a"><p b-if="b">yes</p><p b-else>no</p></div>');
+	const { root } = await compileSnippet('<div b-if="a"><p b-if="b">yes</p><p b-else>no</p></div>');
 	const outer = root.tnodes[1] as IfTNode;
 	assertEquals(outer.branches.length, 1);
 	const inner_if = outer.branches[0].tnodes[1] as IfTNode;
@@ -283,7 +290,7 @@ Deno.test("nested b-if with b-else inside b-if", async () => {
 });
 
 Deno.test("b-if nested inside b-for", async () => {
-	const { root } = await generateStringStack('<div b-for="item in items"><span b-if="item.show">hi</span></div>');
+	const { root } = await compileSnippet('<div b-for="item in items"><span b-if="item.show">hi</span></div>');
 	const for_node = root.tnodes[1] as ForTNode;
 	assertEquals(for_node.type, 'for');
 	// for tnodes: raw "<div>", IfTNode, raw "</div>"
@@ -294,7 +301,7 @@ Deno.test("b-if nested inside b-for", async () => {
 });
 
 Deno.test("b-if with content after", async () => {
-	const { root } = await generateStringStack('<div b-if="show">hello</div><p>after</p>');
+	const { root } = await compileSnippet('<div b-if="show">hello</div><p>after</p>');
 	assertEquals(root.tnodes.length, 3); // empty raw, if_node, raw with <p>after</p>
 	assertEquals(root.tnodes[1].type, 'if');
 	const last = root.tnodes[2] as RawTNode;

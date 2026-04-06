@@ -8,10 +8,9 @@ The compiler takes HTML templates with `b-*` directive attributes and `{{ expres
 
 The main compilation entry point. Uses `parse5`'s streaming HTML parser to handle real HTML (void elements, self-closing tags, etc.). As it walks the HTML, it recognizes `b-for`, `b-if`, `b-else-if`, `b-else`, `b-bind:`, `b-name`, `b-part`, `b-slot`, `b-in`, `b-data:`, and `b-unwrap` directives and builds tree nodes for each. Anything that isn't a directive is stored as a raw HTML string node.
 
-Key functions:
+Key function:
 
 - `compileFile()` — compiles a single HTML string into a `CompiledFile` containing a map of partial names to AST nodes
-- `generateStringStack()` — lower-level entry point that parses HTML into a `RootTNode`
 
 ### Expression language (`backcode.ts`)
 
