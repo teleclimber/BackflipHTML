@@ -4,6 +4,8 @@ import type { RootTNode, RawTNode, PrintTNode, ForTNode, IfTNode, SlotTNode, Par
 import { compileFile, onText, pushRaw, resolveAssetRefs } from "./compiler.ts";
 import { interpretBackcode } from "./backcode.ts";
 
+// ---- helpers ----
+
 /** Helper: compile a snippet of HTML as a single partial via b-unwrap, returning the root and errors. */
 async function compileSnippet(html: string): Promise<{ root: RootTNode, errors: import("./errors.ts").BackflipError[] }> {
 	const { compiled, errors } = await compileFile(`<b-unwrap b-name="test">${html}</b-unwrap>`);
@@ -11,7 +13,37 @@ async function compileSnippet(html: string): Promise<{ root: RootTNode, errors: 
 	return { root, errors };
 }
 
-Deno.test( "pushRaw", () => {
+function findPartialRef(root: RootTNode): PartialRefTNode {
+	for (const n of root.tnodes) {
+		if (n.type === 'partial-ref') return n as PartialRefTNode;
+	}
+	throw new Error("no partial-ref found");
+}
+
+function findForNode(root: RootTNode): ForTNode {
+	for (const n of root.tnodes) {
+		if (n.type === 'for') return n as ForTNode;
+	}
+	throw new Error("no for node found");
+}
+
+function findIfNode(root: RootTNode): IfTNode {
+	for (const n of root.tnodes) {
+		if (n.type === 'if') return n as IfTNode;
+	}
+	throw new Error("no if node found");
+}
+
+function findSlotNode(root: RootTNode): SlotTNode {
+	for (const n of root.tnodes) {
+		if (n.type === 'slot') return n as SlotTNode;
+	}
+	throw new Error("no slot node found");
+}
+
+// ---- pushRaw unit tests ----
+
+Deno.test("pushRaw: appends to existing raw node", () => {
 	const root :RootTNode = { type: 'root', tnodes: [] };
 	const child_node :RawTNode = { type: 'raw', raw: 'hello', parent: root	};
 	root.tnodes.push(child_node);
@@ -21,7 +53,9 @@ Deno.test( "pushRaw", () => {
 	assertEquals(ret_raw, 'helloworld');
 });
 
-Deno.test( "onText-Raw", () => {
+// ---- onText unit tests ----
+
+Deno.test("onText: plain text appended to raw node", () => {
 	const root :RootTNode = { type: 'root', tnodes: [] };
 	const child_node :RawTNode = { type: 'raw', raw: '', parent: root	};
 	root.tnodes.push(child_node);
@@ -38,7 +72,7 @@ Deno.test( "onText-Raw", () => {
 	});
 });
 
-Deno.test( "onText-PrintOne", () => {
+Deno.test("onText: single interpolation", () => {
 	const root :RootTNode = { type: 'root', tnodes: [] };
 	const child_node :RawTNode = { type: 'raw', raw: '', parent: root	};
 	root.tnodes.push(child_node);
@@ -59,7 +93,7 @@ Deno.test( "onText-PrintOne", () => {
 	});
 });
 
-Deno.test( "onText-Raw+PrintOne", () => {
+Deno.test("onText: text before interpolation", () => {
 	const root :RootTNode = { type: 'root', tnodes: [] };
 	const child_node :RawTNode = { type: 'raw', raw: '', parent: root	};
 	root.tnodes.push(child_node);
@@ -80,7 +114,7 @@ Deno.test( "onText-Raw+PrintOne", () => {
 	});
 });
 
-Deno.test( "onText-Raw+PrintOne+Raw", () => {
+Deno.test("onText: text around interpolation", () => {
 	const root :RootTNode = { type: 'root', tnodes: [] };
 	const child_node :RawTNode = { type: 'raw', raw: '', parent: root	};
 	root.tnodes.push(child_node);
@@ -105,8 +139,7 @@ Deno.test( "onText-Raw+PrintOne+Raw", () => {
 	});
 });
 
-
-Deno.test( "onText-Raw+PrintTwo+Raw", () => {
+Deno.test("onText: two interpolations with surrounding text", () => {
 	const root :RootTNode = { type: 'root', tnodes: [] };
 	const child_node :RawTNode = { type: 'raw', raw: '', parent: root	};
 	root.tnodes.push(child_node);
@@ -133,62 +166,9 @@ Deno.test( "onText-Raw+PrintTwo+Raw", () => {
 			parent: root
 		}]
 	});
-
-	console.log(root);
 });
 
-// Fix 1: Missing space in tag reconstruction
-Deno.test("b-for tag reconstruction has space before attrs", async () => {
-	const { root } = await compileSnippet('<div class="x" b-for="item in items">hello</div>');
-	const for_node = root.tnodes[1] as ForTNode;
-	const inner_raw = for_node.tnodes[0] as RawTNode;
-	// The inner raw starts with the reconstructed opening tag
-	assertEquals(inner_raw.raw.startsWith('<div class="x">'), true);
-});
-
-// Fix 2: Void elements should not corrupt tag stack
-Deno.test("void elements do not corrupt tag matching", async () => {
-	const { root } = await compileSnippet('<div><br><span>hi</span></div>');
-	// Should not throw - if br is pushed to tag_stack without being popped,
-	// </span> would try to match <br> and fail
-	const raw = root.tnodes[0] as RawTNode;
-	assertEquals(raw.raw, '<div><br><span>hi</span></div>');
-});
-
-Deno.test("self-closing slash preserved on void elements", async () => {
-	const { root } = await compileSnippet('<div><br /><img src="a.png" /></div>');
-	const raw = root.tnodes[0] as RawTNode;
-	assertEquals(raw.raw, '<div><br /><img src="a.png" /></div>');
-});
-
-Deno.test("self-closing slash preserved on attr-bind void elements", async () => {
-	const { compiled } = await compileFile('<div b-name="test"><img :src="url" /></div>');
-	const root = compiled.partials.get('test')!;
-	const node = root.tnodes[1] as AttrBindTNode;
-	assertEquals(node.type, 'attr-bind');
-	assertEquals(node.selfClosing, true);
-});
-
-Deno.test("non-self-closing void element has no selfClosing flag", async () => {
-	const { compiled } = await compileFile('<div b-name="test"><img :src="url"></div>');
-	const root = compiled.partials.get('test')!;
-	const node = root.tnodes[1] as AttrBindTNode;
-	assertEquals(node.type, 'attr-bind');
-	assertEquals(node.selfClosing, undefined);
-});
-
-// Fix 4: top-level b-for followed by more content
-Deno.test("b-for at root followed by more content", async () => {
-	const { root } = await compileSnippet('<ul b-for="item in items"><li>hello</li></ul><p>after</p>');
-	// Should have: empty raw, for_node, raw with <p>after</p>
-	assertEquals(root.tnodes.length, 3);
-	assertEquals(root.tnodes[1].type, 'for');
-	const last = root.tnodes[2] as RawTNode;
-	assertEquals(last.raw, '<p>after</p>');
-});
-
-// Fix 5: parentheses in template expressions should work
-Deno.test("onText-ParensInExpression", () => {
+Deno.test("onText: parentheses in expression", () => {
 	const root :RootTNode = { type: 'root', tnodes: [] };
 	const child_node :RawTNode = { type: 'raw', raw: '', parent: root	};
 	root.tnodes.push(child_node);
@@ -199,8 +179,7 @@ Deno.test("onText-ParensInExpression", () => {
 	assertEquals(root.tnodes[1].type, 'print');
 });
 
-// Fix 7: empty {{ }} should be skipped
-Deno.test("onText-EmptyBraces", () => {
+Deno.test("onText: empty braces skipped", () => {
 	const root :RootTNode = { type: 'root', tnodes: [] };
 	const child_node :RawTNode = { type: 'raw', raw: '', parent: root	};
 	root.tnodes.push(child_node);
@@ -212,14 +191,65 @@ Deno.test("onText-EmptyBraces", () => {
 	assertEquals((root.tnodes[0] as RawTNode).raw, 'before{{  }}after');
 });
 
-// Fix 3: b-for without "in" keyword should error
-Deno.test("b-for without 'in' keyword reports error", async () => {
+// ---- compileSnippet: void elements ----
+
+Deno.test("void elements: do not corrupt tag matching", async () => {
+	const { root } = await compileSnippet('<div><br><span>hi</span></div>');
+	// Should not throw - if br is pushed to tag_stack without being popped,
+	// </span> would try to match <br> and fail
+	const raw = root.tnodes[0] as RawTNode;
+	assertEquals(raw.raw, '<div><br><span>hi</span></div>');
+});
+
+Deno.test("void elements: self-closing slash preserved", async () => {
+	const { root } = await compileSnippet('<div><br /><img src="a.png" /></div>');
+	const raw = root.tnodes[0] as RawTNode;
+	assertEquals(raw.raw, '<div><br /><img src="a.png" /></div>');
+});
+
+Deno.test("void elements: self-closing slash preserved on attr-bind", async () => {
+	const { compiled } = await compileFile('<div b-name="test"><img :src="url" /></div>');
+	const root = compiled.partials.get('test')!;
+	const node = root.tnodes[1] as AttrBindTNode;
+	assertEquals(node.type, 'attr-bind');
+	assertEquals(node.selfClosing, true);
+});
+
+Deno.test("void elements: non-self-closing has no selfClosing flag", async () => {
+	const { compiled } = await compileFile('<div b-name="test"><img :src="url"></div>');
+	const root = compiled.partials.get('test')!;
+	const node = root.tnodes[1] as AttrBindTNode;
+	assertEquals(node.type, 'attr-bind');
+	assertEquals(node.selfClosing, undefined);
+});
+
+// ---- compileSnippet: b-for ----
+
+Deno.test("b-for: tag reconstruction has space before attrs", async () => {
+	const { root } = await compileSnippet('<div class="x" b-for="item in items">hello</div>');
+	const for_node = root.tnodes[1] as ForTNode;
+	const inner_raw = for_node.tnodes[0] as RawTNode;
+	// The inner raw starts with the reconstructed opening tag
+	assertEquals(inner_raw.raw.startsWith('<div class="x">'), true);
+});
+
+Deno.test("b-for: at root followed by more content", async () => {
+	const { root } = await compileSnippet('<ul b-for="item in items"><li>hello</li></ul><p>after</p>');
+	// Should have: empty raw, for_node, raw with <p>after</p>
+	assertEquals(root.tnodes.length, 3);
+	assertEquals(root.tnodes[1].type, 'for');
+	const last = root.tnodes[2] as RawTNode;
+	assertEquals(last.raw, '<p>after</p>');
+});
+
+Deno.test("b-for: without 'in' keyword reports error", async () => {
 	const { errors } = await compileSnippet('<div b-for="items">hello</div>');
 	assertEquals(errors.length > 0, true);
 });
 
-// b-if tests
-Deno.test("simple b-if", async () => {
+// ---- compileSnippet: b-if ----
+
+Deno.test("b-if: simple", async () => {
 	const { root } = await compileSnippet('<div b-if="show">hello</div>');
 	assertEquals(root.tnodes.length, 2); // empty raw + if_node
 	const if_node = root.tnodes[1] as IfTNode;
@@ -230,7 +260,7 @@ Deno.test("simple b-if", async () => {
 	assertEquals(inner.raw, '<div>hello</div>');
 });
 
-Deno.test("b-if + b-else", async () => {
+Deno.test("b-if: with b-else", async () => {
 	const { root } = await compileSnippet('<div b-if="show">yes</div><div b-else>no</div>');
 	const if_node = root.tnodes[1] as IfTNode;
 	assertEquals(if_node.type, 'if');
@@ -243,7 +273,7 @@ Deno.test("b-if + b-else", async () => {
 	assertEquals(branch1.raw, '<div>no</div>');
 });
 
-Deno.test("b-if + b-else-if + b-else", async () => {
+Deno.test("b-if: with b-else-if and b-else", async () => {
 	const { root } = await compileSnippet('<p b-if="a">1</p><p b-else-if="b">2</p><p b-else>3</p>');
 	const if_node = root.tnodes[1] as IfTNode;
 	assertEquals(if_node.branches.length, 3);
@@ -252,17 +282,17 @@ Deno.test("b-if + b-else-if + b-else", async () => {
 	assertEquals(if_node.branches[2].condition, undefined);
 });
 
-Deno.test("b-else without preceding b-if reports error", async () => {
+Deno.test("b-if: b-else without preceding b-if reports error", async () => {
 	const { errors } = await compileSnippet('<div b-else>no</div>');
 	assertEquals(errors.length > 0, true);
 });
 
-Deno.test("b-else-if without preceding b-if reports error", async () => {
+Deno.test("b-if: b-else-if without preceding b-if reports error", async () => {
 	const { errors } = await compileSnippet('<div b-else-if="x">no</div>');
 	assertEquals(errors.length > 0, true);
 });
 
-Deno.test("nested b-if inside b-if", async () => {
+Deno.test("b-if: nested inside b-if", async () => {
 	const { root } = await compileSnippet('<div b-if="a"><span b-if="b">inner</span></div>');
 	const outer = root.tnodes[1] as IfTNode;
 	assertEquals(outer.type, 'if');
@@ -278,7 +308,7 @@ Deno.test("nested b-if inside b-if", async () => {
 	assertEquals(inner_raw.raw, '<span>inner</span>');
 });
 
-Deno.test("nested b-if with b-else inside b-if", async () => {
+Deno.test("b-if: nested with b-else inside b-if", async () => {
 	const { root } = await compileSnippet('<div b-if="a"><p b-if="b">yes</p><p b-else>no</p></div>');
 	const outer = root.tnodes[1] as IfTNode;
 	assertEquals(outer.branches.length, 1);
@@ -289,7 +319,7 @@ Deno.test("nested b-if with b-else inside b-if", async () => {
 	assertEquals(inner_if.branches[1].condition, undefined);
 });
 
-Deno.test("b-if nested inside b-for", async () => {
+Deno.test("b-if: nested inside b-for", async () => {
 	const { root } = await compileSnippet('<div b-for="item in items"><span b-if="item.show">hi</span></div>');
 	const for_node = root.tnodes[1] as ForTNode;
 	assertEquals(for_node.type, 'for');
@@ -300,7 +330,7 @@ Deno.test("b-if nested inside b-for", async () => {
 	assertEquals(inner_if.branches[0].condition, interpretBackcode('item.show'));
 });
 
-Deno.test("b-if with content after", async () => {
+Deno.test("b-if: with content after", async () => {
 	const { root } = await compileSnippet('<div b-if="show">hello</div><p>after</p>');
 	assertEquals(root.tnodes.length, 3); // empty raw, if_node, raw with <p>after</p>
 	assertEquals(root.tnodes[1].type, 'if');
@@ -308,7 +338,7 @@ Deno.test("b-if with content after", async () => {
 	assertEquals(last.raw, '<p>after</p>');
 });
 
-// ---- compileFile tests ----
+// ---- compileFile: partials ----
 
 Deno.test("compileFile: single partial with b-name on a div", async () => {
 	const { compiled: result } = await compileFile('<div b-name="hero">Hello</div>');
@@ -344,6 +374,8 @@ Deno.test("compileFile: multiple partials in one file", async () => {
 	assertEquals(result.partials.has("first"), true);
 	assertEquals(result.partials.has("second"), true);
 });
+
+// ---- compileFile: b-part ----
 
 Deno.test("compileFile: b-part same-file reference creates PartialRefTNode with correct file=null and partialName", async () => {
 	const { compiled: result } = await compileFile('<div b-name="page"><div b-part="#hero"></div></div>');
@@ -386,6 +418,21 @@ Deno.test("compileFile: b-part with regular element creates wrapper with open/cl
 	// b-part attr should NOT be in open tag
 	assertEquals(found!.wrapper!.open.includes('b-part'), false);
 });
+
+Deno.test("compileFile: b-data: creates bindings on PartialRefTNode", async () => {
+	const { compiled: result } = await compileFile('<div b-name="page"><b-unwrap b-part="#card" b-data:title="item.title"></b-unwrap></div>');
+	const root = result.partials.get("page")!;
+	let ref: PartialRefTNode | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'partial-ref') { ref = n as PartialRefTNode; break; }
+	}
+	assertEquals(ref !== undefined, true);
+	assertEquals(ref!.bindings.length, 1);
+	assertEquals(ref!.bindings[0].name, "title");
+	assertEquals(ref!.bindings[0].data.vars.includes("item"), true);
+});
+
+// ---- compileFile: slots ----
 
 Deno.test("compileFile: b-slot creates SlotTNode", async () => {
 	const { compiled: result } = await compileFile('<div b-name="card"><b-unwrap b-slot="title"></b-unwrap></div>');
@@ -478,48 +525,161 @@ Deno.test("compileFile: named slot with b-in on regular element", async () => {
 	assertEquals(allRaw.includes('Title'), true);
 });
 
-Deno.test("compileFile: b-data: creates bindings on PartialRefTNode", async () => {
-	const { compiled: result } = await compileFile('<div b-name="page"><b-unwrap b-part="#card" b-data:title="item.title"></b-unwrap></div>');
+// ---- compileFile: slot content (interpolation, b-for, b-if) ----
+
+Deno.test("compileFile: interpolation inside nested element within slot content produces PrintTNode in slot", async () => {
+	const { compiled: result } = await compileFile('<div b-name="page"><b-unwrap b-part="#card"><p>{{ name }}</p></b-unwrap></div>');
 	const root = result.partials.get("page")!;
 	let ref: PartialRefTNode | undefined;
 	for (const n of root.tnodes) {
 		if (n.type === 'partial-ref') { ref = n as PartialRefTNode; break; }
 	}
 	assertEquals(ref !== undefined, true);
-	assertEquals(ref!.bindings.length, 1);
-	assertEquals(ref!.bindings[0].name, "title");
-	assertEquals(ref!.bindings[0].data.vars.includes("item"), true);
+	const defaultSlot = ref!.slots['default'];
+	assertEquals(defaultSlot !== undefined, true);
+	const hasPrint = defaultSlot.some(n => n.type === 'print');
+	assertEquals(hasPrint, true, "slot should contain a PrintTNode for the {{ name }} interpolation");
+});
+
+Deno.test("compileFile: b-for inside slot content produces ForTNode in slot array", async () => {
+	const { compiled: result, errors } = await compileFile('<div b-name="page"><b-unwrap b-part="#card"><p b-for="x in items">{{ x }}</p></b-unwrap></div>');
+	assertEquals(errors.length, 0);
+	const root = result.partials.get("page")!;
+	let ref: PartialRefTNode | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'partial-ref') { ref = n as PartialRefTNode; break; }
+	}
+	assertEquals(ref !== undefined, true);
+	const defaultSlot = ref!.slots['default'];
+	assertEquals(defaultSlot !== undefined, true);
+	const forNode = defaultSlot.find(n => n.type === 'for') as ForTNode | undefined;
+	assertEquals(forNode !== undefined, true, "slot should contain a ForTNode");
+	assertEquals(forNode!.valName, "x");
+	// The print node should be inside the for body, not a sibling in the slot array
+	const hasPrint = forNode!.tnodes.some(n => n.type === 'print');
+	assertEquals(hasPrint, true, "ForTNode should contain the {{ x }} PrintTNode");
+});
+
+Deno.test("compileFile: b-if/b-else inside slot content produces IfTNode in slot array", async () => {
+	const { compiled: result, errors } = await compileFile('<div b-name="page"><b-unwrap b-part="#card"><p b-if="show">yes</p><p b-else>no</p></b-unwrap></div>');
+	assertEquals(errors.length, 0);
+	const root = result.partials.get("page")!;
+	let ref: PartialRefTNode | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'partial-ref') { ref = n as PartialRefTNode; break; }
+	}
+	assertEquals(ref !== undefined, true);
+	const defaultSlot = ref!.slots['default'];
+	assertEquals(defaultSlot !== undefined, true);
+	const ifNode = defaultSlot.find(n => n.type === 'if') as IfTNode | undefined;
+	assertEquals(ifNode !== undefined, true, "slot should contain an IfTNode");
+	assertEquals(ifNode!.branches.length, 2, "IfTNode should have b-if and b-else branches");
+});
+
+// ---- compileFile: bind attrs ----
+
+Deno.test("compileFile: bind attr on b-name root element produces AttrBindTNode", async () => {
+	const { compiled: result, errors } = await compileFile('<div b-name="card" :class="cls">Hello</div>');
+	assertEquals(errors.length, 0);
+	const root = result.partials.get("card")!;
+	const first = root.tnodes[0];
+	assertEquals(first.type, 'attr-bind', "root element with :class should produce an attr-bind node, not raw");
+	const ab = first as AttrBindTNode;
+	assertEquals(ab.tagOpen, '<div');
+	const dynamicPart = ab.parts.find(p => p.type === 'dynamic');
+	assertEquals(dynamicPart !== undefined, true, "should have a dynamic part for :class");
+	assertEquals(dynamicPart!.name, 'class');
+});
+
+Deno.test("compileFile: bind attr on b-name root element excludes b-name and b-export attrs", async () => {
+	const { compiled: result, errors } = await compileFile('<div b-name="card" b-export :class="cls" id="x">Hello</div>');
+	assertEquals(errors.length, 0);
+	const root = result.partials.get("card")!;
+	const first = root.tnodes[0] as AttrBindTNode;
+	assertEquals(first.type, 'attr-bind');
+	// b-name and b-export should not appear in parts
+	const allStatic = first.parts.filter(p => p.type === 'static').map(p => p.raw).join('');
+	assertEquals(allStatic.includes('b-name'), false, "b-name should be excluded");
+	assertEquals(allStatic.includes('b-export'), false, "b-export should be excluded");
+	assertEquals(allStatic.includes('id="x"'), true, "static attrs should be preserved");
+});
+
+// ---- interpretBackcode ----
+
+Deno.test("interpretBackcode: allowed unary operators produce no errors", () => {
+	["!abc", "-abc", "+abc", "!!abc", "!abc.def"].forEach(s => {
+		const result = interpretBackcode(s);
+		assertEquals(result.errs, [], `expected no errors for: ${s}`);
+	});
+});
+
+Deno.test("interpretBackcode: disallowed unary operators produce errors", () => {
+	["typeof abc", "void abc", "delete abc"].forEach(s => {
+		const result = interpretBackcode(s);
+		assertEquals(result.errs.length > 0, true, `expected error for: ${s}`);
+	});
+});
+
+// ---- PartialMeta tests ----
+
+Deno.test("meta: fragment-level partial has correct startOffset, endOffset, isDocumentLevel=false", async () => {
+	const src = '<div b-name="card"><p>hello</p></div>';
+	const { compiled: result } = await compileFile(src);
+	const root = result.partials.get("card")!;
+	const meta = root.meta!;
+	assertEquals(meta.startOffset, 0);
+	assertEquals(meta.endOffset, src.length);
+	assertEquals(meta.startLine, 1);
+	assertEquals(meta.startCol, 1);
+	assertEquals(meta.isDocumentLevel, false);
+});
+
+Deno.test("meta: document-level partial (html tag) has isDocumentLevel=true", async () => {
+	const src = '<html b-name="page"><head><title>Hi</title></head><body><div>content</div></body></html>';
+	const { compiled: result } = await compileFile(src);
+	const root = result.partials.get("page")!;
+	const meta = root.meta!;
+	assertEquals(meta.isDocumentLevel, true);
+	assertEquals(meta.startOffset, 0);
+	assertEquals(meta.endOffset, src.length);
+});
+
+Deno.test("meta: document-level partial (body tag as b-name element)", async () => {
+	const src = '<body b-name="page"><div>content</div></body>';
+	const { compiled: result } = await compileFile(src);
+	const root = result.partials.get("page")!;
+	assertEquals(root.meta!.isDocumentLevel, true);
+});
+
+Deno.test("meta: document-level partial (contains body as descendant)", async () => {
+	const src = '<b-unwrap b-name="page"><html><body><div>content</div></body></html></b-unwrap>';
+	const { compiled: result } = await compileFile(src);
+	const root = result.partials.get("page")!;
+	assertEquals(root.meta!.isDocumentLevel, true);
+});
+
+Deno.test("meta: multiple partials in one file have separate meta", async () => {
+	const src = '<div b-name="header"><h1>hi</h1></div>\n<div b-name="footer"><p>bye</p></div>';
+	const { compiled: result } = await compileFile(src);
+	const header = result.partials.get("header")!;
+	const footer = result.partials.get("footer")!;
+	assertEquals(header.meta!.startOffset, 0);
+	assertEquals(header.meta!.endOffset, src.indexOf('</div>') + '</div>'.length);
+	assertEquals(footer.meta!.startOffset, src.indexOf('<div b-name="footer">'));
+	assertEquals(footer.meta!.endOffset, src.length);
+	assertEquals(header.meta!.isDocumentLevel, false);
+	assertEquals(footer.meta!.isDocumentLevel, false);
+});
+
+Deno.test("meta: partial on second line has correct startLine/startCol", async () => {
+	const src = '\n<div b-name="card"><p>hello</p></div>';
+	const { compiled: result } = await compileFile(src);
+	const meta = result.partials.get("card")!.meta!;
+	assertEquals(meta.startLine, 2);
+	assertEquals(meta.startCol, 1);
 });
 
 // ---- Source location tests ----
-
-function findPartialRef(root: RootTNode): PartialRefTNode {
-	for (const n of root.tnodes) {
-		if (n.type === 'partial-ref') return n as PartialRefTNode;
-	}
-	throw new Error("no partial-ref found");
-}
-
-function findForNode(root: RootTNode): ForTNode {
-	for (const n of root.tnodes) {
-		if (n.type === 'for') return n as ForTNode;
-	}
-	throw new Error("no for node found");
-}
-
-function findIfNode(root: RootTNode): IfTNode {
-	for (const n of root.tnodes) {
-		if (n.type === 'if') return n as IfTNode;
-	}
-	throw new Error("no if node found");
-}
-
-function findSlotNode(root: RootTNode): SlotTNode {
-	for (const n of root.tnodes) {
-		if (n.type === 'slot') return n as SlotTNode;
-	}
-	throw new Error("no slot node found");
-}
 
 Deno.test("loc: b-name attribute location on RootTNode", async () => {
 	const src = '<div b-name="hero">Hello</div>';
@@ -709,155 +869,7 @@ Deno.test("loc: b-bind:class bind attr dynamic part location", async () => {
 	assertEquals(loc.endOffset, endExpected);
 });
 
-Deno.test("compileFile: interpolation inside nested element within slot content produces PrintTNode in slot", async () => {
-	const { compiled: result } = await compileFile('<div b-name="page"><b-unwrap b-part="#card"><p>{{ name }}</p></b-unwrap></div>');
-	const root = result.partials.get("page")!;
-	let ref: PartialRefTNode | undefined;
-	for (const n of root.tnodes) {
-		if (n.type === 'partial-ref') { ref = n as PartialRefTNode; break; }
-	}
-	assertEquals(ref !== undefined, true);
-	const defaultSlot = ref!.slots['default'];
-	assertEquals(defaultSlot !== undefined, true);
-	const hasPrint = defaultSlot.some(n => n.type === 'print');
-	assertEquals(hasPrint, true, "slot should contain a PrintTNode for the {{ name }} interpolation");
-});
-
-Deno.test("compileFile: b-for inside slot content produces ForTNode in slot array", async () => {
-	const { compiled: result, errors } = await compileFile('<div b-name="page"><b-unwrap b-part="#card"><p b-for="x in items">{{ x }}</p></b-unwrap></div>');
-	assertEquals(errors.length, 0);
-	const root = result.partials.get("page")!;
-	let ref: PartialRefTNode | undefined;
-	for (const n of root.tnodes) {
-		if (n.type === 'partial-ref') { ref = n as PartialRefTNode; break; }
-	}
-	assertEquals(ref !== undefined, true);
-	const defaultSlot = ref!.slots['default'];
-	assertEquals(defaultSlot !== undefined, true);
-	const forNode = defaultSlot.find(n => n.type === 'for') as ForTNode | undefined;
-	assertEquals(forNode !== undefined, true, "slot should contain a ForTNode");
-	assertEquals(forNode!.valName, "x");
-	// The print node should be inside the for body, not a sibling in the slot array
-	const hasPrint = forNode!.tnodes.some(n => n.type === 'print');
-	assertEquals(hasPrint, true, "ForTNode should contain the {{ x }} PrintTNode");
-});
-
-Deno.test("compileFile: b-if/b-else inside slot content produces IfTNode in slot array", async () => {
-	const { compiled: result, errors } = await compileFile('<div b-name="page"><b-unwrap b-part="#card"><p b-if="show">yes</p><p b-else>no</p></b-unwrap></div>');
-	assertEquals(errors.length, 0);
-	const root = result.partials.get("page")!;
-	let ref: PartialRefTNode | undefined;
-	for (const n of root.tnodes) {
-		if (n.type === 'partial-ref') { ref = n as PartialRefTNode; break; }
-	}
-	assertEquals(ref !== undefined, true);
-	const defaultSlot = ref!.slots['default'];
-	assertEquals(defaultSlot !== undefined, true);
-	const ifNode = defaultSlot.find(n => n.type === 'if') as IfTNode | undefined;
-	assertEquals(ifNode !== undefined, true, "slot should contain an IfTNode");
-	assertEquals(ifNode!.branches.length, 2, "IfTNode should have b-if and b-else branches");
-});
-
-Deno.test("compileFile: bind attr on b-name root element produces AttrBindTNode", async () => {
-	const { compiled: result, errors } = await compileFile('<div b-name="card" :class="cls">Hello</div>');
-	assertEquals(errors.length, 0);
-	const root = result.partials.get("card")!;
-	const first = root.tnodes[0];
-	assertEquals(first.type, 'attr-bind', "root element with :class should produce an attr-bind node, not raw");
-	const ab = first as AttrBindTNode;
-	assertEquals(ab.tagOpen, '<div');
-	const dynamicPart = ab.parts.find(p => p.type === 'dynamic');
-	assertEquals(dynamicPart !== undefined, true, "should have a dynamic part for :class");
-	assertEquals(dynamicPart!.name, 'class');
-});
-
-Deno.test("compileFile: bind attr on b-name root element excludes b-name and b-export attrs", async () => {
-	const { compiled: result, errors } = await compileFile('<div b-name="card" b-export :class="cls" id="x">Hello</div>');
-	assertEquals(errors.length, 0);
-	const root = result.partials.get("card")!;
-	const first = root.tnodes[0] as AttrBindTNode;
-	assertEquals(first.type, 'attr-bind');
-	// b-name and b-export should not appear in parts
-	const allStatic = first.parts.filter(p => p.type === 'static').map(p => p.raw).join('');
-	assertEquals(allStatic.includes('b-name'), false, "b-name should be excluded");
-	assertEquals(allStatic.includes('b-export'), false, "b-export should be excluded");
-	assertEquals(allStatic.includes('id="x"'), true, "static attrs should be preserved");
-});
-
-Deno.test("allowed unary operators produce no errors", () => {
-	["!abc", "-abc", "+abc", "!!abc", "!abc.def"].forEach(s => {
-		const result = interpretBackcode(s);
-		assertEquals(result.errs, [], `expected no errors for: ${s}`);
-	});
-});
-
-Deno.test("disallowed unary operators produce errors", () => {
-	["typeof abc", "void abc", "delete abc"].forEach(s => {
-		const result = interpretBackcode(s);
-		assertEquals(result.errs.length > 0, true, `expected error for: ${s}`);
-	});
-});
-
-// --- PartialMeta tests ---
-
-Deno.test("meta: fragment-level partial has correct startOffset, endOffset, isDocumentLevel=false", async () => {
-	const src = '<div b-name="card"><p>hello</p></div>';
-	const { compiled: result } = await compileFile(src);
-	const root = result.partials.get("card")!;
-	const meta = root.meta!;
-	assertEquals(meta.startOffset, 0);
-	assertEquals(meta.endOffset, src.length);
-	assertEquals(meta.startLine, 1);
-	assertEquals(meta.startCol, 1);
-	assertEquals(meta.isDocumentLevel, false);
-});
-
-Deno.test("meta: document-level partial (html tag) has isDocumentLevel=true", async () => {
-	const src = '<html b-name="page"><head><title>Hi</title></head><body><div>content</div></body></html>';
-	const { compiled: result } = await compileFile(src);
-	const root = result.partials.get("page")!;
-	const meta = root.meta!;
-	assertEquals(meta.isDocumentLevel, true);
-	assertEquals(meta.startOffset, 0);
-	assertEquals(meta.endOffset, src.length);
-});
-
-Deno.test("meta: document-level partial (body tag as b-name element)", async () => {
-	const src = '<body b-name="page"><div>content</div></body>';
-	const { compiled: result } = await compileFile(src);
-	const root = result.partials.get("page")!;
-	assertEquals(root.meta!.isDocumentLevel, true);
-});
-
-Deno.test("meta: document-level partial (contains body as descendant)", async () => {
-	const src = '<b-unwrap b-name="page"><html><body><div>content</div></body></html></b-unwrap>';
-	const { compiled: result } = await compileFile(src);
-	const root = result.partials.get("page")!;
-	assertEquals(root.meta!.isDocumentLevel, true);
-});
-
-Deno.test("meta: multiple partials in one file have separate meta", async () => {
-	const src = '<div b-name="header"><h1>hi</h1></div>\n<div b-name="footer"><p>bye</p></div>';
-	const { compiled: result } = await compileFile(src);
-	const header = result.partials.get("header")!;
-	const footer = result.partials.get("footer")!;
-	assertEquals(header.meta!.startOffset, 0);
-	assertEquals(header.meta!.endOffset, src.indexOf('</div>') + '</div>'.length);
-	assertEquals(footer.meta!.startOffset, src.indexOf('<div b-name="footer">'));
-	assertEquals(footer.meta!.endOffset, src.length);
-	assertEquals(header.meta!.isDocumentLevel, false);
-	assertEquals(footer.meta!.isDocumentLevel, false);
-});
-
-Deno.test("meta: partial on second line has correct startLine/startCol", async () => {
-	const src = '\n<div b-name="card"><p>hello</p></div>';
-	const { compiled: result } = await compileFile(src);
-	const meta = result.partials.get("card")!.meta!;
-	assertEquals(meta.startLine, 2);
-	assertEquals(meta.startCol, 1);
-});
-
-// --- includeLocs tests ---
+// ---- includeLocs tests ----
 
 Deno.test("includeLocs: regular element gets data-loc attribute", async () => {
 	const src = '<div b-name="card"><p>hello</p></div>';
