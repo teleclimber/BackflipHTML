@@ -5,7 +5,6 @@ import * as path from 'node:path';
 
 import { interpretBackcode } from './backcode.js';
 import type { Parsed } from './backcode.js';
-export { BackflipError } from './errors.js';
 import { BackflipError } from './errors.js';
 import { inferFreeVars, inferDataShape } from './data-shape.js';
 import type { DataShape } from './data-shape.js';
@@ -514,14 +513,274 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 
 		const rewriteStream = new RewritingStream();
 
-		rewriteStream.on('startTag', (tag, raw) => { try {
+		// --- startTag directive handlers ---
+		// Each handler is an inner function closing over compiler state (cur_tnode, currentPartialRoot, tag_stack, etc.)
 
-			// --- b-name ---
-			const bNameAttr = tag.attrs.find(a => a.name === 'b-name');
-			if (bNameAttr !== undefined) {
-				if (tag_stack.length > 0) {
-					errors.push(new BackflipError("b-name is only allowed on top-level elements", attrErrorLoc(tag, 'b-name', filename)));
-					// Treat as raw tag within current partial
+		type StartTag = { tagName: string, attrs: { name: string, value: string }[], selfClosing: boolean, sourceCodeLocation?: unknown };
+		type Attr = { name: string, value: string };
+
+		function handleBName(tag: StartTag, raw: string, bNameAttr: Attr) {
+			if (tag_stack.length > 0) {
+				errors.push(new BackflipError("b-name is only allowed on top-level elements", attrErrorLoc(tag, 'b-name', filename)));
+				// Treat as raw tag within current partial
+				const new_cur = pushRawHere(raw);
+				if (cur_tnode !== null) cur_tnode = new_cur;
+				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+					tag_stack.push({ tag: tag.tagName });
+				}
+				return;
+			}
+
+			const partialName = bNameAttr.value;
+			const tagSrcLoc = tag.sourceCodeLocation as { startOffset?: number; startLine?: number; startCol?: number } | null | undefined;
+			const partialRoot: RootTNode = { type: 'root', tnodes: [], meta: {
+				startOffset: tagSrcLoc?.startOffset ?? 0,
+				endOffset: tagSrcLoc?.startOffset ?? 0, // updated on close
+				startLine: tagSrcLoc?.startLine ?? 1,
+				startCol: tagSrcLoc?.startCol ?? 1,
+				isDocumentLevel: DOCUMENT_LEVEL_TAGS.has(tag.tagName),
+			} };
+			partialRoot.loc = attrLoc(tag, 'b-name');
+			partialRoot.exported = tag.attrs.some(a => a.name === 'b-export');
+			compiledFile.partials.set(partialName, partialRoot);
+
+			currentPartialRoot = partialRoot;
+			currentPartialName = partialName;
+
+			if (tag.tagName === 'b-unwrap') {
+				// Don't emit opening tag; just track for closing
+				const init_raw: RawTNode = { type: 'raw', raw: '', parent: partialRoot };
+				partialRoot.tnodes.push(init_raw);
+				cur_tnode = init_raw;
+				if (!tag.selfClosing) {
+					tag_stack.push({ tag: tag.tagName });
+				}
+			} else {
+				const openNodes = makeOpenTagNode(tag, ['b-name', 'b-export'], partialRoot);
+				for (const n of openNodes) partialRoot.tnodes.push(n);
+				const lastOpen = openNodes[openNodes.length - 1];
+				cur_tnode = lastOpen?.type === 'raw' ? lastOpen as RawTNode : null;
+				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+					tag_stack.push({ tag: tag.tagName });
+				} else {
+					// Self-closing or void element: end offset is end of this tag
+					partialRoot.meta!.endOffset = (tagSrcLoc?.startOffset ?? 0) + raw.length;
+				}
+			}
+		}
+
+		function handleBPart(tag: StartTag, raw: string, bPartAttr: Attr) {
+			// b-part outside any b-name partial is ignored
+			if (cur_tnode === null && currentPartialRoot === null) {
+				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+					tag_stack.push({ tag: tag.tagName });
+				}
+				return;
+			}
+			const partValue = bPartAttr.value;
+			let file: string | null;
+			let partialName: string;
+			if (partValue.startsWith('#')) {
+				file = null;
+				partialName = partValue.slice(1);
+			} else {
+				const hashIdx = partValue.indexOf('#');
+				if (hashIdx === -1) {
+					file = null;
+					partialName = partValue;
+				} else {
+					file = partValue.slice(0, hashIdx);
+					partialName = partValue.slice(hashIdx + 1);
+				}
+			}
+
+			const bindings: PartialBinding[] = [];
+			for (const attr of tag.attrs) {
+				if (attr.name.startsWith('b-data:')) {
+					const bindingName = attr.name.slice('b-data:'.length);
+					bindings.push({ name: bindingName, data: interpretBackcode(attr.value) });
+				}
+			}
+
+			let wrapper: { open: string, close: string } | null;
+			if (tag.tagName === 'b-unwrap') {
+				wrapper = null;
+			} else {
+				const open = buildTagPrefix(tag, ['b-part']) + dataLocAttr(tag) + (tag.selfClosing ? ' />' : '>');
+				wrapper = { open, close: `</${tag.tagName}>` };
+			}
+
+			const parent: ParentTNode = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
+
+			const partialRef: PartialRefTNode = {
+				type: 'partial-ref',
+				file,
+				partialName,
+				wrapper,
+				slots: { 'default': [] },
+				slotLocs: {},
+				bindings,
+				parent
+			};
+			partialRef.loc = attrLoc(tag, 'b-part');
+
+			pushNodeHere(partialRef);
+
+			if (!tag.selfClosing && tag.tagName !== 'b-unwrap' || tag.tagName === 'b-unwrap' && !tag.selfClosing) {
+				tag_stack.push({
+					tag: tag.tagName,
+					tnode: partialRef,
+					slotCollection: {
+						partialRef,
+						currentSlot: 'default'
+					}
+				});
+			}
+		}
+
+		function handleBSlot(tag: StartTag, _raw: string, bSlotAttr: Attr) {
+			// b-slot outside any b-name partial is ignored
+			if (cur_tnode === null && currentPartialRoot === null) {
+				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+					tag_stack.push({ tag: tag.tagName });
+				}
+				return;
+			}
+			const slotName = bSlotAttr.value !== '' ? bSlotAttr.value : undefined;
+			const parent: ParentTNode = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
+
+			const slot_node: SlotTNode = { type: 'slot', name: slotName, parent };
+			slot_node.loc = attrLoc(tag, 'b-slot');
+
+			if (cur_tnode !== null) {
+				cur_tnode.parent.tnodes!.push(slot_node);
+			} else if (currentPartialRoot !== null) {
+				currentPartialRoot.tnodes.push(slot_node);
+			}
+			cur_tnode = slot_node as unknown as TNode;
+
+			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+				// Push to tag_stack so endTag is consumed correctly.
+				// For b-unwrap b-slot, don't store tnode so endTag has no special effect.
+				if (tag.tagName === 'b-unwrap') {
+					tag_stack.push({ tag: tag.tagName });
+				} else {
+					tag_stack.push({ tag: tag.tagName, tnode: slot_node as unknown as TNode });
+				}
+			}
+		}
+
+		function handleBIn(tag: StartTag, _raw: string, bInAttr: Attr): boolean {
+			const innermost = getSlotCollection();
+			if (!innermost) return false;
+			const slotName = bInAttr.value || 'default';
+			if (!innermost.partialRef.slots[slotName]) {
+				innermost.partialRef.slots[slotName] = [];
+			}
+			const bInLoc = attrLoc(tag, 'b-in');
+			if (bInLoc) {
+				if (!innermost.partialRef.slotLocs) innermost.partialRef.slotLocs = {};
+				innermost.partialRef.slotLocs[slotName] = bInLoc;
+			}
+			tag_stack.push({
+				tag: tag.tagName,
+				slotCollection: {
+					partialRef: innermost.partialRef,
+					currentSlot: slotName
+				}
+			});
+			// For non-b-unwrap elements, emit the opening tag into the slot
+			if (tag.tagName !== 'b-unwrap') {
+				pushRawHere(buildTagPrefix(tag, ['b-in']) + dataLocAttr(tag) + '>');
+			}
+			return true;
+		}
+
+		function handleBFor(tag: StartTag, raw: string, b_a: Attr) {
+			const pieces = b_a.value.split(" in ");
+			if (pieces.length !== 2) {
+				errors.push(new BackflipError(`b-for value must be in the form "item in items", got: "${b_a.value}"`, attrErrorLoc(tag, 'b-for', filename)));
+				const new_cur = pushRawHere(raw);
+				if (cur_tnode !== null) cur_tnode = new_cur;
+				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+					tag_stack.push({ tag: tag.tagName });
+				}
+				return;
+			}
+			const iterable_parsed = interpretBackcode(pieces[1].trim());
+			const value_name = pieces[0].trim();
+			if (!value_name) {
+				errors.push(new BackflipError(`got bad iter value name: ${value_name}`, attrErrorLoc(tag, 'b-for', filename)));
+				const new_cur = pushRawHere(raw);
+				if (cur_tnode !== null) cur_tnode = new_cur;
+				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+					tag_stack.push({ tag: tag.tagName });
+				}
+				return;
+			}
+
+			const sc_for = getSlotCollection();
+			const parent: ParentTNode = sc_for ? sc_for.partialRef.parent : (cur_tnode ? cur_tnode.parent : currentPartialRoot!);
+			const for_node: ForTNode = { type: 'for', iterable: iterable_parsed, valName: value_name, tnodes: [], parent };
+			for_node.loc = attrLoc(tag, 'b-for');
+			const inner_tags = makeOpenTagNode(tag, ['b-for'], for_node);
+			for (const n of inner_tags) for_node.tnodes.push(n);
+			if (sc_for) {
+				pushNodeHere(for_node);
+			} else {
+				parent.tnodes!.push(for_node);
+			}
+			const lastFor = inner_tags[inner_tags.length - 1];
+			cur_tnode = lastFor ?? null;
+			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+				tag_stack.push({ tag: tag.tagName, tnode: lastFor });
+			}
+		}
+
+		function handleBIf(tag: StartTag, _raw: string, b_a: Attr) {
+			const sc_if = getSlotCollection();
+			const parent: ParentTNode = sc_if ? sc_if.partialRef.parent : (cur_tnode ? cur_tnode.parent : currentPartialRoot!);
+			const if_node: IfTNode = { type: 'if', branches: [], parent };
+			const branch: IfBranch = { condition: interpretBackcode(b_a.value), tnodes: [], ifNode: if_node };
+			branch.loc = attrLoc(tag, 'b-if');
+			if_node.branches.push(branch);
+			const inner_tags_if = makeOpenTagNode(tag, ['b-if'], branch);
+			for (const n of inner_tags_if) branch.tnodes.push(n);
+			if (sc_if) {
+				pushNodeHere(if_node);
+			} else {
+				parent.tnodes!.push(if_node);
+			}
+			const lastIf = inner_tags_if[inner_tags_if.length - 1];
+			cur_tnode = lastIf ?? null;
+			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+				tag_stack.push({ tag: tag.tagName, tnode: lastIf });
+			}
+		}
+
+		function handleBElse(tag: StartTag, raw: string, b_a: Attr) {
+			if (!cur_tnode) {
+				errors.push(new BackflipError("b-else-if/b-else must follow a b-if block", attrErrorLoc(tag, b_a.name, filename)));
+				const new_cur = pushRawHere(raw);
+				if (cur_tnode !== null) cur_tnode = new_cur;
+				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+					tag_stack.push({ tag: tag.tagName });
+				}
+				return;
+			}
+			let if_node: IfTNode;
+			const sc_else = getSlotCollection();
+			try {
+				if (sc_else) {
+					const slotName = sc_else.currentSlot;
+					const arr = sc_else.partialRef.slots[slotName] || [];
+					if_node = findPrecedingIfInSlot(arr, attrErrorLoc(tag, b_a.name, filename));
+				} else {
+					if_node = findPrecedingIfInFile(cur_tnode, attrErrorLoc(tag, b_a.name, filename));
+				}
+			} catch (e) {
+				if (e instanceof BackflipError) {
+					errors.push(e);
 					const new_cur = pushRawHere(raw);
 					if (cur_tnode !== null) cur_tnode = new_cur;
 					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
@@ -529,184 +788,61 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 					}
 					return;
 				}
-
-				const partialName = bNameAttr.value;
-				const tagSrcLoc = tag.sourceCodeLocation as { startOffset?: number; startLine?: number; startCol?: number } | null | undefined;
-				const partialRoot: RootTNode = { type: 'root', tnodes: [], meta: {
-					startOffset: tagSrcLoc?.startOffset ?? 0,
-					endOffset: tagSrcLoc?.startOffset ?? 0, // updated on close
-					startLine: tagSrcLoc?.startLine ?? 1,
-					startCol: tagSrcLoc?.startCol ?? 1,
-					isDocumentLevel: DOCUMENT_LEVEL_TAGS.has(tag.tagName),
-				} };
-				partialRoot.loc = attrLoc(tag, 'b-name');
-				partialRoot.exported = tag.attrs.some(a => a.name === 'b-export');
-				compiledFile.partials.set(partialName, partialRoot);
-
-				currentPartialRoot = partialRoot;
-				currentPartialName = partialName;
-
-				if (tag.tagName === 'b-unwrap') {
-					// Don't emit opening tag; just track for closing
-					const init_raw: RawTNode = { type: 'raw', raw: '', parent: partialRoot };
-					partialRoot.tnodes.push(init_raw);
-					cur_tnode = init_raw;
-					if (!tag.selfClosing) {
-						tag_stack.push({ tag: tag.tagName });
-					}
-				} else {
-					const openNodes = makeOpenTagNode(tag, ['b-name', 'b-export'], partialRoot);
-					for (const n of openNodes) partialRoot.tnodes.push(n);
-					const lastOpen = openNodes[openNodes.length - 1];
-					cur_tnode = lastOpen?.type === 'raw' ? lastOpen as RawTNode : null;
-					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-						tag_stack.push({ tag: tag.tagName });
-					} else {
-						// Self-closing or void element: end offset is end of this tag
-						partialRoot.meta!.endOffset = (tagSrcLoc?.startOffset ?? 0) + raw.length;
-					}
-				}
-				return;
+				throw e;
 			}
-
-			// --- b-part ---
-			const bPartAttr = tag.attrs.find(a => a.name === 'b-part');
-			if (bPartAttr !== undefined) {
-				// b-part outside any b-name partial is ignored
-				if (cur_tnode === null && currentPartialRoot === null) {
-					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-						tag_stack.push({ tag: tag.tagName });
-					}
-					return;
-				}
-				const partValue = bPartAttr.value;
-				let file: string | null;
-				let partialName: string;
-				if (partValue.startsWith('#')) {
-					file = null;
-					partialName = partValue.slice(1);
-				} else {
-					const hashIdx = partValue.indexOf('#');
-					if (hashIdx === -1) {
-						file = null;
-						partialName = partValue;
-					} else {
-						file = partValue.slice(0, hashIdx);
-						partialName = partValue.slice(hashIdx + 1);
-					}
-				}
-
-				const bindings: PartialBinding[] = [];
-				for (const attr of tag.attrs) {
-					if (attr.name.startsWith('b-data:')) {
-						const bindingName = attr.name.slice('b-data:'.length);
-						bindings.push({ name: bindingName, data: interpretBackcode(attr.value) });
-					}
-				}
-
-				let wrapper: { open: string, close: string } | null;
-				if (tag.tagName === 'b-unwrap') {
-					wrapper = null;
-				} else {
-					const open = buildTagPrefix(tag, ['b-part']) + dataLocAttr(tag) + (tag.selfClosing ? ' />' : '>');
-					wrapper = { open, close: `</${tag.tagName}>` };
-				}
-
-				const parent: ParentTNode = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
-
-				const partialRef: PartialRefTNode = {
-					type: 'partial-ref',
-					file,
-					partialName,
-					wrapper,
-					slots: { 'default': [] },
-					slotLocs: {},
-					bindings,
-					parent
-				};
-				partialRef.loc = attrLoc(tag, 'b-part');
-
-				pushNodeHere(partialRef);
-				// After pushing, update cur_tnode so subsequent siblings work
-				// We use a placeholder raw node in the same parent for after the partial-ref closes
-				// But during slot collection, cur_tnode isn't used
-
-				if (!tag.selfClosing && tag.tagName !== 'b-unwrap' || tag.tagName === 'b-unwrap' && !tag.selfClosing) {
-					tag_stack.push({
-						tag: tag.tagName,
-						tnode: partialRef,
-						slotCollection: {
-							partialRef,
-							currentSlot: 'default'
-						}
-					});
-				}
-				return;
+			if (b_a.name === 'b-else' && b_a.value) {
+				errors.push(new BackflipError("b-else should not have a value", attrErrorLoc(tag, 'b-else', filename)));
+				// Still process as b-else (parsing state stays correct)
 			}
+			const condition = b_a.name === 'b-else-if' ? interpretBackcode(b_a.value) : undefined;
+			const branch: IfBranch = { condition, tnodes: [], ifNode: if_node };
+			branch.loc = attrLoc(tag, b_a.name);
+			if_node.branches.push(branch);
+			const inner_tags_else = makeOpenTagNode(tag, [b_a.name], branch);
+			for (const n of inner_tags_else) branch.tnodes.push(n);
+			const lastElse = inner_tags_else[inner_tags_else.length - 1];
+			cur_tnode = lastElse ?? null;
+			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+				tag_stack.push({ tag: tag.tagName, tnode: lastElse });
+			}
+		}
 
-			// --- b-slot ---
-			const bSlotAttr = tag.attrs.find(a => a.name === 'b-slot');
-			if (bSlotAttr !== undefined) {
-				// b-slot outside any b-name partial is ignored
-				if (cur_tnode === null && currentPartialRoot === null) {
-					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-						tag_stack.push({ tag: tag.tagName });
-					}
-					return;
-				}
-				const slotName = bSlotAttr.value !== '' ? bSlotAttr.value : undefined;
+		function handleRegularTag(tag: StartTag, raw: string) {
+			const hasBindAttrs = tag.attrs.some(attr => isBindAttr(attr.name));
+			const hasAssetAttrs = tag.attrs.some(attr => isAssetAttr(attr.name));
+			if (hasBindAttrs || hasAssetAttrs) {
 				const parent: ParentTNode = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
-
-				const slot_node: SlotTNode = { type: 'slot', name: slotName, parent };
-				slot_node.loc = attrLoc(tag, 'b-slot');
-
-				if (cur_tnode !== null) {
-					cur_tnode.parent.tnodes!.push(slot_node);
-				} else if (currentPartialRoot !== null) {
-					currentPartialRoot.tnodes.push(slot_node);
-				}
-				cur_tnode = slot_node as unknown as TNode;
-
+				const nodes = makeOpenTagNode(tag, [], parent);
+				for (const n of nodes) pushNodeHere(n);
+				const lastNode = nodes[nodes.length - 1];
+				cur_tnode = lastNode ?? null;
 				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-					// Push to tag_stack so endTag is consumed correctly.
-					// For b-unwrap b-slot, don't store tnode so endTag has no special effect.
-					if (tag.tagName === 'b-unwrap') {
-						tag_stack.push({ tag: tag.tagName });
-					} else {
-						tag_stack.push({ tag: tag.tagName, tnode: slot_node as unknown as TNode });
-					}
+					tag_stack.push({ tag: tag.tagName });
 				}
-				return;
+			} else {
+				const loc = dataLocAttr(tag);
+				const tagRaw = loc ? raw.replace(/(\s*\/?)>$/, loc + '$1>') : raw;  // preserves self-closing />
+				const new_cur = pushRawHere(tagRaw);
+				if (cur_tnode !== null) cur_tnode = new_cur;
+				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+					tag_stack.push({ tag: tag.tagName });
+				}
 			}
+		}
 
-			// --- b-in inside slot-collection context ---
+		// --- startTag dispatch ---
+		rewriteStream.on('startTag', (tag, raw) => { try {
+			const bNameAttr = tag.attrs.find(a => a.name === 'b-name');
+			if (bNameAttr) return handleBName(tag, raw, bNameAttr);
+
+			const bPartAttr = tag.attrs.find(a => a.name === 'b-part');
+			if (bPartAttr) return handleBPart(tag, raw, bPartAttr);
+
+			const bSlotAttr = tag.attrs.find(a => a.name === 'b-slot');
+			if (bSlotAttr) return handleBSlot(tag, raw, bSlotAttr);
+
 			const bInAttr = tag.attrs.find(a => a.name === 'b-in');
-			if (bInAttr !== undefined) {
-				const innermost = getSlotCollection();
-				if (innermost) {
-					const slotName = bInAttr.value || 'default';
-					if (!innermost.partialRef.slots[slotName]) {
-						innermost.partialRef.slots[slotName] = [];
-					}
-					const bInLoc = attrLoc(tag, 'b-in');
-					if (bInLoc) {
-						if (!innermost.partialRef.slotLocs) innermost.partialRef.slotLocs = {};
-						innermost.partialRef.slotLocs[slotName] = bInLoc;
-					}
-					tag_stack.push({
-						tag: tag.tagName,
-						slotCollection: {
-							partialRef: innermost.partialRef,
-							currentSlot: slotName
-						}
-					});
-					// For non-b-unwrap elements, emit the opening tag into the slot
-					if (tag.tagName !== 'b-unwrap') {
-						pushRawHere(buildTagPrefix(tag, ['b-in']) + dataLocAttr(tag) + '>');
-					}
-					return;
-				}
-			}
+			if (bInAttr && handleBIn(tag, raw, bInAttr)) return;
 
 			// Skip everything outside a partial
 			if (cur_tnode === null && currentPartialRoot === null) {
@@ -721,7 +857,7 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 				currentPartialRoot.meta!.isDocumentLevel = true;
 			}
 
-			// --- standard b-for / b-if / b-else-if / b-else ---
+			// --- b-for / b-if / b-else-if / b-else ---
 			const b_as = tag.attrs.filter(attr => ['b-for', 'b-if', 'b-else-if', 'b-else'].includes(attr.name));
 			if (b_as.length > 1) {
 				errors.push(new BackflipError("more than one b-attr", errorLoc(filename, tagLoc(tag))));
@@ -735,138 +871,12 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 
 			if (b_as.length === 1) {
 				const b_a = b_as[0];
-				if (b_a.name === 'b-for') {
-					const pieces = b_a.value.split(" in ");
-					if (pieces.length !== 2) {
-						errors.push(new BackflipError(`b-for value must be in the form "item in items", got: "${b_a.value}"`, attrErrorLoc(tag, 'b-for', filename)));
-						const new_cur = pushRawHere(raw);
-						if (cur_tnode !== null) cur_tnode = new_cur;
-						if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-							tag_stack.push({ tag: tag.tagName });
-						}
-						return;
-					}
-					const iterable_parsed = interpretBackcode(pieces[1].trim());
-					const value_name = pieces[0].trim();
-					if (!value_name) {
-						errors.push(new BackflipError(`got bad iter value name: ${value_name}`, attrErrorLoc(tag, 'b-for', filename)));
-						const new_cur = pushRawHere(raw);
-						if (cur_tnode !== null) cur_tnode = new_cur;
-						if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-							tag_stack.push({ tag: tag.tagName });
-						}
-						return;
-					}
+				if (b_a.name === 'b-for') return handleBFor(tag, raw, b_a);
+				if (b_a.name === 'b-if') return handleBIf(tag, raw, b_a);
+				return handleBElse(tag, raw, b_a);
+			}
 
-					const sc_for = getSlotCollection();
-					const parent: ParentTNode = sc_for ? sc_for.partialRef.parent : (cur_tnode ? cur_tnode.parent : currentPartialRoot!);
-					const for_node: ForTNode = { type: 'for', iterable: iterable_parsed, valName: value_name, tnodes: [], parent };
-					for_node.loc = attrLoc(tag, 'b-for');
-					const inner_tags = makeOpenTagNode(tag, ['b-for'], for_node);
-					for (const n of inner_tags) for_node.tnodes.push(n);
-					if (sc_for) {
-						pushNodeHere(for_node);
-					} else {
-						parent.tnodes!.push(for_node);
-					}
-					const lastFor = inner_tags[inner_tags.length - 1];
-					cur_tnode = lastFor ?? null;
-					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-						tag_stack.push({ tag: tag.tagName, tnode: lastFor });
-					}
-				}
-				else if (b_a.name === 'b-if') {
-					const sc_if = getSlotCollection();
-					const parent: ParentTNode = sc_if ? sc_if.partialRef.parent : (cur_tnode ? cur_tnode.parent : currentPartialRoot!);
-					const if_node: IfTNode = { type: 'if', branches: [], parent };
-					const branch: IfBranch = { condition: interpretBackcode(b_a.value), tnodes: [], ifNode: if_node };
-					branch.loc = attrLoc(tag, 'b-if');
-					if_node.branches.push(branch);
-					const inner_tags_if = makeOpenTagNode(tag, ['b-if'], branch);
-					for (const n of inner_tags_if) branch.tnodes.push(n);
-					if (sc_if) {
-						pushNodeHere(if_node);
-					} else {
-						parent.tnodes!.push(if_node);
-					}
-					const lastIf = inner_tags_if[inner_tags_if.length - 1];
-					cur_tnode = lastIf ?? null;
-					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-						tag_stack.push({ tag: tag.tagName, tnode: lastIf });
-					}
-				}
-				else if (b_a.name === 'b-else-if' || b_a.name === 'b-else') {
-					if (!cur_tnode) {
-						errors.push(new BackflipError("b-else-if/b-else must follow a b-if block", attrErrorLoc(tag, b_a.name, filename)));
-						const new_cur = pushRawHere(raw);
-						if (cur_tnode !== null) cur_tnode = new_cur;
-						if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-							tag_stack.push({ tag: tag.tagName });
-						}
-						return;
-					}
-					let if_node: IfTNode;
-					const sc_else = getSlotCollection();
-					try {
-						if (sc_else) {
-							const slotName = sc_else.currentSlot;
-							const arr = sc_else.partialRef.slots[slotName] || [];
-							if_node = findPrecedingIfInSlot(arr, attrErrorLoc(tag, b_a.name, filename));
-						} else {
-							if_node = findPrecedingIfInFile(cur_tnode, attrErrorLoc(tag, b_a.name, filename));
-						}
-					} catch (e) {
-						if (e instanceof BackflipError) {
-							errors.push(e);
-							const new_cur = pushRawHere(raw);
-							if (cur_tnode !== null) cur_tnode = new_cur;
-							if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-								tag_stack.push({ tag: tag.tagName });
-							}
-							return;
-						}
-						throw e;
-					}
-					if (b_a.name === 'b-else' && b_a.value) {
-						errors.push(new BackflipError("b-else should not have a value", attrErrorLoc(tag, 'b-else', filename)));
-						// Still process as b-else (parsing state stays correct)
-					}
-					const condition = b_a.name === 'b-else-if' ? interpretBackcode(b_a.value) : undefined;
-					const branch: IfBranch = { condition, tnodes: [], ifNode: if_node };
-					branch.loc = attrLoc(tag, b_a.name);
-					if_node.branches.push(branch);
-					const inner_tags_else = makeOpenTagNode(tag, [b_a.name], branch);
-					for (const n of inner_tags_else) branch.tnodes.push(n);
-					const lastElse = inner_tags_else[inner_tags_else.length - 1];
-					cur_tnode = lastElse ?? null;
-					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-						tag_stack.push({ tag: tag.tagName, tnode: lastElse });
-					}
-				}
-			}
-			else {
-				// Regular tag — check for bind attrs or asset attrs
-				const hasBindAttrs = tag.attrs.some(attr => isBindAttr(attr.name));
-				const hasAssetAttrs = tag.attrs.some(attr => isAssetAttr(attr.name));
-				if (hasBindAttrs || hasAssetAttrs) {
-					const parent: ParentTNode = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
-					const nodes = makeOpenTagNode(tag, [], parent);
-					for (const n of nodes) pushNodeHere(n);
-					const lastNode = nodes[nodes.length - 1];
-					cur_tnode = lastNode ?? null;
-					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-						tag_stack.push({ tag: tag.tagName });
-					}
-				} else {
-					const loc = dataLocAttr(tag);
-					const tagRaw = loc ? raw.replace(/(\s*\/?)>$/, loc + '$1>') : raw;  // preserves self-closing />
-					const new_cur = pushRawHere(tagRaw);
-					if (cur_tnode !== null) cur_tnode = new_cur;
-					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-						tag_stack.push({ tag: tag.tagName });
-					}
-				}
-			}
+			handleRegularTag(tag, raw);
 		} catch(e) { if (e instanceof BackflipError) { errors.push(e); } else { reject(e); } } });
 
 		rewriteStream.on('endTag', (tag, raw) => { try {
