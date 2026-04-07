@@ -31,6 +31,7 @@ export function validateAssetFiles(
 					filename: ref.sourceFile,
 					line: ref.line,
 					col: ref.column,
+					severity: 'error'
 				}
 			));
 		}

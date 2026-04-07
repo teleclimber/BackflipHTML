@@ -108,8 +108,9 @@ if (args.check) {
     }
     const compileOpts = assetMap || assetDirs ? { assetMap, assetDirs } : undefined;
     const { directory, errors } = await compileDirectory(inputDir, compileOpts);
-    if (errors.length > 0) {
-        for (const err of errors) console.error(err.message);
+    const fatalErrors = errors.filter(e => e.severity === 'fatal');
+    if (fatalErrors.length > 0) {
+        for (const err of fatalErrors) console.error(err.message);
         Deno.exit(1);
     }
 
@@ -174,11 +175,20 @@ if (args.check) {
         errors.push(...assetErrors);
     }
 
-    if (errors.length > 0) {
-        for (const err of errors) {
+    const fatalErrors = errors.filter(e => e.severity === 'fatal');
+    const nonFatalErrors = errors.filter(e => e.severity === 'error');
+
+    if (fatalErrors.length > 0) {
+        for (const err of fatalErrors) {
             console.error(err.message);
         }
         Deno.exit(1);
+    }
+
+    if (nonFatalErrors.length > 0) {
+        for (const err of nonFatalErrors) {
+            console.error(err.message);
+        }
     }
 
     let count = 0;
@@ -196,4 +206,8 @@ if (args.check) {
     }
 
     console.log(`Generated ${count} file${count !== 1 ? 's' : ''} to ${outputDir}`);
+
+    if (nonFatalErrors.length > 0) {
+        Deno.exit(1);
+    }
 }

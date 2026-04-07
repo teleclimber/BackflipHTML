@@ -221,10 +221,10 @@ function validateAssetRef(
 	loc: { filename?: string; line?: number; col?: number } | undefined,
 ): BackflipError | null {
 	if (assetMap && !assetMap.has(ref.name)) {
-		return new BackflipError(`unknown asset directory "@${ref.name}"`, loc);
+		return new BackflipError(`unknown asset directory "@${ref.name}"`, { ...(loc || {}), severity: 'error' });
 	}
 	if (ref.subpath.split('/').some(seg => seg === '..')) {
-		return new BackflipError(`path traversal is not allowed in asset path`, loc);
+		return new BackflipError(`path traversal is not allowed in asset path`, { ...(loc || {}), severity: 'error' });
 	}
 	return null;
 }
