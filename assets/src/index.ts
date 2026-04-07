@@ -8,6 +8,7 @@ export type {
 
 export { discoverAssetFiles, discoverAssetFileInfos } from './discover.js';
 export { collectAssetReferences, collectAllAssetReferences } from './references.js';
+export { validateAssetFiles } from './validate.js';
 export { collectCssAssetReferences } from './css-references.js';
 export { buildAssetUsageReport, filterReport } from './report.js';
 export { renderAssetReportHtml } from './render.js';

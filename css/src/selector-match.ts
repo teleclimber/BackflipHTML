@@ -380,4 +380,5 @@ function cloneMatchNode(node: MatchNode): MatchNode {
 
 // --- Public helpers for building MatchNodes from parsed templates ---
 
-export { MatchNode, matchNodeFromElement, adapter };
+export type { MatchNode };
+export { matchNodeFromElement, adapter };

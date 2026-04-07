@@ -5,7 +5,7 @@ import { loadConfig, resolveConfigRoot, resolveAssetDirs } from './compiler/conf
 import { fileToJsModule } from './compiler/generate/js/nodes2js.ts';
 import { fileToPhpFile } from './compiler/generate/php/nodes2php.ts';
 import { resolveAssetRefs } from './compiler/compiler.ts';
-import { discoverAssetFileInfos, collectAllAssetReferences, buildAssetUsageReport, filterReport } from './assets/src/index.ts';
+import { discoverAssetFileInfos, collectAllAssetReferences, validateAssetFiles, buildAssetUsageReport, filterReport } from './assets/src/index.ts';
 
 const HELP = `Usage:
   backflip                                             Use backflip.json config
@@ -84,7 +84,13 @@ if (args.check) {
         printUsageAndExit('--check mode does not accept <output-dir> or --lang');
     }
 
-    const { errors } = await compileDirectory(inputDir, assetMap || assetDirs ? { assetMap, assetDirs } : undefined);
+    const { directory, errors } = await compileDirectory(inputDir, assetMap || assetDirs ? { assetMap, assetDirs } : undefined);
+
+    if (assetDirs) {
+        const refs = collectAllAssetReferences(directory.files, assetDirs);
+        const assetErrors = validateAssetFiles(refs, assetDirs);
+        errors.push(...assetErrors);
+    }
 
     if (args.json) {
         console.log(JSON.stringify({ errors: errors.map(e => e.message) }));
@@ -161,6 +167,12 @@ if (args.check) {
 
     const compileOpts = assetMap || assetDirs ? { assetMap, assetDirs } : undefined;
     const { directory: result, errors } = await compileDirectory(inputDir, compileOpts);
+
+    if (assetDirs) {
+        const refs = collectAllAssetReferences(result.files, assetDirs);
+        const assetErrors = validateAssetFiles(refs, assetDirs);
+        errors.push(...assetErrors);
+    }
 
     if (errors.length > 0) {
         for (const err of errors) {

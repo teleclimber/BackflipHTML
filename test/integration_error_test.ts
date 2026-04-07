@@ -8,7 +8,7 @@
 
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
 import { compileDirectory } from "../compiler/partials.ts";
-import { BackflipError } from "../compiler/compiler.ts";
+import { BackflipError } from "../compiler/errors.ts";
 
 const ERROR_DIR = new URL("./templates-error", import.meta.url).pathname;
 

@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { interpretBackcode } from './backcode.js';
 import type { Parsed } from './backcode.js';
 import { BackflipError } from './errors.js';
+export { BackflipError };
 import { inferFreeVars, inferDataShape } from './data-shape.js';
 import type { DataShape } from './data-shape.js';
 
@@ -224,17 +225,6 @@ function validateAssetRef(
 	}
 	if (ref.subpath.split('/').some(seg => seg === '..')) {
 		return new BackflipError(`path traversal is not allowed in asset path`, loc);
-	}
-	if (assetDirs) {
-		const dir = assetDirs.get(ref.name);
-		if (dir) {
-			const filePath = path.join(dir, ref.subpath);
-			try {
-				fs.statSync(filePath);
-			} catch {
-				return new BackflipError(`asset file not found: @${ref.name}/${ref.subpath}`, loc);
-			}
-		}
 	}
 	return null;
 }

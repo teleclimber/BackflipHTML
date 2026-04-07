@@ -18,7 +18,7 @@ import {
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { compileDirectory, loadConfig, resolveConfigRoot, resolveAssetDirs, CONFIG_FILENAME, previewPartial, type BackflipError, type CompiledFile, type CompileOptions, type LoadConfigResult } from '@backflip/html';
 import { analyzeCss, discoverCssFiles, type CssAnalysisResult, type PartialSourceInfo } from '@backflip/css';
-import { discoverAssetFileInfos, collectAllAssetReferences, buildAssetUsageReport, filterReport, renderAssetReportHtml } from '@backflip/assets';
+import { discoverAssetFileInfos, collectAllAssetReferences, validateAssetFiles, buildAssetUsageReport, filterReport, renderAssetReportHtml } from '@backflip/assets';
 import { buildIndex, type ProjectIndex } from './index.js';
 import { errorsToDiagnostics } from './diagnostics.js';
 import { findDefinition, findAssetDefinition } from './definition.js';
@@ -140,6 +140,13 @@ async function recompile(): Promise<void> {
 		if (assetDirs) compileOpts.assetDirs = assetDirs;
 		const { directory, errors } = await compileDirectory(templateRoot, compileOpts);
 		compiledFiles = directory.files;
+
+		if (assetDirs) {
+			const refs = collectAllAssetReferences(directory.files, assetDirs);
+			const assetErrors = validateAssetFiles(refs, assetDirs);
+			errors.push(...assetErrors);
+		}
+
 		projectIndex = buildIndex(directory);
 		connection.console.log(`[backflip] recompile: ${directory.files.size} files, ${errors.length} errors, ${projectIndex.partialDefs.size} partials, ${projectIndex.partialRefs.length} refs`);
 

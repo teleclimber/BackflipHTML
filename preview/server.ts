@@ -8,7 +8,7 @@ import { previewPartial } from './preview.js';
 import type { CompiledFile } from '../compiler/compiler.js';
 import { createWatcher, type WatchCallback, type WatchOptions } from '../lib/watch.js';
 import { discoverCssFiles } from '../css/src/discover.js';
-import { discoverAssetFileInfos, collectAllAssetReferences, buildAssetUsageReport, renderAssetReportHtml } from '../assets/src/index.js';
+import { discoverAssetFileInfos, collectAllAssetReferences, validateAssetFiles, buildAssetUsageReport, renderAssetReportHtml } from '../assets/src/index.js';
 
 const MIME_TYPES: Record<string, string> = {
 	'.css': 'text/css', '.js': 'text/javascript',
@@ -49,6 +49,13 @@ export async function buildContext(projectDir: string): Promise<ServerContext> {
 	const { directory, errors } = await compileDirectory(inputDir,
 		assetMap || assetDirsMap ? { assetMap, assetDirs: assetDirsMap } : undefined
 	);
+
+	if (assetDirsMap) {
+		const refs = collectAllAssetReferences(directory.files, assetDirsMap);
+		const assetErrors = validateAssetFiles(refs, assetDirsMap);
+		errors.push(...assetErrors);
+	}
+
 	if (errors.length > 0) {
 		for (const err of errors) console.error(err.message);
 		throw new Error(`Compilation failed with ${errors.length} error(s)`);

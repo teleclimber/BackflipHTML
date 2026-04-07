@@ -1035,16 +1035,6 @@ Deno.test("asset: error on path traversal in subpath", async () => {
 	assertStringIncludes(errors[0].message, 'path traversal');
 });
 
-Deno.test("asset: error when file not found", async () => {
-	const { assetMap, assetDirs } = await makeAssetFixture();
-	const { errors } = await compileFile(
-		'<div b-name="hero"><img src~="@images/nonexistent.jpg" /></div>',
-		undefined, 'test.html', { assetMap, assetDirs }
-	);
-	assertEquals(errors.length, 1);
-	assertStringIncludes(errors[0].message, 'asset file not found');
-});
-
 Deno.test("asset: style~ is an error", async () => {
 	const assetMap = new Map([['images', '/img/']]);
 	const { errors } = await compileFile(
@@ -1102,16 +1092,6 @@ Deno.test("asset: srcset~ validates multiple entries", async () => {
 	const resolvedRoot = resolved.partials.get("hero")!;
 	const allRaw = resolvedRoot.tnodes.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
 	assertStringIncludes(allRaw, 'srcset="/img/photo.jpg 1x, /img/icon.png 2x"');
-});
-
-Deno.test("asset: srcset~ error on missing file in one entry", async () => {
-	const { assetMap, assetDirs } = await makeAssetFixture();
-	const { errors } = await compileFile(
-		'<div b-name="hero"><img srcset~="@images/photo.jpg 1x, @images/missing.png 2x" /></div>',
-		undefined, 'test.html', { assetMap, assetDirs }
-	);
-	assertEquals(errors.length, 1);
-	assertStringIncludes(errors[0].message, 'asset file not found');
 });
 
 Deno.test("asset: no asset map produces error for ~ attribute", async () => {
