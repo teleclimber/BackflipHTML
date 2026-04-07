@@ -29,8 +29,10 @@ export function validateAssetFiles(
 				`asset file not found: @${ref.assetName}/${ref.assetSubpath}`,
 				{
 					filename: ref.sourceFile,
-					line: ref.line,
-					col: ref.column,
+					line: ref.subpathLine ?? ref.line,
+					col: ref.subpathColumn ?? ref.column,
+					endLine: ref.subpathEndLine ?? ref.endLine,
+					endCol: ref.subpathEndColumn ?? ref.endColumn,
 					severity: 'error'
 				}
 			));

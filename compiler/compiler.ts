@@ -202,6 +202,8 @@ function stripAssetSuffix(attrName: string): string {
 export interface AssetRef {
 	name: string;    // the @name part
 	subpath: string; // everything after @name/
+	loc?: SourceLoc; // location of the full @name/subpath
+	subpathLoc?: SourceLoc; // location of the subpath part
 }
 
 function parseAssetRef(value: string): AssetRef | null {
@@ -236,8 +238,41 @@ function replaceAssetRef(value: string, assetMap: Map<string, string>): string {
 	return value;
 }
 
-function parseSrcsetEntries(value: string): string[] {
-	return value.split(',').map(entry => entry.trim().split(/\s+/)[0]).filter(url => url.length > 0);
+function parseSrcsetEntriesWithOffsets(value: string): { url: string, offset: number }[] {
+	const entries: { url: string, offset: number }[] = [];
+	let lastIndex = 0;
+	while (lastIndex < value.length) {
+		const commaIdx = value.indexOf(',', lastIndex);
+		const endIdx = commaIdx === -1 ? value.length : commaIdx;
+		const part = value.substring(lastIndex, endIdx);
+		
+		const match = part.match(/^\s*([^\s]+)/);
+		if (match) {
+			entries.push({ url: match[1], offset: lastIndex + match.index! + (match[0].length - match[1].length) });
+		}
+		
+		if (commaIdx === -1) break;
+		lastIndex = commaIdx + 1;
+	}
+	return entries;
+}
+
+class LineMap {
+	private lineStarts: number[] = [0];
+	constructor(html: string) {
+		for (let i = 0; i < html.length; i++) {
+			if (html[i] === '\n') this.lineStarts.push(i + 1);
+		}
+	}
+	getLoc(offset: number): { line: number, col: number } {
+		let l = 0, r = this.lineStarts.length - 1;
+		while (l <= r) {
+			const m = Math.floor((l + r) / 2);
+			if (this.lineStarts[m] <= offset) l = m + 1;
+			else r = m - 1;
+		}
+		return { line: r + 1, col: offset - this.lineStarts[r] + 1 };
+	}
 }
 
 export interface CompileOptions {
@@ -250,6 +285,7 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 
 	return new Promise((resolve, reject) => {
 
+		const lineMap = new LineMap(html);
 		const errors: BackflipError[] = [];
 
 		const s = new stream.Readable({encoding: 'utf8'});
@@ -350,26 +386,79 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			if (attrName === 'style') {
 				return { refs: [], originalValue: value, error: new BackflipError(`style~ is not supported`, attrErrorLoc(tag, origAttrName, filename)) };
 			}
+			
+			const attrLocation = attrLoc(tag, origAttrName);
+			let valueStartOffset = 0;
+			if (attrLocation) {
+				const attrText = html.substring(attrLocation.startOffset, attrLocation.endOffset);
+				const relativeValueOffset = attrText.indexOf(value);
+				if (relativeValueOffset !== -1) {
+					valueStartOffset = attrLocation.startOffset + relativeValueOffset;
+				} else {
+					valueStartOffset = attrLocation.startOffset; // fallback
+				}
+			}
+
+			function createAssetRef(val: string, localOffset: number): AssetRef | null {
+				if (!val.startsWith('@')) return null;
+				const slashIdx = val.indexOf('/');
+				if (slashIdx === -1) return null;
+				
+				const name = val.slice(1, slashIdx);
+				const subpath = val.slice(slashIdx + 1);
+				
+				const ref: AssetRef = { name, subpath };
+				
+				if (attrLocation && valueStartOffset > 0) {
+					const absStart = valueStartOffset + localOffset;
+					const absEnd = absStart + val.length;
+					const startLoc = lineMap.getLoc(absStart);
+					const endLoc = lineMap.getLoc(absEnd);
+					ref.loc = {
+						startLine: startLoc.line, startCol: startLoc.col, startOffset: absStart,
+						endLine: endLoc.line, endCol: endLoc.col, endOffset: absEnd
+					};
+					
+					const subpathAbsStart = absStart + slashIdx + 1;
+					const subpathStartLoc = lineMap.getLoc(subpathAbsStart);
+					ref.subpathLoc = {
+						startLine: subpathStartLoc.line, startCol: subpathStartLoc.col, startOffset: subpathAbsStart,
+						endLine: endLoc.line, endCol: endLoc.col, endOffset: absEnd
+					};
+				}
+				return ref;
+			}
+
+			function getErrLoc(refLoc: SourceLoc | undefined): { filename?: string, line?: number, col?: number, endLine?: number, endCol?: number } | undefined {
+				if (refLoc) {
+					return { filename, line: refLoc.startLine, col: refLoc.startCol, endLine: refLoc.endLine, endCol: refLoc.endCol };
+				}
+				return attrErrorLoc(tag, origAttrName, filename);
+			}
+
 			if (attrName === 'srcset') {
-				const entries = parseSrcsetEntries(value);
+				const entries = parseSrcsetEntriesWithOffsets(value);
 				const refs: AssetRef[] = [];
-				for (const url of entries) {
-					const ref = parseAssetRef(url);
+				for (const { url, offset } of entries) {
+					const ref = createAssetRef(url, offset);
 					if (!ref) {
 						return { refs: [], originalValue: value, error: new BackflipError(`asset path must start with @name: "${url}"`, attrErrorLoc(tag, origAttrName, filename)) };
 					}
-					const err = validateAssetRef(ref, assetMap, assetDirs, attrErrorLoc(tag, origAttrName, filename));
+					const errLoc = getErrLoc(ref.loc);
+					const err = validateAssetRef(ref, assetMap, assetDirs, errLoc);
 					if (err) return { refs: [], originalValue: value, error: err };
 					refs.push(ref);
 				}
 				return { refs, originalValue: value };
 			}
+			
 			// Single URL attribute
-			const ref = parseAssetRef(value);
+			const ref = createAssetRef(value, 0);
 			if (!ref) {
 				return { refs: [], originalValue: value, error: new BackflipError(`asset path must start with @name`, attrErrorLoc(tag, origAttrName, filename)) };
 			}
-			const err = validateAssetRef(ref, assetMap, assetDirs, attrErrorLoc(tag, origAttrName, filename));
+			const errLoc = getErrLoc(ref.loc);
+			const err = validateAssetRef(ref, assetMap, assetDirs, errLoc);
 			if (err) return { refs: [], originalValue: value, error: err };
 			return { refs: [ref], originalValue: value };
 		}

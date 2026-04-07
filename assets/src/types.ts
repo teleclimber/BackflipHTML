@@ -27,10 +27,24 @@ export interface AssetReference {
 	sourceFile: string;
 	/** Partial that contains the reference (for templates only). */
 	partialName?: string;
-	/** 1-based line number. */
+	/** 1-based start line number of the full reference. */
 	line: number;
-	/** 1-based column number. */
+	/** 1-based start column number of the full reference. */
 	column: number;
+	/** 1-based end line number of the full reference. */
+	endLine?: number;
+	/** 1-based end column number of the full reference. */
+	endColumn?: number;
+	
+	/** 1-based start line number of the subpath. */
+	subpathLine?: number;
+	/** 1-based start column number of the subpath. */
+	subpathColumn?: number;
+	/** 1-based end line number of the subpath. */
+	subpathEndLine?: number;
+	/** 1-based end column number of the subpath. */
+	subpathEndColumn?: number;
+
 	/** The @name part of the asset reference. */
 	assetName: string;
 	/** The subpath part of the asset reference. */

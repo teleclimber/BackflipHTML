@@ -73,8 +73,14 @@ function collectFromAssetRef(
 		out.push({
 			sourceFile,
 			partialName,
-			line: node.loc?.startLine ?? 0,
-			column: node.loc?.startCol ?? 0,
+			line: ref.loc?.startLine ?? node.loc?.startLine ?? 0,
+			column: ref.loc?.startCol ?? node.loc?.startCol ?? 0,
+			endLine: ref.loc?.endLine,
+			endColumn: ref.loc?.endCol,
+			subpathLine: ref.subpathLoc?.startLine,
+			subpathColumn: ref.subpathLoc?.startCol,
+			subpathEndLine: ref.subpathLoc?.endLine,
+			subpathEndColumn: ref.subpathLoc?.endCol,
 			assetName: ref.name,
 			assetSubpath: ref.subpath,
 		});
@@ -93,8 +99,14 @@ function collectFromAttrBind(
 				out.push({
 					sourceFile,
 					partialName,
-					line: part.loc?.startLine ?? 0,
-					column: part.loc?.startCol ?? 0,
+					line: ref.loc?.startLine ?? part.loc?.startLine ?? 0,
+					column: ref.loc?.startCol ?? part.loc?.startCol ?? 0,
+					endLine: ref.loc?.endLine,
+					endColumn: ref.loc?.endCol,
+					subpathLine: ref.subpathLoc?.startLine,
+					subpathColumn: ref.subpathLoc?.startCol,
+					subpathEndLine: ref.subpathLoc?.endLine,
+					subpathEndColumn: ref.subpathLoc?.endCol,
 					assetName: ref.name,
 					assetSubpath: ref.subpath,
 				});
