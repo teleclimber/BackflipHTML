@@ -1,6 +1,6 @@
 import { assertEquals } from "jsr:@std/assert";
 import { compileFile } from './compiler.ts';
-import type { DataShape } from './data-shape.ts';
+import { inferDataShape, inferFreeVars, type DataShape } from './data-shape.ts';
 
 Deno.test("compileFile sets freeVars on compiled partial", async () => {
 	const html = `
@@ -10,7 +10,7 @@ Deno.test("compileFile sets freeVars on compiled partial", async () => {
 </div>`;
 	const { compiled } = await compileFile(html);
 	const root = compiled.partials.get('card')!;
-	assertEquals(root.freeVars, ['description', 'title']);
+	assertEquals(inferFreeVars(root), ['description', 'title']);
 });
 
 Deno.test("compileFile excludes b-for loop variable", async () => {
@@ -20,7 +20,7 @@ Deno.test("compileFile excludes b-for loop variable", async () => {
 </ul>`;
 	const { compiled } = await compileFile(html);
 	const root = compiled.partials.get('list')!;
-	assertEquals(root.freeVars, ['items']);
+	assertEquals(inferFreeVars(root), ['items']);
 });
 
 Deno.test("compileFile sets exported to true when b-export is present", async () => {
@@ -52,14 +52,14 @@ Deno.test("compileFile collects vars from b-if, b-bind, and nested b-for", async
 </div>`;
 	const { compiled } = await compileFile(html);
 	const root = compiled.partials.get('complex')!;
-	assertEquals(root.freeVars, ['globalSuffix', 'headerClass', 'heading', 'items', 'showHeader']);
+	assertEquals(inferFreeVars(root), ['globalSuffix', 'headerClass', 'heading', 'items', 'showHeader']);
 });
 
 Deno.test("compileFile returns empty freeVars for partial with no expressions", async () => {
 	const html = `<div b-name="static"><p>Hello world</p></div>`;
 	const { compiled } = await compileFile(html);
 	const root = compiled.partials.get('static')!;
-	assertEquals(root.freeVars, []);
+	assertEquals(inferFreeVars(root), []);
 });
 
 // --- dataShape integration tests ---
@@ -72,17 +72,17 @@ Deno.test("compileFile sets dataShape on compiled partial", async () => {
 </div>`;
 	const { compiled } = await compileFile(html);
 	const root = compiled.partials.get('card')!;
-	assertEquals(root.dataShape instanceof Map, true);
-	assertEquals(root.dataShape!.size, 2);
-	assertEquals(root.dataShape!.get('title')!.usages.has('printed'), true);
-	assertEquals(root.dataShape!.get('description')!.usages.has('printed'), true);
+	assertEquals(inferDataShape(root) instanceof Map, true);
+	assertEquals(inferDataShape(root).size, 2);
+	assertEquals(inferDataShape(root).get('title')!.usages.has('printed'), true);
+	assertEquals(inferDataShape(root).get('description')!.usages.has('printed'), true);
 });
 
 Deno.test("compileFile dataShape tracks property access", async () => {
 	const html = `<p b-name="profile">{{ user.name }} ({{ user.email }})</p>`;
 	const { compiled } = await compileFile(html);
 	const root = compiled.partials.get('profile')!;
-	const userShape = root.dataShape!.get('user')!;
+	const userShape = inferDataShape(root).get('user')!;
 	assertEquals(userShape.properties!.size, 2);
 	assertEquals(userShape.properties!.get('name')!.usages.has('printed'), true);
 	assertEquals(userShape.properties!.get('email')!.usages.has('printed'), true);
@@ -95,7 +95,7 @@ Deno.test("compileFile dataShape tracks iterable with elementShape", async () =>
 </ul>`;
 	const { compiled } = await compileFile(html);
 	const root = compiled.partials.get('list')!;
-	const itemsShape = root.dataShape!.get('items')!;
+	const itemsShape = inferDataShape(root).get('items')!;
 	assertEquals(itemsShape.usages.has('iterable'), true);
 	assertEquals(itemsShape.elementShape!.properties!.get('label')!.usages.has('printed'), true);
 });
@@ -107,17 +107,17 @@ Deno.test("compileFile dataShape tracks boolean from b-if", async () => {
 </div>`;
 	const { compiled } = await compileFile(html);
 	const root = compiled.partials.get('toggle')!;
-	assertEquals(root.dataShape!.get('visible')!.usages.has('boolean'), true);
+	assertEquals(inferDataShape(root).get('visible')!.usages.has('boolean'), true);
 });
 
 Deno.test("compileFile dataShape tracks attribute usage", async () => {
 	const html = `<a b-name="link" :href="url" :class="cls">Click</a>`;
 	const { compiled } = await compileFile(html);
 	const root = compiled.partials.get('link')!;
-	const urlShape = root.dataShape!.get('url')!;
+	const urlShape = inferDataShape(root).get('url')!;
 	assertEquals(urlShape.usages.has('attribute'), true);
 	assertEquals(urlShape.attributes!.has('href'), true);
-	const clsShape = root.dataShape!.get('cls')!;
+	const clsShape = inferDataShape(root).get('cls')!;
 	assertEquals(clsShape.attributes!.has('class'), true);
 });
 
@@ -125,5 +125,5 @@ Deno.test("compileFile dataShape returns empty map for static partial", async ()
 	const html = `<div b-name="static"><p>Hello</p></div>`;
 	const { compiled } = await compileFile(html);
 	const root = compiled.partials.get('static')!;
-	assertEquals(root.dataShape!.size, 0);
+	assertEquals(inferDataShape(root).size, 0);
 });

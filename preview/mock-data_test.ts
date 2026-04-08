@@ -2,6 +2,7 @@ import { assertEquals, assertNotEquals } from "jsr:@std/assert";
 import { generateMockData, type PartialLookup } from './mock-data.ts';
 import type { DataShape } from '../compiler/data-shape.ts';
 import type { RootTNode, CompiledFile } from '../compiler/compiler.ts';
+import { compileFile } from '../compiler/compiler.ts';
 
 function shape(usages: string[], extra?: Partial<DataShape>): DataShape {
 	return { usages: new Set(usages as any[]), ...extra };
@@ -136,23 +137,10 @@ Deno.test("deeply nested properties", () => {
 
 // --- Passed values with partial lookup ---
 
-Deno.test("passed variable resolves shape from called partial", () => {
+Deno.test("passed variable resolves shape from called partial", async () => {
 	// Called partial 'card' expects 'user' with properties name and active
-	const cardRoot: RootTNode = {
-		type: 'root',
-		tnodes: [],
-		dataShape: new Map([
-			['user', shape([], {
-				properties: new Map([
-					['name', shape(['printed'])],
-					['active', shape(['boolean'])],
-				]),
-			})],
-		]),
-	};
-	const compiledFile: CompiledFile = {
-		partials: new Map([['card', cardRoot]]),
-	};
+	const html = `<div b-name="card">{{ user.name }}<div b-if="user.active"></div></div>`;
+	const { compiled: compiledFile } = await compileFile(html);
 	const lookup: PartialLookup = { compiledFile };
 
 	// Caller passes currentUser to card as 'user'
@@ -168,21 +156,9 @@ Deno.test("passed variable resolves shape from called partial", () => {
 	assertEquals(user.active, true);
 });
 
-Deno.test("passed variable merges caller properties with called partial shape", () => {
-	const cardRoot: RootTNode = {
-		type: 'root',
-		tnodes: [],
-		dataShape: new Map([
-			['user', shape([], {
-				properties: new Map([
-					['name', shape(['printed'])],
-				]),
-			})],
-		]),
-	};
-	const compiledFile: CompiledFile = {
-		partials: new Map([['card', cardRoot]]),
-	};
+Deno.test("passed variable merges caller properties with called partial shape", async () => {
+	const html = `<div b-name="card">{{ user.name }}</div>`;
+	const { compiled: compiledFile } = await compileFile(html);
 	const lookup: PartialLookup = { compiledFile };
 
 	// Caller also accesses currentUser.id directly
@@ -201,22 +177,12 @@ Deno.test("passed variable merges caller properties with called partial shape", 
 	assertEquals(user.name, 'name');   // from called partial's shape
 });
 
-Deno.test("passed to multiple partials merges shapes", () => {
-	const cardRoot: RootTNode = {
-		type: 'root', tnodes: [],
-		dataShape: new Map([['data', shape([], {
-			properties: new Map([['title', shape(['printed'])]]),
-		})]]),
-	};
-	const badgeRoot: RootTNode = {
-		type: 'root', tnodes: [],
-		dataShape: new Map([['data', shape([], {
-			properties: new Map([['color', shape(['attribute'], { attributes: new Set(['class']) })]]),
-		})]]),
-	};
-	const compiledFile: CompiledFile = {
-		partials: new Map([['card', cardRoot], ['badge', badgeRoot]]),
-	};
+Deno.test("passed to multiple partials merges shapes", async () => {
+	const html = `
+	  <div b-name="card">{{ data.title }}</div>
+	  <div b-name="badge" :class="data.color"></div>
+	`;
+	const { compiled: compiledFile } = await compileFile(html);
 	const lookup: PartialLookup = { compiledFile };
 
 	const callerShapes = new Map([
@@ -244,16 +210,9 @@ Deno.test("passed without lookup falls back to name string", () => {
 	assertEquals(result.val, 'val');
 });
 
-Deno.test("cross-file partial lookup resolves from allFiles", () => {
-	const cardRoot: RootTNode = {
-		type: 'root', tnodes: [],
-		dataShape: new Map([['user', shape([], {
-			properties: new Map([['name', shape(['printed'])]]),
-		})]]),
-	};
-	const otherFile: CompiledFile = {
-		partials: new Map([['card', cardRoot]]),
-	};
+Deno.test("cross-file partial lookup resolves from allFiles", async () => {
+	const html = `<div b-name="card">{{ user.name }}</div>`;
+	const { compiled: otherFile } = await compileFile(html);
 	const mainFile: CompiledFile = { partials: new Map() };
 
 	const lookup: PartialLookup = {

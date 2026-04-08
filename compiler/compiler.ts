@@ -7,8 +7,6 @@ import { interpretBackcode } from './backcode.js';
 import type { Parsed } from './backcode.js';
 import { BackflipError } from './errors.js';
 export { BackflipError };
-import { inferFreeVars, inferDataShape } from './data-shape.js';
-import type { DataShape } from './data-shape.js';
 
 export interface SourceLoc {
 	startLine: number;    // 1-based
@@ -35,8 +33,6 @@ export interface RootTNode {
 	tnodes: TNode[],
 	loc?: SourceLoc,
 	exported?: boolean,
-	freeVars?: string[],
-	dataShape?: Map<string, DataShape>,
 	meta?: PartialMeta
 }
 export interface RawTNode extends ChildTNode {
@@ -1093,12 +1089,6 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 		s.on('error', (err) => { reject(err); });
 		rewriteStream.on('error', (err) => { reject(err); });
 		rewriteStream.on('end', () => {
-			// Post-processing: infer data shapes and free variables for each partial
-			for (const [, root] of compiledFile.partials) {
-				const shape = inferDataShape(root);
-				root.dataShape = shape;
-				root.freeVars = [...shape.keys()].sort();
-			}
 			resolve({ compiled: compiledFile, errors });
 		});
 	});
@@ -1199,8 +1189,6 @@ export function resolveAssetRefs(compiled: CompiledFile, assetMap: Map<string, s
 			tnodes: [],
 			...(root.loc ? { loc: root.loc } : {}),
 			...(root.exported !== undefined ? { exported: root.exported } : {}),
-			...(root.freeVars ? { freeVars: root.freeVars } : {}),
-			...(root.dataShape ? { dataShape: root.dataShape } : {}),
 			...(root.meta ? { meta: root.meta } : {}),
 		};
 		newRoot.tnodes = resolveTNodes(root.tnodes, newRoot, assetMap);

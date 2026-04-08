@@ -7,8 +7,8 @@ function makeLoc(startLine: number, startCol: number, endLine: number, endCol: n
 	return { startLine, startCol, startOffset: 0, endLine, endCol, endOffset: 0 };
 }
 
-function makeRoot(tnodes: any[], loc?: SourceLoc, opts?: { exported?: boolean, freeVars?: string[] }): RootTNode {
-	return { tnodes, loc, exported: opts?.exported, freeVars: opts?.freeVars } as RootTNode;
+function makeRoot(tnodes: any[], loc?: SourceLoc, opts?: { exported?: boolean }): RootTNode {
+	return { tnodes, loc, exported: opts?.exported } as RootTNode;
 }
 
 function makeSlot(name?: string): SlotTNode {
@@ -94,11 +94,11 @@ describe('buildIndex', () => {
 		strictEqual(index.partialDefs.get('card')!.length, 1);
 	});
 
-	it('reads exported and freeVars from RootTNode', () => {
+	it('reads exported and computes freeVars from RootTNode', () => {
 		const dir: CompiledDirectory = {
 			files: new Map([
 				['page.html', { partials: new Map([
-					['card', makeRoot([], makeLoc(1, 1, 1, 20), { exported: true, freeVars: ['title', 'items'] })],
+					['card', makeRoot([], makeLoc(1, 1, 1, 20), { exported: true })],
 				]) }],
 			]),
 		};
@@ -106,7 +106,7 @@ describe('buildIndex', () => {
 		const index = buildIndex(dir);
 		const def = index.partialDefs.get('card')![0];
 		strictEqual(def.exported, true);
-		deepStrictEqual(def.freeVars, ['title', 'items']);
+		deepStrictEqual(def.freeVars, []);
 	});
 
 	it('defaults exported to false and freeVars to empty', () => {

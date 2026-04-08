@@ -1,4 +1,4 @@
-import { collectSlots } from '@backflip/html';
+import { collectSlots, inferDataShape, inferFreeVars } from '@backflip/html';
 import type { CompiledDirectory, CompiledFile, RootTNode, TNode, PartialRefTNode, ForTNode, IfTNode, SlotTNode, SourceLoc, DataShape } from '@backflip/html';
 
 export interface PartialDef {
@@ -38,8 +38,8 @@ export function buildIndex(directory: CompiledDirectory): ProjectIndex {
 				loc: root.loc,
 				exported: root.exported ?? false,
 				slots,
-				freeVars: root.freeVars ?? [],
-				dataShape: root.dataShape,
+				freeVars: inferFreeVars(root),
+				dataShape: inferDataShape(root),
 			};
 			const existing = partialDefs.get(name);
 			if (existing) {

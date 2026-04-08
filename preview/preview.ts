@@ -8,6 +8,7 @@ import type { RootRNode } from '../runtime/js/render.js';
 import { generateMockData } from './mock-data.js';
 import { generateSlotPlaceholders } from './slot-placeholders.js';
 import { wrapInChrome } from './preview-chrome.js';
+import { inferDataShape } from '../compiler/data-shape.js';
 
 export interface PreviewOptions {
 	partialName: string;
@@ -42,7 +43,7 @@ export async function previewPartial(options: PreviewOptions): Promise<PreviewRe
 	}
 
 	// 2. Generate mock data from DataShape
-	const shapes = root.dataShape ?? new Map();
+	const shapes = inferDataShape(root);
 	const lookup = { compiledFile, allFiles, fileName };
 	const mockData = generateMockData(shapes, lookup, dataOverrides);
 

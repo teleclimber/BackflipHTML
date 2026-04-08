@@ -6,7 +6,7 @@
     "unstable": ["sloppy-imports"],
     "exclude": ["lsp/", "css/", "dist/", "vscode-backflip/"],
     "tasks": {
-        "test": "deno test --allow-read --allow-write --allow-run=php,deno"
+        "test": "deno test --allow-read --allow-write --allow-env --allow-run=php,deno"
     },
     "imports": {
         "acorn": "npm:acorn",

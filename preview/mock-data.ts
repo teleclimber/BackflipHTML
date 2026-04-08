@@ -1,4 +1,5 @@
 import type { DataShape } from '../compiler/data-shape.js';
+import { inferDataShape } from '../compiler/data-shape.js';
 import type { CompiledFile } from '../compiler/compiler.js';
 
 export interface PartialLookup {
@@ -165,9 +166,9 @@ function resolvePassedShape(
 		visited?.add(key);
 
 		const calledRoot = findPartial(partial, lookup);
-		if (!calledRoot?.dataShape) continue;
+		if (!calledRoot) continue;
 
-		const calledShape = calledRoot.dataShape.get(as);
+		const calledShape = inferDataShape(calledRoot).get(as);
 		if (!calledShape) continue;
 
 		if (!merged) {
