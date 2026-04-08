@@ -47,6 +47,10 @@ Streaming HTML renderers in JS and PHP that execute compiled templates with a da
 
 ## Developer Tooling Subprojects
 
+### [`assets/`](assets/README.md)
+
+Handles the discovery, tracking, and reporting of static assets referenced in BackflipHTML templates and CSS.
+
 ### [`css/`](css/README.md)
 
 Matches CSS selectors to template elements, accounting for partials, conditionals, and dynamic attributes. Used by the LSP.
