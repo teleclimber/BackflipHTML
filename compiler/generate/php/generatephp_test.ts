@@ -42,6 +42,21 @@ Deno.test("unary expressions PHP", () => {
 	});
 });
 
+Deno.test("ternary expressions PHP", () => {
+	const cases: [string, string][] = [
+		["a ? b : c",                            "($a ? $b : $c)"],
+		["a ? b : c ? d : e",                    "($a ? $b : ($c ? $d : $e))"],
+		["user.admin ? user.name : 'guest'",     "($user['admin'] ? $user['name'] : 'guest')"],
+		["!(a ? b : c)",                         "!($a ? $b : $c)"],
+	];
+	cases.forEach(([input, expected]) => {
+		const result = interpretBackcode(input);
+		assertEquals(result.errs, []);
+		const generated = generatePhpStatement(result.expr!);
+		assertEquals(generated, expected);
+	});
+});
+
 Deno.test("generatePhpFunction", () => {
 	assertEquals(
 		generatePhpFunction('', interpretBackcode('user.name')),

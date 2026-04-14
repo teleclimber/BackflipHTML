@@ -153,6 +153,7 @@ Expressions in directives and `{{ }}` interpolations are handled by `backcode.ts
 | Member access | `user.name` |
 | Computed member access | `items[0]` |
 | Unary operators | `!hidden`, `-offset`, `+value` |
+| Ternary | `admin ? name : "guest"` |
 
 **Not allowed:** function calls, binary operators, object/array literals, assignment, or any other construct not listed above.
 

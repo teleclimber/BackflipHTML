@@ -519,6 +519,63 @@ Deno.test("unary: +value coerces string to number", () => {
 });
 
 // ---------------------------------------------------------------------------
+// ternary.html — conditional (ternary) operator
+// ---------------------------------------------------------------------------
+
+Deno.test("ternary: print true branch", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("ternary.html").print_ternary, { flag: true })),
+        "<span>on</span>"
+    );
+});
+
+Deno.test("ternary: print false branch", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("ternary.html").print_ternary, { flag: false })),
+        "<span>off</span>"
+    );
+});
+
+Deno.test("ternary: member access in test and consequent", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("ternary.html").member_ternary, { user: { admin: true, name: "Ada" } })),
+        "<span>Ada</span>"
+    );
+    assertEquals(
+        normalize(renderRoot(getModule("ternary.html").member_ternary, { user: { admin: false, name: "Ada" } })),
+        "<span>guest</span>"
+    );
+});
+
+Deno.test("ternary: in attribute binding picks consequent", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("ternary.html").attr_ternary, { isExternal: true, extUrl: "https://x", intUrl: "/y" })),
+        '<a href="https://x">link</a>'
+    );
+});
+
+Deno.test("ternary: in attribute binding picks alternate", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("ternary.html").attr_ternary, { isExternal: false, extUrl: "https://x", intUrl: "/y" })),
+        '<a href="/y">link</a>'
+    );
+});
+
+Deno.test("ternary: nested ternary picks middle branch", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("ternary.html").nested_ternary, { a: false, b: true })),
+        "<span>B</span>"
+    );
+});
+
+Deno.test("ternary: nested ternary picks last branch", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("ternary.html").nested_ternary, { a: false, b: false })),
+        "<span>C</span>"
+    );
+});
+
+// ---------------------------------------------------------------------------
 // Asset integration tests
 // ---------------------------------------------------------------------------
 

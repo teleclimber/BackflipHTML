@@ -24,6 +24,8 @@ function generatePhpNode(node: acorn.AnyNode, computed: boolean): string {
 			return generatePhpMemberExpression(node);
 		case 'UnaryExpression':
 			return node.operator + generatePhpNode(node.argument, true);
+		case 'ConditionalExpression':
+			return '(' + generatePhpNode(node.test, true) + ' ? ' + generatePhpNode(node.consequent, true) + ' : ' + generatePhpNode(node.alternate, true) + ')';
 		default:
 			throw new Error(`invalid node: ${node.type}`);
 	}

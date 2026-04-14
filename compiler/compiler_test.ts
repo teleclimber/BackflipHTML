@@ -1168,3 +1168,15 @@ Deno.test("asset: resolveAssetRefs does not mutate original", async () => {
 	const assetRefsAfter = root.tnodes.filter(n => n.type === 'asset-ref').length;
 	assertEquals(assetRefsAfter, 1);
 });
+
+Deno.test("interpretBackcode: ternary expression", () => {
+	const result = interpretBackcode('a ? b : c');
+	assertEquals(result.errs, []);
+	assertEquals(result.vars, ['a', 'b', 'c']);
+});
+
+Deno.test("interpretBackcode: ternary with member access", () => {
+	const result = interpretBackcode('a ? b.c : d[e]');
+	assertEquals(result.errs, []);
+	assertEquals(result.vars, ['a', 'b', 'd', 'e']);
+});

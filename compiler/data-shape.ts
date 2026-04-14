@@ -140,6 +140,13 @@ function collectFromExpr(
 			}
 			break;
 		}
+		case 'ConditionalExpression': {
+			const cond = node as acorn.ConditionalExpression;
+			collectFromExpr(cond.test, 'boolean', undefined, scoped, shapes, undefined);
+			collectFromExpr(cond.consequent, context, attrName, scoped, shapes, passedInfo);
+			collectFromExpr(cond.alternate, context, attrName, scoped, shapes, passedInfo);
+			break;
+		}
 	}
 }
 

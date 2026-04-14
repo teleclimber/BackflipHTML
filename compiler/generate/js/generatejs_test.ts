@@ -37,3 +37,18 @@ Deno.test( "unary expressions JS", () => {
 		assertEquals(s, generated);
 	})
 });
+
+Deno.test("ternary expressions JS", () => {
+	const cases: [string, string][] = [
+		["a ? b : c", "(a ? b : c)"],
+		["a ? b : c ? d : e", "(a ? b : (c ? d : e))"],
+		['user.admin ? user.name : "guest"', '(user.admin ? user.name : "guest")'],
+		["!(a ? b : c)", "!(a ? b : c)"],
+	];
+	cases.forEach(([input, expected]) => {
+		const result = interpretBackcode(input);
+		assertEquals(result.errs, []);
+		const generated = generateStatement(result.expr!);
+		assertEquals(generated, expected);
+	});
+});

@@ -292,6 +292,26 @@ Deno.test("inferDataShape: boolean usage from ! operator", () => {
 	assertUsages(s, ['boolean']);
 });
 
+Deno.test("inferDataShape: ternary test is boolean, branches inherit context", () => {
+	const root = makeRoot([makePrintReal('show ? a : b')]);
+	const shapes = inferDataShape(root);
+	assertUsages(shapes.get('show')!, ['boolean']);
+	assertUsages(shapes.get('a')!, ['printed']);
+	assertUsages(shapes.get('b')!, ['printed']);
+});
+
+Deno.test("inferDataShape: ternary in attribute records attribute name on branches", () => {
+	const root = makeRoot([makeAttrBindReal([{ name: 'href', code: 'isExternal ? extUrl : intUrl' }])]);
+	const shapes = inferDataShape(root);
+	assertUsages(shapes.get('isExternal')!, ['boolean']);
+	const ext = shapes.get('extUrl')!;
+	assertUsages(ext, ['attribute']);
+	assertEquals([...ext.attributes!], ['href']);
+	const int = shapes.get('intUrl')!;
+	assertUsages(int, ['attribute']);
+	assertEquals([...int.attributes!], ['href']);
+});
+
 Deno.test("inferDataShape: iterable usage from b-for", () => {
 	const root = makeRoot([makeForReal('item', 'items', [])]);
 	const shapes = inferDataShape(root);

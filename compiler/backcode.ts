@@ -14,6 +14,8 @@ import * as acorn from 'acorn';
 // - MemberExpression
 // - Identifier
 // - Literal
+// - UnaryExpression
+// - ConditionalExpression (ternary)
 
 export type Parsed = {
 	expr: acorn.ExpressionStatement | undefined,
@@ -52,7 +54,15 @@ export function interpretBackcode(code :string) :Parsed {
 		return ret;	// can't continue.
 	}
 	if( expr ) ret.expr = expr;
-	interpretNode(expr.expression, true, ret.errs, ret.vars)
+	const collected :string[] = [];
+	interpretNode(expr.expression, true, ret.errs, collected)
+	const seen = new Set<string>();
+	for (const v of collected) {
+		if (!seen.has(v)) {
+			seen.add(v);
+			ret.vars.push(v);
+		}
+	}
 	return ret;
 }
 
@@ -79,6 +89,9 @@ function interpretNode(node:acorn.AnyNode, computed: boolean, errs: string[], va
 		case 'UnaryExpression':
 			interpretUnaryExpression(node, computed, errs, vars);
 			break;
+		case 'ConditionalExpression':
+			interpretConditionalExpression(node, errs, vars);
+			break;
 		default:
 			errs.push(`invalid node: ${node.type}`);
 			break;
@@ -97,4 +110,10 @@ function interpretMemberExpression(node:acorn.MemberExpression, computed:boolean
 	// object and property..
 	interpretNode(node.object, computed, errs, vars);
 	interpretNode(node.property, node.computed, errs, vars);
+}
+
+function interpretConditionalExpression(node:acorn.ConditionalExpression, errs: string[], vars: string[]) {
+	interpretNode(node.test, true, errs, vars);
+	interpretNode(node.consequent, true, errs, vars);
+	interpretNode(node.alternate, true, errs, vars);
 }

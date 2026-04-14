@@ -1,0 +1,15 @@
+<b-unwrap b-name="print-ternary">
+    <span>{{ flag ? "on" : "off" }}</span>
+</b-unwrap>
+
+<b-unwrap b-name="member-ternary">
+    <span>{{ user.admin ? user.name : "guest" }}</span>
+</b-unwrap>
+
+<b-unwrap b-name="attr-ternary">
+    <a :href='isExternal ? extUrl : intUrl'>link</a>
+</b-unwrap>
+
+<b-unwrap b-name="nested-ternary">
+    <span>{{ a ? "A" : b ? "B" : "C" }}</span>
+</b-unwrap>

@@ -361,3 +361,60 @@ Deno.test("php: unary: +value coerces string to number", async () => {
         "<span>42</span>"
     );
 });
+
+// ---------------------------------------------------------------------------
+// ternary.html — conditional (ternary) operator
+// ---------------------------------------------------------------------------
+
+Deno.test("php: ternary: print true branch", async () => {
+    assertEquals(
+        normalize(await renderPhp("ternary.html", "print_ternary", { flag: true })),
+        "<span>on</span>"
+    );
+});
+
+Deno.test("php: ternary: print false branch", async () => {
+    assertEquals(
+        normalize(await renderPhp("ternary.html", "print_ternary", { flag: false })),
+        "<span>off</span>"
+    );
+});
+
+Deno.test("php: ternary: member access in test and consequent", async () => {
+    assertEquals(
+        normalize(await renderPhp("ternary.html", "member_ternary", { user: { admin: true, name: "Ada" } })),
+        "<span>Ada</span>"
+    );
+    assertEquals(
+        normalize(await renderPhp("ternary.html", "member_ternary", { user: { admin: false, name: "Ada" } })),
+        "<span>guest</span>"
+    );
+});
+
+Deno.test("php: ternary: in attribute binding picks consequent", async () => {
+    assertEquals(
+        normalize(await renderPhp("ternary.html", "attr_ternary", { isExternal: true, extUrl: "https://x", intUrl: "/y" })),
+        '<a href="https://x">link</a>'
+    );
+});
+
+Deno.test("php: ternary: in attribute binding picks alternate", async () => {
+    assertEquals(
+        normalize(await renderPhp("ternary.html", "attr_ternary", { isExternal: false, extUrl: "https://x", intUrl: "/y" })),
+        '<a href="/y">link</a>'
+    );
+});
+
+Deno.test("php: ternary: nested ternary picks middle branch", async () => {
+    assertEquals(
+        normalize(await renderPhp("ternary.html", "nested_ternary", { a: false, b: true })),
+        "<span>B</span>"
+    );
+});
+
+Deno.test("php: ternary: nested ternary picks last branch", async () => {
+    assertEquals(
+        normalize(await renderPhp("ternary.html", "nested_ternary", { a: false, b: false })),
+        "<span>C</span>"
+    );
+});

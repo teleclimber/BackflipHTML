@@ -18,6 +18,8 @@ function generateNode(node:acorn.AnyNode) :string {
 			return generateMemberExpression(node);
 		case 'UnaryExpression':
 			return node.operator + generateNode(node.argument);
+		case 'ConditionalExpression':
+			return '(' + generateNode(node.test) + ' ? ' + generateNode(node.consequent) + ' : ' + generateNode(node.alternate) + ')';
 		default:
 			throw new Error(`invalid node: ${node.type}`);
 	}
