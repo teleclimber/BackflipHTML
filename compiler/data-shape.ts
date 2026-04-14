@@ -147,6 +147,12 @@ function collectFromExpr(
 			collectFromExpr(cond.alternate, context, attrName, scoped, shapes, passedInfo);
 			break;
 		}
+		case 'BinaryExpression': {
+			const bin = node as acorn.BinaryExpression;
+			collectFromExpr(bin.left as acorn.AnyNode, context, attrName, scoped, shapes, undefined);
+			collectFromExpr(bin.right, context, attrName, scoped, shapes, undefined);
+			break;
+		}
 	}
 }
 

@@ -20,6 +20,8 @@ function generateNode(node:acorn.AnyNode) :string {
 			return node.operator + generateNode(node.argument);
 		case 'ConditionalExpression':
 			return '(' + generateNode(node.test) + ' ? ' + generateNode(node.consequent) + ' : ' + generateNode(node.alternate) + ')';
+		case 'BinaryExpression':
+			return '(' + generateNode(node.left) + ' ' + node.operator + ' ' + generateNode(node.right) + ')';
 		default:
 			throw new Error(`invalid node: ${node.type}`);
 	}

@@ -92,10 +92,22 @@ function interpretNode(node:acorn.AnyNode, computed: boolean, errs: string[], va
 		case 'ConditionalExpression':
 			interpretConditionalExpression(node, errs, vars);
 			break;
+		case 'BinaryExpression':
+			interpretBinaryExpression(node, errs, vars);
+			break;
 		default:
 			errs.push(`invalid node: ${node.type}`);
 			break;
 	}
+}
+
+function interpretBinaryExpression(node:acorn.BinaryExpression, errs: string[], vars: string[]) {
+	if (node.operator !== '==' && node.operator !== '!=') {
+		errs.push(`unsupported binary operator: ${node.operator}`);
+		return;
+	}
+	interpretNode(node.left, true, errs, vars);
+	interpretNode(node.right, true, errs, vars);
 }
 
 function interpretUnaryExpression(node:acorn.UnaryExpression, computed:boolean, errs: string[], vars: string[]) {

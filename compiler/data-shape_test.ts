@@ -300,6 +300,32 @@ Deno.test("inferDataShape: ternary test is boolean, branches inherit context", (
 	assertUsages(shapes.get('b')!, ['printed']);
 });
 
+Deno.test("inferDataShape: equality in b-if records both operands as boolean", () => {
+	const root = makeRoot([makeIfReal([
+		{ conditionCode: 'a == b', children: [] },
+	])]);
+	const shapes = inferDataShape(root);
+	assertUsages(shapes.get('a')!, ['boolean']);
+	assertUsages(shapes.get('b')!, ['boolean']);
+});
+
+Deno.test("inferDataShape: equality in print records both operands as printed", () => {
+	const root = makeRoot([makePrintReal('a != b')]);
+	const shapes = inferDataShape(root);
+	assertUsages(shapes.get('a')!, ['printed']);
+	assertUsages(shapes.get('b')!, ['printed']);
+});
+
+Deno.test("inferDataShape: equality with member access builds property shapes", () => {
+	const root = makeRoot([makeIfReal([
+		{ conditionCode: 'user.role == "admin"', children: [] },
+	])]);
+	const shapes = inferDataShape(root);
+	const user = shapes.get('user')!;
+	const role = user.properties!.get('role')!;
+	assertUsages(role, ['boolean']);
+});
+
 Deno.test("inferDataShape: ternary in attribute records attribute name on branches", () => {
 	const root = makeRoot([makeAttrBindReal([{ name: 'href', code: 'isExternal ? extUrl : intUrl' }])]);
 	const shapes = inferDataShape(root);

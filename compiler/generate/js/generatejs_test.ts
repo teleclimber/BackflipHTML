@@ -52,3 +52,19 @@ Deno.test("ternary expressions JS", () => {
 		assertEquals(generated, expected);
 	});
 });
+
+Deno.test("equality expressions JS", () => {
+	const cases: [string, string][] = [
+		["a == b", "(a == b)"],
+		["a != b", "(a != b)"],
+		["a.x == b[c]", "(a.x == b[c])"],
+		["a == b ? c : d", "((a == b) ? c : d)"],
+		["!(a == b)", "!(a == b)"],
+	];
+	cases.forEach(([input, expected]) => {
+		const result = interpretBackcode(input);
+		assertEquals(result.errs, []);
+		const generated = generateStatement(result.expr!);
+		assertEquals(generated, expected);
+	});
+});

@@ -26,3 +26,34 @@ Deno.test("interpretBackcode: ternary with member access", () => {
 	assertEquals(result.errs, []);
 	assertEquals(result.vars, ['a', 'b', 'd', 'e']);
 });
+
+Deno.test("interpretBackcode: equality operators", () => {
+	(['==', '!='] as const).forEach(op => {
+		const result = interpretBackcode(`a ${op} b`);
+		assertEquals(result.errs, [], `expected no errors for: a ${op} b`);
+		assertEquals(result.vars, ['a', 'b']);
+	});
+});
+
+Deno.test("interpretBackcode: equality with member access on both sides", () => {
+	const result = interpretBackcode('a.x == b[c]');
+	assertEquals(result.errs, []);
+	assertEquals(result.vars, ['a', 'b', 'c']);
+});
+
+Deno.test("interpretBackcode: equality composes with unary and ternary", () => {
+	const negated = interpretBackcode('!(a == b)');
+	assertEquals(negated.errs, []);
+	assertEquals(negated.vars, ['a', 'b']);
+
+	const ternary = interpretBackcode('a == b ? c : d');
+	assertEquals(ternary.errs, []);
+	assertEquals(ternary.vars, ['a', 'b', 'c', 'd']);
+});
+
+Deno.test("interpretBackcode: disallowed binary operators produce errors", () => {
+	['a === b', 'a !== b', 'a > b', 'a < b', 'a && b', 'a || b', 'a + b'].forEach(s => {
+		const result = interpretBackcode(s);
+		assertEquals(result.errs.length > 0, true, `expected error for: ${s}`);
+	});
+});
