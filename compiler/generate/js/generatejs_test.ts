@@ -68,3 +68,18 @@ Deno.test("equality expressions JS", () => {
 		assertEquals(generated, expected);
 	});
 });
+
+Deno.test("plus expressions JS", () => {
+	const cases: [string, string][] = [
+		["a + b", "(a + b)"],
+		["'abc' + 'def'", "('abc' + 'def')"],
+		["a + b + c", "((a + b) + c)"],
+		["a + b == c", "((a + b) == c)"],
+	];
+	cases.forEach(([input, expected]) => {
+		const result = interpretBackcode(input);
+		assertEquals(result.errs, []);
+		const generated = generateStatement(result.expr!);
+		assertEquals(generated, expected);
+	});
+});

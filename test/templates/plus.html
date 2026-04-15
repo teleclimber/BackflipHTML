@@ -1,0 +1,23 @@
+<b-unwrap b-name="numeric-plus">
+    <span>{{ a + b }}</span>
+</b-unwrap>
+
+<b-unwrap b-name="string-concat">
+    <span>{{ first + last }}</span>
+</b-unwrap>
+
+<b-unwrap b-name="literal-plus-var">
+    <span>{{ 'Hello, ' + name }}</span>
+</b-unwrap>
+
+<b-unwrap b-name="member-plus">
+    <span>{{ user.first + user.last }}</span>
+</b-unwrap>
+
+<b-unwrap b-name="chained-plus">
+    <span>{{ a + b + c }}</span>
+</b-unwrap>
+
+<b-unwrap b-name="attr-plus">
+    <a :href="'/users/' + id">link</a>
+</b-unwrap>

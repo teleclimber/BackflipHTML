@@ -418,3 +418,56 @@ Deno.test("php: ternary: nested ternary picks last branch", async () => {
         "<span>C</span>"
     );
 });
+
+// ---------------------------------------------------------------------------
+// plus.html — + operator (numeric addition and string concatenation)
+// ---------------------------------------------------------------------------
+
+Deno.test("php: plus: numeric addition", async () => {
+    assertEquals(
+        normalize(await renderPhp("plus.html", "numeric_plus", { a: 2, b: 3 })),
+        "<span>5</span>"
+    );
+});
+
+Deno.test("php: plus: string concatenation", async () => {
+    assertEquals(
+        normalize(await renderPhp("plus.html", "string_concat", { first: "Ada", last: " Lovelace" })),
+        "<span>Ada Lovelace</span>"
+    );
+});
+
+Deno.test("php: plus: literal prefix on var", async () => {
+    assertEquals(
+        normalize(await renderPhp("plus.html", "literal_plus_var", { name: "Ada" })),
+        "<span>Hello, Ada</span>"
+    );
+});
+
+Deno.test("php: plus: member access concat", async () => {
+    assertEquals(
+        normalize(await renderPhp("plus.html", "member_plus", { user: { first: "Ada", last: " Lovelace" } })),
+        "<span>Ada Lovelace</span>"
+    );
+});
+
+Deno.test("php: plus: chained string concat", async () => {
+    assertEquals(
+        normalize(await renderPhp("plus.html", "chained_plus", { a: "x", b: "y", c: "z" })),
+        "<span>xyz</span>"
+    );
+});
+
+Deno.test("php: plus: chained numeric", async () => {
+    assertEquals(
+        normalize(await renderPhp("plus.html", "chained_plus", { a: 1, b: 2, c: 3 })),
+        "<span>6</span>"
+    );
+});
+
+Deno.test("php: plus: in attribute binding", async () => {
+    assertEquals(
+        normalize(await renderPhp("plus.html", "attr_plus", { id: 42 })),
+        '<a href="/users/42">link</a>'
+    );
+});

@@ -51,8 +51,26 @@ Deno.test("interpretBackcode: equality composes with unary and ternary", () => {
 	assertEquals(ternary.vars, ['a', 'b', 'c', 'd']);
 });
 
+Deno.test("interpretBackcode: plus operator", () => {
+	const result = interpretBackcode('a + b');
+	assertEquals(result.errs, []);
+	assertEquals(result.vars, ['a', 'b']);
+
+	const literals = interpretBackcode("'abc' + 'def'");
+	assertEquals(literals.errs, []);
+	assertEquals(literals.vars, []);
+
+	const mixed = interpretBackcode("'prefix' + name");
+	assertEquals(mixed.errs, []);
+	assertEquals(mixed.vars, ['name']);
+
+	const chained = interpretBackcode('a + b + c');
+	assertEquals(chained.errs, []);
+	assertEquals(chained.vars, ['a', 'b', 'c']);
+});
+
 Deno.test("interpretBackcode: disallowed binary operators produce errors", () => {
-	['a === b', 'a !== b', 'a > b', 'a < b', 'a && b', 'a || b', 'a + b'].forEach(s => {
+	['a === b', 'a !== b', 'a > b', 'a < b', 'a && b', 'a || b'].forEach(s => {
 		const result = interpretBackcode(s);
 		assertEquals(result.errs.length > 0, true, `expected error for: ${s}`);
 	});

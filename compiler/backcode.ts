@@ -102,7 +102,7 @@ function interpretNode(node:acorn.AnyNode, computed: boolean, errs: string[], va
 }
 
 function interpretBinaryExpression(node:acorn.BinaryExpression, errs: string[], vars: string[]) {
-	if (node.operator !== '==' && node.operator !== '!=') {
+	if (node.operator !== '==' && node.operator !== '!=' && node.operator !== '+') {
 		errs.push(`unsupported binary operator: ${node.operator}`);
 		return;
 	}

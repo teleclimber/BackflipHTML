@@ -74,6 +74,20 @@ Deno.test("equality expressions PHP", () => {
 	});
 });
 
+Deno.test("plus expressions PHP", () => {
+	const cases: [string, string][] = [
+		["a + b",                "((is_string($a) || is_string($b)) ? ($a . $b) : ($a + $b))"],
+		["'abc' + 'def'",        "((is_string('abc') || is_string('def')) ? ('abc' . 'def') : ('abc' + 'def'))"],
+		["user.name + '!'",      "((is_string($user['name']) || is_string('!')) ? ($user['name'] . '!') : ($user['name'] + '!'))"],
+	];
+	cases.forEach(([input, expected]) => {
+		const result = interpretBackcode(input);
+		assertEquals(result.errs, []);
+		const generated = generatePhpStatement(result.expr!);
+		assertEquals(generated, expected);
+	});
+});
+
 Deno.test("generatePhpFunction", () => {
 	assertEquals(
 		generatePhpFunction('', interpretBackcode('user.name')),

@@ -576,6 +576,59 @@ Deno.test("ternary: nested ternary picks last branch", () => {
 });
 
 // ---------------------------------------------------------------------------
+// plus.html — + operator (numeric addition and string concatenation)
+// ---------------------------------------------------------------------------
+
+Deno.test("plus: numeric addition", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("plus.html").numeric_plus, { a: 2, b: 3 })),
+        "<span>5</span>"
+    );
+});
+
+Deno.test("plus: string concatenation", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("plus.html").string_concat, { first: "Ada", last: " Lovelace" })),
+        "<span>Ada Lovelace</span>"
+    );
+});
+
+Deno.test("plus: literal prefix on var", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("plus.html").literal_plus_var, { name: "Ada" })),
+        "<span>Hello, Ada</span>"
+    );
+});
+
+Deno.test("plus: member access concat", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("plus.html").member_plus, { user: { first: "Ada", last: " Lovelace" } })),
+        "<span>Ada Lovelace</span>"
+    );
+});
+
+Deno.test("plus: chained string concat", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("plus.html").chained_plus, { a: "x", b: "y", c: "z" })),
+        "<span>xyz</span>"
+    );
+});
+
+Deno.test("plus: chained numeric", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("plus.html").chained_plus, { a: 1, b: 2, c: 3 })),
+        "<span>6</span>"
+    );
+});
+
+Deno.test("plus: in attribute binding", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("plus.html").attr_plus, { id: 42 })),
+        '<a href="/users/42">link</a>'
+    );
+});
+
+// ---------------------------------------------------------------------------
 // Asset integration tests
 // ---------------------------------------------------------------------------
 
