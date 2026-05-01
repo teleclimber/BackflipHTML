@@ -297,6 +297,9 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 		let currentPartialName: string | null = null;
 		let cur_tnode: TNode | null = null;
 
+		// Track top-level elements that lack b-name (error if file also has partials)
+		const unnamedTopLevel: { tagName: string, loc?: { filename?: string, line?: number, col?: number, endLine?: number, endCol?: number } }[] = [];
+
 		const includeLocs = options?.includeLocs ?? false;
 
 		// Helper: build data-loc attribute for source location tracking
@@ -910,6 +913,11 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			const bNameAttr = tag.attrs.find(a => a.name === 'b-name');
 			if (bNameAttr) return handleBName(tag, raw, bNameAttr);
 
+			// Track top-level elements that lack b-name
+			if (tag_stack.length === 0 && currentPartialRoot === null) {
+				unnamedTopLevel.push({ tagName: tag.tagName, loc: errorLoc(filename, tagLoc(tag)) });
+			}
+
 			const bPartAttr = tag.attrs.find(a => a.name === 'b-part');
 			if (bPartAttr) return handleBPart(tag, raw, bPartAttr);
 
@@ -1089,6 +1097,15 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 		s.on('error', (err) => { reject(err); });
 		rewriteStream.on('error', (err) => { reject(err); });
 		rewriteStream.on('end', () => {
+			// Every top-level element must have b-name
+			if (unnamedTopLevel.length > 0) {
+				for (const entry of unnamedTopLevel) {
+					errors.push(new BackflipError(
+						`top-level <${entry.tagName}> is missing b-name; in a partial file every top-level element must be a named partial`,
+						entry.loc
+					));
+				}
+			}
 			resolve({ compiled: compiledFile, errors });
 		});
 	});

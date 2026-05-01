@@ -1153,4 +1153,53 @@ Deno.test("asset: resolveAssetRefs does not mutate original", async () => {
 	assertEquals(assetRefsAfter, 1);
 });
 
+// --- top-level element without b-name in a partial file ---
+
+Deno.test("compileFile - error when top-level element lacks b-name in a file with partials", async () => {
+	const html = `
+		<div b-name="card"><p>Card</p></div>
+		<footer>Site Footer</footer>
+	`;
+	const { errors } = await compileFile(html);
+	assertEquals(errors.length, 1);
+	assertStringIncludes(errors[0].message, 'b-name');
+});
+
+Deno.test("compileFile - error for multiple top-level elements without b-name", async () => {
+	const html = `
+		<header>Header</header>
+		<div b-name="card"><p>Card</p></div>
+		<footer>Footer</footer>
+	`;
+	const { errors } = await compileFile(html);
+	assertEquals(errors.length, 2);
+});
+
+Deno.test("compileFile - no error when all top-level elements have b-name", async () => {
+	const html = `
+		<div b-name="header"><h1>Header</h1></div>
+		<div b-name="footer"><p>Footer</p></div>
+	`;
+	const { errors } = await compileFile(html);
+	assertEquals(errors.length, 0);
+});
+
+Deno.test("compileFile - error when file has top-level elements but no partials", async () => {
+	const html = `
+		<header>Header</header>
+		<footer>Footer</footer>
+	`;
+	const { errors } = await compileFile(html);
+	assertEquals(errors.length, 2);
+	assertStringIncludes(errors[0].message, 'b-name');
+	assertStringIncludes(errors[1].message, 'b-name');
+});
+
+Deno.test("compileFile - error includes source location for unnamed top-level element", async () => {
+	const html = '<div b-name="card"><p>Card</p></div><span>oops</span>';
+	const { errors } = await compileFile(html, undefined, 'test.html');
+	assertEquals(errors.length, 1);
+	assertStringIncludes(errors[0].message, 'test.html');
+	assertEquals(typeof errors[0].line, 'number');
+});
 

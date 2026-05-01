@@ -266,8 +266,8 @@ Deno.test("compileDirectory - b-part with content at top level", async () => {
     assertEquals(directory.files.size, 1);
 });
 
-// Test: regular HTML elements around b-name partials
-Deno.test("compileDirectory - regular HTML around partials", async () => {
+// Test: regular HTML elements around b-name partials should be errors
+Deno.test("compileDirectory - error for regular HTML around partials", async () => {
     const dir = await makeTempDir("html_around");
     await writeFile(path.join(dir, "page.html"), `
         <header>Site Header</header>
@@ -277,9 +277,11 @@ Deno.test("compileDirectory - regular HTML around partials", async () => {
         <footer>Site Footer</footer>
     `);
 
-    const { directory } = await compileDirectory(dir);
+    const { directory, errors } = await compileDirectory(dir);
     assertEquals(directory.files.size, 1);
     assertEquals(directory.files.get("page.html")!.partials.size, 1);
+    assertEquals(errors.length, 2);
+    assertStringIncludes(errors[0].message, 'b-name');
 });
 
 // Test: nested b-name (b-name inside another b-name)
