@@ -6,7 +6,9 @@ Partials are reusable HTML fragments. You define them in `.html` files, then inc
 
 ## Template files
 
-Partial files are plain HTML fragments — no `<html>`, `<head>`, or `<body>` tags. One file can contain multiple partials. File names are arbitrary.
+Every top-level element in a template file must have a `b-name` attribute. The compiler will report an error for any top-level element that lacks `b-name`.
+
+You can have `<html>` tags, but do not include the `<DOCTYPE !html>`.
 
 You point the compiler at a directory and it processes all `.html` files within it.
 
@@ -160,6 +162,7 @@ Data bindings are scoped to the partial — they are not visible outside it, and
 
 The compiler reports errors for:
 
+- A top-level element without `b-name` (every top-level element must be a named partial)
 - `b-name` on a non-top-level element
 - A `b-part` reference that cannot be resolved (partial not found)
 - A cross-file `b-part` reference to a partial that exists but lacks `b-export`
