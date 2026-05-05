@@ -340,6 +340,82 @@ Deno.test("cross-file: box partial in components.html renders slot content", () 
 });
 
 // ---------------------------------------------------------------------------
+// custom-elements.html — partials defined and called via custom element tags.
+// Renders as a single merged tag combining caller-side and definition-side attrs.
+// ---------------------------------------------------------------------------
+
+Deno.test("custom-element: bare call renders single merged tag with definition attrs", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("custom-elements.html").caller_simple, {})),
+        '<my-notice class="notice">Notice!</my-notice>'
+    );
+});
+
+Deno.test("custom-element: caller attrs are merged before definition attrs", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("custom-elements.html").caller_with_attr, {})),
+        '<my-notice id="hi" class="notice">Notice!</my-notice>'
+    );
+});
+
+Deno.test("custom-element: b-data binding evaluated in caller ctx, used in def body", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("custom-elements.html").caller_card, { heading: "Hi", body: "Lorem" })),
+        '<my-card class="card"><h2>Hi</h2><div class="body"><p>Lorem</p></div></my-card>'
+    );
+});
+
+Deno.test("custom-element: print interpolation inside body resolves in childCtx", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("custom-elements.html").caller_greeting, { who: "Ada" })),
+        "<my-greeting>Hello, Ada!</my-greeting>"
+    );
+});
+
+Deno.test("custom-element: dynamic caller attr (:data-id) evaluates in caller ctx", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("custom-elements.html").caller_dyn_attr, { ident: 42 })),
+        '<my-notice data-id="42" class="notice">Notice!</my-notice>'
+    );
+});
+
+Deno.test("custom-element: call inside b-unwrap b-for loops correctly", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("custom-elements.html").caller_in_for, { names: ["Ada", "Bob"] })),
+        "<my-greeting>Hello, Ada!</my-greeting><my-greeting>Hello, Bob!</my-greeting>"
+    );
+});
+
+Deno.test("custom-element: call inside b-unwrap b-if rendered when condition true", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("custom-elements.html").caller_conditional, { show: true })),
+        '<my-notice class="notice">Notice!</my-notice>'
+    );
+});
+
+Deno.test("custom-element: b-else branch renders when condition false", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("custom-elements.html").caller_conditional, { show: false })),
+        "nothing"
+    );
+});
+
+Deno.test("custom-element: unknown tag falls back to plain HTML", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("custom-elements.html").caller_unknown, {})),
+        '<fancy-widget data-x="1">inside</fancy-widget>'
+    );
+});
+
+Deno.test("custom-element: cross-file exported partial is callable from another file", () => {
+    const mod = crossFileModules.get("ce-consumer.html")!;
+    assertEquals(
+        normalize(renderRoot(mod.cross_file_card, { heading: "Hi", body: "Lorem" })),
+        '<my-card class="card"><h2>Hi</h2><div class="body"><em>Lorem</em></div></my-card>'
+    );
+});
+
+// ---------------------------------------------------------------------------
 // binds.html — :attr / b-bind:attr dynamic attribute binding
 // ---------------------------------------------------------------------------
 

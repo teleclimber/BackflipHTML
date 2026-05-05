@@ -1,7 +1,7 @@
 import { assert, assertEquals, assertExists, assertStringIncludes } from "jsr:@std/assert";
 
 import type { RootTNode, RawTNode, PrintTNode, ForTNode, IfTNode, SlotTNode, PartialRefTNode, AttrBindTNode, AssetRefTNode, SourceLoc, CompileOptions } from "./compiler.ts";
-import { compileFile, onText, pushRaw, resolveAssetRefs } from "./compiler.ts";
+import { compileFile, effectiveAttrNames, isCustomElementTagName, onText, pushRaw, resolveAssetRefs } from "./compiler.ts";
 import { interpretBackcode } from "./backcode.ts";
 
 // ---- helpers ----
@@ -40,6 +40,152 @@ function findSlotNode(root: RootTNode): SlotTNode {
 	}
 	throw new Error("no slot node found");
 }
+
+// ---- isCustomElementTagName unit tests ----
+
+Deno.test("isCustomElementTagName: empty string is not a custom element", () => {
+	assertEquals(isCustomElementTagName(''), false);
+});
+
+Deno.test("isCustomElementTagName: plain HTML tag without hyphen is not a custom element", () => {
+	assertEquals(isCustomElementTagName('div'), false);
+	assertEquals(isCustomElementTagName('span'), false);
+	assertEquals(isCustomElementTagName('h1'), false);
+});
+
+Deno.test("isCustomElementTagName: hyphenated lowercase tag is a custom element", () => {
+	assertEquals(isCustomElementTagName('my-element'), true);
+	assertEquals(isCustomElementTagName('app-header'), true);
+	assertEquals(isCustomElementTagName('a-b-c'), true);
+});
+
+Deno.test("isCustomElementTagName: backflip directive tags (b-*) are excluded", () => {
+	assertEquals(isCustomElementTagName('b-name'), false);
+	assertEquals(isCustomElementTagName('b-unwrap'), false);
+	assertEquals(isCustomElementTagName('b-foo'), false);
+});
+
+Deno.test("isCustomElementTagName: must start with a lowercase letter", () => {
+	assertEquals(isCustomElementTagName('My-Element'), false);
+	assertEquals(isCustomElementTagName('1my-element'), false);
+	assertEquals(isCustomElementTagName('-my-element'), false);
+});
+
+Deno.test("isCustomElementTagName: hyphen is required", () => {
+	assertEquals(isCustomElementTagName('myelement'), false);
+});
+
+Deno.test("isCustomElementTagName: digits allowed after the leading letter", () => {
+	assertEquals(isCustomElementTagName('h1-header'), true);
+	assertEquals(isCustomElementTagName('foo2-bar'), true);
+});
+
+// ---- effectiveAttrNames unit tests ----
+
+Deno.test("effectiveAttrNames: empty attrs yields empty list", () => {
+	assertEquals(effectiveAttrNames([]), []);
+});
+
+Deno.test("effectiveAttrNames: plain attributes pass through unchanged", () => {
+	assertEquals(
+		effectiveAttrNames([{ name: 'class', value: 'foo' }, { name: 'id', value: 'bar' }]),
+		['class', 'id']
+	);
+});
+
+Deno.test("effectiveAttrNames: b-name and b-export are excluded", () => {
+	assertEquals(
+		effectiveAttrNames([{ name: 'b-name', value: 'x' }, { name: 'b-export', value: '' }, { name: 'class', value: 'c' }]),
+		['class']
+	);
+});
+
+Deno.test("effectiveAttrNames: control-flow directives are excluded", () => {
+	assertEquals(
+		effectiveAttrNames([
+			{ name: 'b-if', value: 'cond' },
+			{ name: 'b-for', value: 'x in xs' },
+			{ name: 'b-else', value: '' },
+			{ name: 'b-else-if', value: 'cond2' },
+			{ name: 'class', value: 'c' },
+		]),
+		['class']
+	);
+});
+
+Deno.test("effectiveAttrNames: partial/slot directives are excluded", () => {
+	assertEquals(
+		effectiveAttrNames([
+			{ name: 'b-part', value: 'x' },
+			{ name: 'b-slot', value: 'header' },
+			{ name: 'b-in', value: 'parent' },
+			{ name: 'class', value: 'c' },
+		]),
+		['class']
+	);
+});
+
+Deno.test("effectiveAttrNames: b-data: bindings are excluded", () => {
+	assertEquals(
+		effectiveAttrNames([
+			{ name: 'b-data:user', value: 'currentUser' },
+			{ name: 'b-data:items', value: 'xs' },
+			{ name: 'class', value: 'c' },
+		]),
+		['class']
+	);
+});
+
+Deno.test("effectiveAttrNames: b-bind:foo resolves to foo", () => {
+	assertEquals(
+		effectiveAttrNames([{ name: 'b-bind:href', value: 'url' }]),
+		['href']
+	);
+});
+
+Deno.test("effectiveAttrNames: b-bind:foo~ resolves to foo (asset suffix stripped)", () => {
+	assertEquals(
+		effectiveAttrNames([{ name: 'b-bind:src~', value: 'asset' }]),
+		['src']
+	);
+});
+
+Deno.test("effectiveAttrNames: :foo shorthand resolves to foo", () => {
+	assertEquals(
+		effectiveAttrNames([{ name: ':href', value: 'url' }]),
+		['href']
+	);
+});
+
+Deno.test("effectiveAttrNames: :foo~ shorthand resolves to foo (asset suffix stripped)", () => {
+	assertEquals(
+		effectiveAttrNames([{ name: ':src~', value: 'asset' }]),
+		['src']
+	);
+});
+
+Deno.test("effectiveAttrNames: foo~ asset shorthand resolves to foo", () => {
+	assertEquals(
+		effectiveAttrNames([{ name: 'src~', value: '@images/x.png' }]),
+		['src']
+	);
+});
+
+Deno.test("effectiveAttrNames: mixed attrs preserve order and apply all rules", () => {
+	assertEquals(
+		effectiveAttrNames([
+			{ name: 'b-name', value: 'p' },
+			{ name: 'class', value: 'c' },
+			{ name: 'b-bind:href', value: 'url' },
+			{ name: 'b-data:x', value: '1' },
+			{ name: ':title', value: 't' },
+			{ name: 'src~', value: '@a.png' },
+			{ name: 'b-if', value: 'cond' },
+			{ name: 'id', value: 'i' },
+		]),
+		['class', 'href', 'title', 'src', 'id']
+	);
+});
 
 // ---- pushRaw unit tests ----
 
@@ -368,6 +514,187 @@ Deno.test("compileFile: b-name not at top level reports error", async () => {
 	assertStringIncludes(errors[0].message, "b-name is only allowed on top-level elements");
 });
 
+Deno.test("compileFile: b-if on partial definition reports error", async () => {
+	const { errors } = await compileFile('<div b-name="x" b-if="cond">A</div>');
+	assertEquals(errors.length > 0, true);
+	assertStringIncludes(errors[0].message, "b-if is not allowed on a partial definition");
+});
+
+Deno.test("compileFile: b-for on partial definition reports error", async () => {
+	const { errors } = await compileFile('<div b-name="x" b-for="i in items">A</div>');
+	assertEquals(errors.length > 0, true);
+	assertStringIncludes(errors[0].message, "b-for is not allowed on a partial definition");
+});
+
+Deno.test("compileFile: b-else on partial definition reports error", async () => {
+	const { errors } = await compileFile('<div b-name="x" b-else>A</div>');
+	assertEquals(errors.length > 0, true);
+	assertStringIncludes(errors[0].message, "b-else is not allowed on a partial definition");
+});
+
+Deno.test("compileFile: top-level custom element is treated as a partial definition", async () => {
+	const { compiled, errors } = await compileFile('<my-card>content</my-card>');
+	assertEquals(errors.length, 0);
+	assertEquals(compiled.partials.size, 1);
+	const root = compiled.partials.get('my-card');
+	assertExists(root);
+	assertEquals(root.customElement, true);
+	assertEquals(root.exported, false);
+});
+
+Deno.test("compileFile: top-level custom element with b-export is exported", async () => {
+	const { compiled, errors } = await compileFile('<my-card b-export>content</my-card>');
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('my-card');
+	assertExists(root);
+	assertEquals(root.exported, true);
+	assertEquals(root.customElement, true);
+});
+
+Deno.test("compileFile: top-level custom element with b-if reports error", async () => {
+	const { errors } = await compileFile('<my-card b-if="cond">x</my-card>');
+	assertEquals(errors.length > 0, true);
+	assertStringIncludes(errors[0].message, "b-if is not allowed on a partial definition");
+});
+
+Deno.test("compileFile: top-level custom element with b-for reports error", async () => {
+	const { errors } = await compileFile('<my-card b-for="i in items">x</my-card>');
+	assertEquals(errors.length > 0, true);
+	assertStringIncludes(errors[0].message, "b-for is not allowed on a partial definition");
+});
+
+Deno.test("compileFile: mixing b-name partials and custom element partials in one file", async () => {
+	const { compiled, errors } = await compileFile('<div b-name="page">A</div><my-card>B</my-card>');
+	assertEquals(errors.length, 0);
+	assertEquals(compiled.partials.size, 2);
+	assertEquals(compiled.partials.get('page')?.customElement, undefined);
+	assertEquals(compiled.partials.get('my-card')?.customElement, true);
+});
+
+Deno.test("compileFile: cross-style same-file collision reports error", async () => {
+	const { errors } = await compileFile('<my-card>A</my-card><div b-name="my-card">B</div>');
+	assertEquals(errors.length > 0, true);
+	assertStringIncludes(errors[0].message, 'my-card');
+	assertStringIncludes(errors[0].message, 'already defined');
+});
+
+Deno.test("compileFile: duplicate b-name in same file reports error", async () => {
+	const { errors } = await compileFile('<div b-name="card">A</div><div b-name="card">B</div>');
+	assertEquals(errors.length > 0, true);
+	assertStringIncludes(errors[0].message, 'card');
+	assertStringIncludes(errors[0].message, 'already defined');
+});
+
+Deno.test("compileFile: nested custom element is not treated as a partial definition", async () => {
+	const { compiled, errors } = await compileFile('<div b-name="page"><my-card>x</my-card></div>');
+	assertEquals(errors.length, 0);
+	assertEquals(compiled.partials.size, 1);
+	assertEquals(compiled.partials.has('page'), true);
+	assertEquals(compiled.partials.has('my-card'), false);
+});
+
+Deno.test("compileFile: b-* directive tag (e.g. b-unwrap) is not a custom element partial", async () => {
+	const { compiled, errors } = await compileFile('<b-unwrap b-name="x">y</b-unwrap>');
+	assertEquals(errors.length, 0);
+	assertEquals(compiled.partials.size, 1);
+	assertEquals(compiled.partials.get('x')?.customElement, undefined);
+});
+
+Deno.test("compileFile: nested custom element creates a partial-ref call site", async () => {
+	const { compiled, errors } = await compileFile('<div b-name="page"><my-card>x</my-card></div>');
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('page')!;
+	let found: PartialRefTNode | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'partial-ref') { found = n as PartialRefTNode; break; }
+	}
+	assertExists(found);
+	assertEquals(found.customElement, true);
+	assertEquals(found.partialName, 'my-card');
+	assertEquals(found.callerTagName, 'my-card');
+});
+
+Deno.test("compileFile: custom element call captures b-data:* bindings", async () => {
+	const { compiled, errors } = await compileFile('<div b-name="page"><my-card b-data:title="post.title">x</my-card></div>');
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('page')!;
+	let found: PartialRefTNode | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'partial-ref') { found = n as PartialRefTNode; break; }
+	}
+	assertExists(found);
+	assertEquals(found.bindings.length, 1);
+	assertEquals(found.bindings[0].name, 'title');
+});
+
+Deno.test("compileFile: custom element call captures default slot content from children", async () => {
+	const { compiled, errors } = await compileFile('<div b-name="page"><my-card>hello world</my-card></div>');
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('page')!;
+	let found: PartialRefTNode | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'partial-ref') { found = n as PartialRefTNode; break; }
+	}
+	assertExists(found);
+	const defaultSlot = found.slots['default'];
+	assertExists(defaultSlot);
+	const txt = defaultSlot.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
+	assertStringIncludes(txt, 'hello world');
+});
+
+Deno.test("compileFile: custom element call captures named slot via b-in", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><my-card><b-unwrap b-in="title">Hi</b-unwrap></my-card></div>'
+	);
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('page')!;
+	let found: PartialRefTNode | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'partial-ref') { found = n as PartialRefTNode; break; }
+	}
+	assertExists(found);
+	assertEquals('title' in found.slots, true);
+});
+
+Deno.test("compileFile: custom element partial body excludes the wrapping tag", async () => {
+	const { compiled, errors } = await compileFile('<my-card class="card">body</my-card>');
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('my-card')!;
+	// Body should not include `<my-card>` open or `</my-card>` close
+	const allRaw = root.tnodes.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
+	assertEquals(allRaw.includes('<my-card'), false);
+	assertEquals(allRaw.includes('</my-card>'), false);
+	assertStringIncludes(allRaw, 'body');
+});
+
+Deno.test("compileFile: custom element partial stores definitionAttrNodes for attrs", async () => {
+	const { compiled, errors } = await compileFile('<my-card class="card" id="main">body</my-card>');
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('my-card')!;
+	assertExists(root.definitionAttrNodes);
+	const rendered = root.definitionAttrNodes.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
+	assertStringIncludes(rendered, 'class="card"');
+	assertStringIncludes(rendered, 'id="main"');
+	assertEquals(rendered.includes('<my-card'), false);
+	assertEquals(rendered.endsWith('>'), false);
+});
+
+Deno.test("compileFile: custom element call site stores callerOpenTag in attrs-only form", async () => {
+	const { compiled, errors } = await compileFile('<div b-name="page"><my-card data-x="1"></my-card></div>');
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('page')!;
+	let found: PartialRefTNode | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'partial-ref') { found = n as PartialRefTNode; break; }
+	}
+	assertExists(found);
+	assertExists(found.callerOpenTag);
+	const rendered = found.callerOpenTag.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
+	assertStringIncludes(rendered, 'data-x="1"');
+	assertEquals(rendered.includes('<my-card'), false);
+	assertEquals(rendered.endsWith('>'), false);
+});
+
 Deno.test("compileFile: multiple partials in one file", async () => {
 	const { compiled: result } = await compileFile('<div b-name="first">A</div><div b-name="second">B</div>');
 	assertEquals(result.partials.size, 2);
@@ -454,6 +781,22 @@ Deno.test("compileFile: b-slot with no value creates SlotTNode with undefined na
 	}
 	assertEquals(found !== undefined, true);
 	assertEquals(found!.name, undefined);
+});
+
+Deno.test("compileFile: non-b-unwrap b-slot followed by text compiles cleanly", async () => {
+	// Regression: closing tag of a non-b-unwrap b-slot used to leave cur_tnode pointing
+	// at the partial RootTNode; the next text token then threw "expected tnodes here".
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><span b-slot></span>tail</div>'
+	);
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get("page")!;
+	const slotIdx = root.tnodes.findIndex(n => n.type === 'slot');
+	assertEquals(slotIdx >= 0, true);
+	// The trailing "tail" must land as a sibling of the slot inside the root.
+	const trailing = root.tnodes.slice(slotIdx + 1)
+		.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
+	assertEquals(trailing.includes('tail'), true);
 });
 
 Deno.test("compileFile: default slot content captured", async () => {

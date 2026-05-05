@@ -230,6 +230,80 @@ Deno.test("php: cross-file: box partial in components.html renders slot content"
 });
 
 // ---------------------------------------------------------------------------
+// custom-elements.html — partials defined and called via custom element tags.
+// ---------------------------------------------------------------------------
+
+Deno.test("php: custom-element: bare call renders single merged tag with definition attrs", async () => {
+    assertEquals(
+        normalize(await renderPhp("custom-elements.html", "caller_simple", {})),
+        '<my-notice class="notice">Notice!</my-notice>'
+    );
+});
+
+Deno.test("php: custom-element: caller attrs are merged before definition attrs", async () => {
+    assertEquals(
+        normalize(await renderPhp("custom-elements.html", "caller_with_attr", {})),
+        '<my-notice id="hi" class="notice">Notice!</my-notice>'
+    );
+});
+
+Deno.test("php: custom-element: b-data binding evaluated in caller ctx, used in def body", async () => {
+    assertEquals(
+        normalize(await renderPhp("custom-elements.html", "caller_card", { heading: "Hi", body: "Lorem" })),
+        '<my-card class="card"><h2>Hi</h2><div class="body"><p>Lorem</p></div></my-card>'
+    );
+});
+
+Deno.test("php: custom-element: print interpolation inside body resolves in childCtx", async () => {
+    assertEquals(
+        normalize(await renderPhp("custom-elements.html", "caller_greeting", { who: "Ada" })),
+        "<my-greeting>Hello, Ada!</my-greeting>"
+    );
+});
+
+Deno.test("php: custom-element: dynamic caller attr (:data-id) evaluates in caller ctx", async () => {
+    assertEquals(
+        normalize(await renderPhp("custom-elements.html", "caller_dyn_attr", { ident: 42 })),
+        '<my-notice data-id="42" class="notice">Notice!</my-notice>'
+    );
+});
+
+Deno.test("php: custom-element: call inside b-unwrap b-for loops correctly", async () => {
+    assertEquals(
+        normalize(await renderPhp("custom-elements.html", "caller_in_for", { names: ["Ada", "Bob"] })),
+        "<my-greeting>Hello, Ada!</my-greeting><my-greeting>Hello, Bob!</my-greeting>"
+    );
+});
+
+Deno.test("php: custom-element: call inside b-unwrap b-if rendered when condition true", async () => {
+    assertEquals(
+        normalize(await renderPhp("custom-elements.html", "caller_conditional", { show: true })),
+        '<my-notice class="notice">Notice!</my-notice>'
+    );
+});
+
+Deno.test("php: custom-element: b-else branch renders when condition false", async () => {
+    assertEquals(
+        normalize(await renderPhp("custom-elements.html", "caller_conditional", { show: false })),
+        "nothing"
+    );
+});
+
+Deno.test("php: custom-element: unknown tag falls back to plain HTML", async () => {
+    assertEquals(
+        normalize(await renderPhp("custom-elements.html", "caller_unknown", {})),
+        '<fancy-widget data-x="1">inside</fancy-widget>'
+    );
+});
+
+Deno.test("php: custom-element: cross-file exported partial is callable from another file", async () => {
+    assertEquals(
+        normalize(await renderPhp("ce-consumer.html", "cross_file_card", { heading: "Hi", body: "Lorem" })),
+        '<my-card class="card"><h2>Hi</h2><div class="body"><em>Lorem</em></div></my-card>'
+    );
+});
+
+// ---------------------------------------------------------------------------
 // binds.html — :attr / b-bind:attr dynamic attribute binding
 // ---------------------------------------------------------------------------
 

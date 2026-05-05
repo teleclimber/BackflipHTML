@@ -16,7 +16,7 @@ export function nodeToJS(n :TNode|RootTNode, assetMap?: Map<string, string>) :st
 
 	switch(n.type) {
 		case 'root':
-			out = '{ type:"root", nodes: [\n'+ n.tnodes!.map( (nn) => nodeToJS(nn, assetMap) ).join(',\n') + '] }';
+			out = rootToJS(n, assetMap);
 			break;
 		case 'for':
 			out = forToJS(n, assetMap);
@@ -46,6 +46,15 @@ export function nodeToJS(n :TNode|RootTNode, assetMap?: Map<string, string>) :st
 	}
 
 	return out;
+}
+
+function rootToJS(n: RootTNode, assetMap?: Map<string, string>): string {
+	const body = n.tnodes!.map(nn => nodeToJS(nn, assetMap)).join(',\n');
+	if (n.customElement && n.definitionAttrNodes) {
+		const defAttrs = n.definitionAttrNodes.map(nn => nodeToJS(nn, assetMap)).join(',\n');
+		return `{ type:"root", customElement: true, definitionAttrNodes: [\n${defAttrs}\n], nodes: [\n${body}\n] }`;
+	}
+	return `{ type:"root", nodes: [\n${body}\n] }`;
 }
 
 function forToJS(for_node: ForTNode, assetMap?: Map<string, string>) :string {
@@ -88,6 +97,10 @@ function slotToJS(n: SlotTNode) :string {
 }
 
 function partialRefToJS(n: PartialRefTNode, assetMap?: Map<string, string>) :string {
+	if (n.customElement) {
+		return customElementRefToJS(n, assetMap);
+	}
+
 	const partialIdent = n.file === null
 		? sanitizeName(n.partialName)
 		: importAliasFor(n.file, n.partialName);
@@ -112,6 +125,42 @@ function partialRefToJS(n: PartialRefTNode, assetMap?: Map<string, string>) :str
 }`;
 }
 
+function customElementRefToJS(n: PartialRefTNode, assetMap?: Map<string, string>): string {
+	const tagName = n.callerTagName ?? n.partialName;
+	const callerOpenTag = (n.callerOpenTag ?? []).map(t => nodeToJS(t, assetMap)).join(',\n');
+	const slots = Object.entries(n.slots)
+		.map(([name, tnodes]) => `'${name}': [\n${tnodes.map(t => nodeToJS(t, assetMap)).join(',\n')}\n]`)
+		.join(',\n');
+	const bindings = n.bindings
+		.map(b => `{ name: '${b.name}', data: ${backcodeToJS(b.data)} }`)
+		.join(',\n');
+
+	if (n.file === '__unresolved_custom_element__') {
+		// Fallback: render as raw HTML — no partial reference, slots in caller ctx.
+		return `{ type: 'partial-ref',
+	customElement: true,
+	unresolved: true,
+	callerTagName: '${escapeStr(tagName)}',
+	callerOpenTag: [\n${callerOpenTag}\n],
+	slots: { ${slots} },
+	bindings: [ ${bindings} ]
+}`;
+	}
+
+	const partialIdent = n.file === null
+		? sanitizeName(n.partialName)
+		: importAliasFor(n.file, n.partialName);
+
+	return `{ type: 'partial-ref',
+	customElement: true,
+	partial: ${partialIdent},
+	callerTagName: '${escapeStr(tagName)}',
+	callerOpenTag: [\n${callerOpenTag}\n],
+	slots: { ${slots} },
+	bindings: [ ${bindings} ]
+}`;
+}
+
 function attrBindToJS(n: AttrBindTNode, assetMap?: Map<string, string>): string {
 	if (n.parts.some(p => p.type === 'asset')) {
 		throw new Error("unresolved asset AttrPart — call resolveAssetRefs() before code generation");
@@ -129,7 +178,8 @@ function attrBindToJS(n: AttrBindTNode, assetMap?: Map<string, string>): string 
 		assetMapStr = `, assetMap: { ${entries} }`;
 	}
 	const selfClosingStr = n.selfClosing ? ', selfClosing: true' : '';
-	return `{ type: 'attr-bind', tagOpen: '${escapeStr(n.tagOpen)}'${assetMapStr}${selfClosingStr}, parts: [\n${parts}\n] }`;
+	const attrsOnlyStr = n.attrsOnly ? ', attrsOnly: true' : '';
+	return `{ type: 'attr-bind', tagOpen: '${escapeStr(n.tagOpen)}'${assetMapStr}${selfClosingStr}${attrsOnlyStr}, parts: [\n${parts}\n] }`;
 }
 
 function escapeStr(s: string): string {
@@ -188,6 +238,8 @@ function topoSortPartials(partials: Map<string, RootTNode>): string[] {
 	return sorted;
 }
 
+const UNRESOLVED_CE = '__unresolved_custom_element__';
+
 export function fileToJsModule(file: CompiledFile, filePath: string, assetMap?: Map<string, string>): string {
 	const currentJs = filePath.replace(/\.html$/, '.js');
 
@@ -195,7 +247,7 @@ export function fileToJsModule(file: CompiledFile, filePath: string, assetMap?: 
 	const crossFileRefs = new Map<string, Set<string>>();  // file → set of partial names
 	for (const root of file.partials.values()) {
 		for (const ref of collectPartialRefs(root)) {
-			if (ref.file !== null) {
+			if (ref.file !== null && ref.file !== UNRESOLVED_CE) {
 				if (!crossFileRefs.has(ref.file)) crossFileRefs.set(ref.file, new Set());
 				crossFileRefs.get(ref.file)!.add(ref.partialName);
 			}

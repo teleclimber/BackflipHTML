@@ -12,7 +12,7 @@ export function errorsToDiagnostics(errors: BackflipError[]): Map<string, Diagno
 		const endCol = err.endCol != null ? err.endCol - 1 : col + 1;
 
 		const diag: Diagnostic = {
-			severity: DiagnosticSeverity.Error, // Both 'fatal' and 'error' are errors
+			severity: err.severity === 'warning' ? DiagnosticSeverity.Warning : DiagnosticSeverity.Error,
 			range: {
 				start: { line, character: col },
 				end: { line: endLine, character: endCol },

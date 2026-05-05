@@ -96,11 +96,13 @@ if (args.check) {
         console.log(JSON.stringify({ errors: errors.map(e => e.message) }));
     } else {
         for (const err of errors) {
-            console.error(err.message);
+            if (err.severity === 'warning') console.warn(`warning: ${err.message}`);
+            else console.error(err.message);
         }
     }
 
-    Deno.exit(errors.length > 0 ? 1 : 0);
+    const failingErrors = errors.filter(e => e.severity !== 'warning');
+    Deno.exit(failingErrors.length > 0 ? 1 : 0);
 } else if (args['assets-report']) {
     if (!assetDirs) {
         console.error('No asset directories configured in backflip.json');
@@ -177,6 +179,7 @@ if (args.check) {
 
     const fatalErrors = errors.filter(e => e.severity === 'fatal');
     const nonFatalErrors = errors.filter(e => e.severity === 'error');
+    const warnings = errors.filter(e => e.severity === 'warning');
 
     if (fatalErrors.length > 0) {
         for (const err of fatalErrors) {
@@ -188,6 +191,12 @@ if (args.check) {
     if (nonFatalErrors.length > 0) {
         for (const err of nonFatalErrors) {
             console.error(err.message);
+        }
+    }
+
+    if (warnings.length > 0) {
+        for (const warn of warnings) {
+            console.warn(`warning: ${warn.message}`);
         }
     }
 

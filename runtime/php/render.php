@@ -171,6 +171,11 @@ function backflip_renderPrint(array $node, array $ctx): string
  */
 function backflip_streamRenderPartialRef(array $node, array $ctx): Generator
 {
+    if (!empty($node['customElement'])) {
+        yield from backflip_streamRenderCustomElementRef($node, $ctx);
+        return;
+    }
+
     // 1. Build child context: start with caller ctx, overlay bindings evaluated in caller ctx
     $childCtx = $ctx;
     foreach ($node['bindings'] as $binding) {
@@ -184,13 +189,64 @@ function backflip_streamRenderPartialRef(array $node, array $ctx): Generator
     }
 
     // 3. Render the partial, with wrapper if present
-    if ($node['wrapper'] !== null) {
-        yield $node['wrapper']['open'];
+    $wrapper = $node['wrapper'] ?? null;
+    if ($wrapper !== null) {
+        yield $wrapper['open'];
         yield from backflip_streamRenderRoot($node['partial'], $childCtx, $slotMap);
-        yield $node['wrapper']['close'];
+        yield $wrapper['close'];
     } else {
         yield from backflip_streamRenderRoot($node['partial'], $childCtx, $slotMap);
     }
+}
+
+/**
+ * Streaming render of a custom-element partial-ref. Produces a single merged tag
+ * with caller-side attrs (caller ctx) and definition-side attrs (childCtx) interleaved.
+ */
+function backflip_streamRenderCustomElementRef(array $node, array $ctx): Generator
+{
+    $tagName = $node['callerTagName'];
+
+    if (!empty($node['unresolved'])) {
+        // Fallback: render as plain HTML — caller-side attrs only, default slot in caller ctx.
+        yield '<' . $tagName;
+        foreach (($node['callerOpenTag'] ?? []) as $n) {
+            yield from backflip_streamRender($n, $ctx, []);
+        }
+        yield '>';
+        $def = $node['slots']['default'] ?? null;
+        if ($def !== null) {
+            foreach ($def as $n) {
+                yield from backflip_streamRender($n, $ctx, []);
+            }
+        }
+        yield '</' . $tagName . '>';
+        return;
+    }
+
+    // Bindings evaluated in caller ctx, applied to childCtx for body and definition attrs.
+    $childCtx = $ctx;
+    foreach ($node['bindings'] as $binding) {
+        $childCtx[$binding['name']] = backflip_execFn($binding['data'], $ctx);
+    }
+    $slotMap = [];
+    foreach ($node['slots'] as $slotName => $nodes) {
+        $slotMap[$slotName] = ['nodes' => $nodes, 'ctx' => $ctx];
+    }
+
+    // Single merged open tag: caller-side attrs in caller ctx, definition-side attrs in childCtx.
+    yield '<' . $tagName;
+    foreach (($node['callerOpenTag'] ?? []) as $n) {
+        yield from backflip_streamRender($n, $ctx, []);
+    }
+    foreach (($node['partial']['definitionAttrNodes'] ?? []) as $n) {
+        yield from backflip_streamRender($n, $childCtx, []);
+    }
+    yield '>';
+    foreach ($node['partial']['nodes'] as $n) {
+        yield from backflip_streamRender($n, $childCtx, $slotMap);
+    }
+    yield '</' . $tagName . '>';
 }
 
 /**
@@ -206,7 +262,8 @@ function backflip_replaceAssetPaths(string $value, array $assetMap): string
 
 function backflip_renderAttrBind(array $node, array $ctx): string
 {
-    $out = $node['tagOpen'];
+    $attrsOnly = !empty($node['attrsOnly']);
+    $out = $attrsOnly ? '' : $node['tagOpen'];
     $assetMap = $node['assetMap'] ?? null;
     foreach ($node['parts'] as $p) {
         if ($p['type'] === 'static') {
@@ -226,6 +283,9 @@ function backflip_renderAttrBind(array $node, array $ctx): string
                 }
             }
         }
+    }
+    if ($attrsOnly) {
+        return $out;
     }
     return $out . (($node['selfClosing'] ?? false) ? ' />' : '>');
 }

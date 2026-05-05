@@ -5,7 +5,8 @@
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
-import { compileDirectory } from './partials.ts';
+import { compileDirectory, scanCustomElementPartials, validateCustomElementUniqueness } from './partials.ts';
+import type { CustomElementRegistry } from './compiler.ts';
 
 // Use /tmp/claude-1000/ as the writable temp dir in this sandbox environment.
 // Deno.env.get('TMPDIR') may point to a read-only path; /tmp/claude-1000/ is always writable.
@@ -585,4 +586,220 @@ Deno.test("compileDirectory - no error for empty b-part (no slot content provide
 
     const { errors } = await compileDirectory(dir);
     assertEquals(errors.length, 0);
+});
+
+// --- scanCustomElementPartials ---
+
+Deno.test("scanCustomElementPartials: detects top-level custom element tags", () => {
+    const found = scanCustomElementPartials('<my-card>content</my-card>');
+    assertEquals(found.length, 1);
+    assertEquals(found[0].name, 'my-card');
+    assertEquals(found[0].exported, false);
+});
+
+Deno.test("scanCustomElementPartials: detects b-export attribute", () => {
+    const found = scanCustomElementPartials('<my-card b-export>content</my-card>');
+    assertEquals(found.length, 1);
+    assertEquals(found[0].name, 'my-card');
+    assertEquals(found[0].exported, true);
+});
+
+Deno.test("scanCustomElementPartials: ignores nested custom elements", () => {
+    const found = scanCustomElementPartials('<my-outer><my-inner>x</my-inner></my-outer>');
+    assertEquals(found.length, 1);
+    assertEquals(found[0].name, 'my-outer');
+});
+
+Deno.test("scanCustomElementPartials: handles multiple top-level definitions", () => {
+    const found = scanCustomElementPartials('<my-a>a</my-a><my-b>b</my-b>');
+    assertEquals(found.length, 2);
+    assertEquals(found[0].name, 'my-a');
+    assertEquals(found[1].name, 'my-b');
+});
+
+Deno.test("scanCustomElementPartials: ignores b-* directive tags", () => {
+    const found = scanCustomElementPartials('<b-unwrap b-name="x">y</b-unwrap>');
+    assertEquals(found.length, 0);
+});
+
+Deno.test("scanCustomElementPartials: ignores plain (non-hyphenated) tags", () => {
+    const found = scanCustomElementPartials('<div b-name="x">y</div>');
+    assertEquals(found.length, 0);
+});
+
+Deno.test("scanCustomElementPartials: ignores tags inside HTML comments", () => {
+    const found = scanCustomElementPartials('<!-- <my-card>x</my-card> --><my-real>y</my-real>');
+    assertEquals(found.length, 1);
+    assertEquals(found[0].name, 'my-real');
+});
+
+Deno.test("scanCustomElementPartials: ignores '>' inside attribute values", () => {
+    const found = scanCustomElementPartials('<my-card data-x="a > b">content</my-card>');
+    assertEquals(found.length, 1);
+    assertEquals(found[0].name, 'my-card');
+});
+
+Deno.test("scanCustomElementPartials: handles self-closing tags", () => {
+    const found = scanCustomElementPartials('<my-card /><my-other>x</my-other>');
+    assertEquals(found.length, 2);
+    assertEquals(found[0].name, 'my-card');
+    assertEquals(found[1].name, 'my-other');
+});
+
+// --- validateCustomElementUniqueness ---
+
+Deno.test("validateCustomElementUniqueness: no error for unique exported", () => {
+    const reg: CustomElementRegistry = new Map([
+        ['a.html', [{ name: 'my-card', exported: true }]],
+        ['b.html', [{ name: 'my-button', exported: true }]],
+    ]);
+    const errors = validateCustomElementUniqueness(reg);
+    assertEquals(errors.length, 0);
+});
+
+Deno.test("validateCustomElementUniqueness: no error for two unexported with same name", () => {
+    const reg: CustomElementRegistry = new Map([
+        ['a.html', [{ name: 'my-card', exported: false }]],
+        ['b.html', [{ name: 'my-card', exported: false }]],
+    ]);
+    const errors = validateCustomElementUniqueness(reg);
+    assertEquals(errors.length, 0);
+});
+
+Deno.test("validateCustomElementUniqueness: error when exported name also defined elsewhere unexported", () => {
+    const reg: CustomElementRegistry = new Map([
+        ['a.html', [{ name: 'my-card', exported: true }]],
+        ['b.html', [{ name: 'my-card', exported: false }]],
+    ]);
+    const errors = validateCustomElementUniqueness(reg);
+    assertEquals(errors.length > 0, true);
+    assertStringIncludes(errors[0].message, 'my-card');
+    assertStringIncludes(errors[0].message, 'unique');
+});
+
+Deno.test("validateCustomElementUniqueness: error when same name exported in two files", () => {
+    const reg: CustomElementRegistry = new Map([
+        ['a.html', [{ name: 'my-card', exported: true }]],
+        ['b.html', [{ name: 'my-card', exported: true }]],
+    ]);
+    const errors = validateCustomElementUniqueness(reg);
+    assertEquals(errors.length > 0, true);
+    assertStringIncludes(errors[0].message, 'my-card');
+});
+
+// --- compileDirectory: custom element partial resolution ---
+
+Deno.test("compileDirectory - same-file custom element call resolves without error", async () => {
+    const dir = await makeTempDir("ce_samefile");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-notice>Notice!</my-notice>
+        <article b-name="post">
+            <my-notice></my-notice>
+        </article>
+    `);
+    const { errors } = await compileDirectory(dir);
+    assertEquals(errors.filter(e => e.severity !== 'warning').length, 0);
+});
+
+Deno.test("compileDirectory - cross-file custom element call resolves with b-export", async () => {
+    const dir = await makeTempDir("ce_crossfile");
+    await writeFile(path.join(dir, "components.html"), `
+        <my-notice b-export>Notice!</my-notice>
+    `);
+    await writeFile(path.join(dir, "page.html"), `
+        <article b-name="post">
+            <my-notice></my-notice>
+        </article>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const nonWarnings = errors.filter(e => e.severity !== 'warning');
+    assertEquals(nonWarnings.length, 0, `unexpected errors: ${JSON.stringify(nonWarnings.map(e => e.message))}`);
+});
+
+Deno.test("compileDirectory - unresolved custom element emits warning, no error", async () => {
+    const dir = await makeTempDir("ce_unresolved");
+    await writeFile(path.join(dir, "page.html"), `
+        <article b-name="post">
+            <my-typo>Oops</my-typo>
+        </article>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const warnings = errors.filter(e => e.severity === 'warning');
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(warnings.length, 1);
+    assertStringIncludes(warnings[0].message, 'my-typo');
+    assertEquals(fatal.length, 0);
+});
+
+Deno.test("compileDirectory - cross-file custom element without b-export is unresolved", async () => {
+    const dir = await makeTempDir("ce_crossfile_noexport");
+    await writeFile(path.join(dir, "components.html"), `
+        <my-notice>Notice!</my-notice>
+    `);
+    await writeFile(path.join(dir, "page.html"), `
+        <article b-name="post">
+            <my-notice></my-notice>
+        </article>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const warnings = errors.filter(e => e.severity === 'warning');
+    assertEquals(warnings.length, 1);
+    assertStringIncludes(warnings[0].message, 'my-notice');
+});
+
+Deno.test("compileDirectory - exported custom element conflicts with another definition", async () => {
+    const dir = await makeTempDir("ce_uniqueness_violation");
+    await writeFile(path.join(dir, "a.html"), `
+        <my-card b-export>A</my-card>
+    `);
+    await writeFile(path.join(dir, "b.html"), `
+        <my-card>B</my-card>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length > 0, true);
+    assertStringIncludes(fatal[0].message, 'my-card');
+});
+
+// --- Stage 5: attribute conflict validation ---
+
+Deno.test("compileDirectory - error when caller and definition share an attribute name", async () => {
+    const dir = await makeTempDir("ce_attr_conflict");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-card class="def">A</my-card>
+        <article b-name="post">
+            <my-card class="caller"></my-card>
+        </article>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length > 0, true);
+    assertStringIncludes(fatal[0].message, 'class');
+});
+
+Deno.test("compileDirectory - no error when caller and definition have different attribute names", async () => {
+    const dir = await makeTempDir("ce_attr_no_conflict");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-card data-kind="info">A</my-card>
+        <article b-name="post">
+            <my-card class="caller"></my-card>
+        </article>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length, 0, `unexpected: ${JSON.stringify(fatal.map(e => e.message))}`);
+});
+
+Deno.test("compileDirectory - bind:foo on caller conflicts with foo on definition", async () => {
+    const dir = await makeTempDir("ce_attr_bind_conflict");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-card title="static">A</my-card>
+        <article b-name="post">
+            <my-card :title="x"></my-card>
+        </article>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length > 0, true);
+    assertStringIncludes(fatal[0].message, 'title');
 });

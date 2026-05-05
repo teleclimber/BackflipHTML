@@ -58,15 +58,21 @@ export async function buildContext(projectDir: string): Promise<ServerContext> {
 
 	const fatalErrors = errors.filter(e => e.severity === 'fatal');
 	const nonFatalErrors = errors.filter(e => e.severity === 'error');
+	const warnings = errors.filter(e => e.severity === 'warning');
 
 	if (fatalErrors.length > 0) {
 		for (const err of fatalErrors) console.error(err.message);
 		throw new Error(`Compilation failed with ${fatalErrors.length} fatal error(s)`);
 	}
-	
+
 	if (nonFatalErrors.length > 0) {
 		console.warn(`[Preview] ${nonFatalErrors.length} non-fatal error(s) found:`);
 		for (const err of nonFatalErrors) console.warn(`  ${err.message}`);
+	}
+
+	if (warnings.length > 0) {
+		console.warn(`[Preview] ${warnings.length} warning(s):`);
+		for (const warn of warnings) console.warn(`  ${warn.message}`);
 	}
 
 	const cssHrefs: string[] = [];

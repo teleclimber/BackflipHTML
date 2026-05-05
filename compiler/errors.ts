@@ -4,9 +4,9 @@ export class BackflipError extends Error {
 	col?: number;
 	endLine?: number;
 	endCol?: number;
-	severity: 'fatal' | 'error';
+	severity: 'fatal' | 'error' | 'warning';
 
-	constructor(message: string, loc?: { filename?: string, line?: number, col?: number, endLine?: number, endCol?: number, severity?: 'fatal' | 'error' }) {
+	constructor(message: string, loc?: { filename?: string, line?: number, col?: number, endLine?: number, endCol?: number, severity?: 'fatal' | 'error' | 'warning' }) {
 		const prefix = loc ? BackflipError.formatLoc(loc) : '';
 		super(prefix + message);
 		this.filename = loc?.filename;

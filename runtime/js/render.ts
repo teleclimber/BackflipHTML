@@ -4,7 +4,9 @@ export interface rfn  {
 }
 export interface RootRNode {
 	type: 'root',
-	nodes: RNode[]
+	nodes: RNode[],
+	customElement?: boolean,
+	definitionAttrNodes?: RNode[]
 }
 export interface RawRNode {
 	type: 'raw',
@@ -34,10 +36,14 @@ export interface SlotRNode {
 }
 export interface PartialRefRNode {
 	type: 'partial-ref',
-	partial: RootRNode,
-	wrapper: { open: string, close: string } | null,
+	partial?: RootRNode,
+	wrapper?: { open: string, close: string } | null,
 	slots: { [slotName: string]: RNode[] },
-	bindings: { name: string, data: rfn }[]
+	bindings: { name: string, data: rfn }[],
+	customElement?: boolean,
+	unresolved?: boolean,
+	callerTagName?: string,
+	callerOpenTag?: RNode[]
 }
 
 export type AttrRPart =
@@ -49,7 +55,8 @@ export interface AttrBindRNode {
 	tagOpen: string,
 	parts: AttrRPart[],
 	assetMap?: Record<string, string>,
-	selfClosing?: boolean
+	selfClosing?: boolean,
+	attrsOnly?: boolean
 }
 
 export type RNode = RawRNode | PrintRNode | ForRNode | IfRNode | SlotRNode | PartialRefRNode | AttrBindRNode;
@@ -140,6 +147,10 @@ export function escapeHtml(s: string): string {
 }
 
 function* streamRenderPartialRef(node: PartialRefRNode, ctx: any) :Generator<string> {
+	if (node.customElement) {
+		yield* streamRenderCustomElementRef(node, ctx);
+		return;
+	}
 	// Evaluate bindings in caller ctx, build child ctx
 	let childCtx = { ...ctx };
 	for( const binding of node.bindings ) {
@@ -153,11 +164,45 @@ function* streamRenderPartialRef(node: PartialRefRNode, ctx: any) :Generator<str
 	// Render the partial with child ctx and slot map
 	if (node.wrapper) {
 		yield node.wrapper.open;
-		yield* streamRenderRoot(node.partial, childCtx, slotMap);
+		yield* streamRenderRoot(node.partial!, childCtx, slotMap);
 		yield node.wrapper.close;
 	} else {
-		yield* streamRenderRoot(node.partial, childCtx, slotMap);
+		yield* streamRenderRoot(node.partial!, childCtx, slotMap);
 	}
+}
+
+function* streamRenderCustomElementRef(node: PartialRefRNode, ctx: any) :Generator<string> {
+	const tagName = node.callerTagName!;
+
+	if (node.unresolved) {
+		// Fallback: render as plain HTML — caller-side attrs only, default slot in caller ctx.
+		yield `<${tagName}`;
+		for (const n of node.callerOpenTag ?? []) yield* streamRender(n, ctx, undefined);
+		yield `>`;
+		const def = node.slots?.['default'];
+		if (def) for (const n of def) yield* streamRender(n, ctx, undefined);
+		yield `</${tagName}>`;
+		return;
+	}
+
+	// Bindings evaluated in caller ctx, applied to the child ctx that the body and the
+	// definition-side attrs see.
+	let childCtx = { ...ctx };
+	for (const binding of node.bindings) {
+		childCtx[binding.name] = execFn(binding.data, ctx);
+	}
+	const slotMap: SlotMap = {};
+	for (const [name, nodes] of Object.entries(node.slots)) {
+		slotMap[name] = { nodes, ctx };
+	}
+
+	// Single merged open tag: caller-side attrs in caller ctx, definition-side attrs in childCtx.
+	yield `<${tagName}`;
+	for (const n of node.callerOpenTag ?? []) yield* streamRender(n, ctx, undefined);
+	for (const n of node.partial!.definitionAttrNodes ?? []) yield* streamRender(n, childCtx, undefined);
+	yield `>`;
+	for (const n of node.partial!.nodes) yield* streamRender(n, childCtx, slotMap);
+	yield `</${tagName}>`;
 }
 
 function* streamRenderSlot(node: SlotRNode, slots: SlotMap | undefined) :Generator<string> {
@@ -178,7 +223,7 @@ function replaceAssetPaths(value: string, assetMap: Record<string, string>): str
 }
 
 function renderAttrBind(n: AttrBindRNode, ctx: any): string {
-	let out = n.tagOpen;
+	let out = n.attrsOnly ? '' : n.tagOpen;
 	for (const p of n.parts) {
 		if (p.type === 'static') {
 			out += p.raw;
@@ -196,6 +241,7 @@ function renderAttrBind(n: AttrBindRNode, ctx: any): string {
 			}
 		}
 	}
+	if (n.attrsOnly) return out;
 	return out + (n.selfClosing ? ' />' : '>');
 }
 

@@ -33,6 +33,9 @@ export interface RootTNode {
 	tnodes: TNode[],
 	loc?: SourceLoc,
 	exported?: boolean,
+	customElement?: boolean,
+	definitionAttrNames?: string[],  // effective attribute names on the definition's wrapping tag (custom element partials only)
+	definitionAttrNodes?: TNode[],   // attrs-only TNodes for the definition's wrapping tag (custom element partials only). Excludes the leading `<tagName` and trailing `>`. Renders the definition's attrs in childCtx at call sites.
 	meta?: PartialMeta
 }
 export interface RawTNode extends ChildTNode {
@@ -79,7 +82,12 @@ export interface PartialRefTNode extends ChildTNode {
 	slots: { [slotName: string]: TNode[] },            // 'default' for unnamed
 	slotLocs?: { [slotName: string]: SourceLoc },       // source locations for b-in attributes
 	bindings: PartialBinding[],
-	loc?: SourceLoc
+	loc?: SourceLoc,
+	customElement?: boolean,    // true when this came from a custom element call site (e.g. <my-card>)
+	callerOpenTag?: TNode[],    // for customElement calls: the call-site opening tag broken into TNodes (rendered in caller ctx).
+	callerTagName?: string,     // for customElement calls: the call-site tag name (= the partial name, but kept explicit for symmetry)
+	callerAttrNames?: string[], // for customElement calls: effective attribute names on the call-site tag (used for conflict validation)
+	unresolvedRaw?: string      // for customElement calls: the raw text of the call-site open tag, used as fallback if the partial can't be resolved
 }
 
 export interface CompiledFile {
@@ -89,6 +97,49 @@ export interface CompiledFile {
 export type PartialRegistry = Map<string, Set<string>>
 // key: relative file path e.g. "graphics/charts.html"
 // value: set of exported partial names in that file
+
+export interface CustomElementDef {
+	name: string;          // hyphenated tag name e.g. "my-card"
+	exported: boolean;     // has b-export attribute
+	line?: number;         // 1-based start line of the opening tag (best effort, from pre-scan)
+	col?: number;          // 1-based start col of the opening tag (best effort, from pre-scan)
+}
+
+export type CustomElementRegistry = Map<string, CustomElementDef[]>
+// key: relative file path
+// value: list of top-level custom element partial definitions in that file
+
+/**
+ * True when `name` is a hyphenated tag that should be treated as a custom element
+ * partial — i.e. it follows the HTML custom element naming rule (lowercase letter
+ * start, contains a hyphen) but is NOT a backflip directive tag (b-*).
+ */
+export function isCustomElementTagName(name: string): boolean {
+	if (!name) return false;
+	if (name.startsWith('b-')) return false;
+	return /^[a-z][a-z0-9]*-[a-z0-9-]*$/.test(name);
+}
+
+/**
+ * Given a tag's attrs, return the list of attribute names that will end up on the
+ * rendered HTML element (i.e. exclude backflip directives, but resolve b-bind:foo,
+ * :foo, and foo~ to their effective HTML attribute name `foo`).
+ */
+export function effectiveAttrNames(attrs: { name: string, value: string }[]): string[] {
+	const names: string[] = [];
+	for (const a of attrs) {
+		const n = a.name;
+		if (n === 'b-name' || n === 'b-export') continue;
+		if (n === 'b-if' || n === 'b-for' || n === 'b-else' || n === 'b-else-if') continue;
+		if (n === 'b-part' || n === 'b-slot' || n === 'b-in') continue;
+		if (n.startsWith('b-data:')) continue;
+		if (n.startsWith('b-bind:')) { names.push(n.slice('b-bind:'.length).replace(/~$/, '')); continue; }
+		if (n.startsWith(':')) { names.push(n.slice(1).replace(/~$/, '')); continue; }
+		if (n.endsWith('~')) { names.push(n.slice(0, -1)); continue; }
+		names.push(n);
+	}
+	return names;
+}
 
 export type AttrPart =
 	| { type: 'static'; raw: string }
@@ -100,6 +151,7 @@ export interface AttrBindTNode extends ChildTNode {
 	tagOpen: string   // e.g. `<a`
 	parts: AttrPart[]
 	selfClosing?: boolean
+	attrsOnly?: boolean   // when true, suppress tagOpen prefix and the trailing `>`/` />`. Used by custom element partials so their open-tag attrs can be merged into a single rendered tag.
 }
 
 export interface AssetRefTNode extends ChildTNode {
@@ -565,6 +617,68 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			return [node];
 		}
 
+		/**
+		 * Take the result of makeOpenTagNode and produce nodes that render only the
+		 * attribute portion of the tag — i.e. drop the leading `<tagName` and the
+		 * trailing `>` or ` />`. Used to assemble merged open tags for custom element
+		 * partials, where caller-side and definition-side attrs share one HTML element.
+		 *
+		 * The input may be:
+		 *   - a single RawTNode containing the full open tag string
+		 *   - a sequence of RawTNode + AssetRefTNode + RawTNode (case B in makeOpenTagNode)
+		 *   - a single AttrBindTNode (case C/D) — we set tagOpen='' and attrsOnly=true
+		 *   - a single empty RawTNode (b-unwrap case — shouldn't occur for custom elements)
+		 *
+		 * The returned nodes are new objects with `parent` set to `parent`. Original
+		 * TNodes are not mutated.
+		 */
+		function convertToAttrsOnly(openNodes: TNode[], tagName: string, parent: ParentTNode): TNode[] {
+			if (openNodes.length === 0) return [];
+
+			// Single AttrBindTNode case
+			if (openNodes.length === 1 && openNodes[0].type === 'attr-bind') {
+				const orig = openNodes[0] as AttrBindTNode;
+				const cloned: AttrBindTNode = {
+					type: 'attr-bind',
+					tagOpen: '',
+					parts: orig.parts,
+					parent,
+					attrsOnly: true,
+				};
+				return [cloned];
+			}
+
+			// Raw / asset-ref interleaved cases: strip `<tagName` from the very first raw
+			// chunk and `>` (or ` />`) from the very last raw chunk.
+			const result: TNode[] = openNodes.map(n => {
+				if (n.type === 'raw') return { type: 'raw', raw: (n as RawTNode).raw, parent } as RawTNode;
+				if (n.type === 'asset-ref') {
+					const a = n as AssetRefTNode;
+					const cloned: AssetRefTNode = { type: 'asset-ref', attrName: a.attrName, originalValue: a.originalValue, refs: a.refs, parent };
+					if (a.loc) cloned.loc = a.loc;
+					return cloned;
+				}
+				return n; // shouldn't happen for open-tag nodes
+			});
+
+			const first = result[0];
+			if (first && first.type === 'raw') {
+				const r = first as RawTNode;
+				const prefix = `<${tagName}`;
+				if (r.raw.startsWith(prefix)) r.raw = r.raw.slice(prefix.length);
+			}
+			const last = result[result.length - 1];
+			if (last && last.type === 'raw') {
+				const r = last as RawTNode;
+				if (r.raw.endsWith(' />')) r.raw = r.raw.slice(0, -3);
+				else if (r.raw.endsWith('/>')) r.raw = r.raw.slice(0, -2);
+				else if (r.raw.endsWith('>')) r.raw = r.raw.slice(0, -1);
+			}
+			// Drop the leading raw if it became empty (keeps node count tight)
+			const cleaned = result.filter((n, i) => !(n.type === 'raw' && (n as RawTNode).raw === '' && (i === 0 || i === result.length - 1)));
+			return cleaned.length > 0 ? cleaned : [{ type: 'raw', raw: '', parent } as RawTNode];
+		}
+
 		function findPrecedingIfInFile(cur: TNode, loc?: { filename?: string, line?: number, col?: number }): IfTNode {
 			if (cur.type === 'if') return cur;
 			if (cur.parent && 'tnodes' in cur.parent) {
@@ -609,7 +723,20 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 				return;
 			}
 
+			for (const flow of ['b-if', 'b-for', 'b-else-if', 'b-else'] as const) {
+				const a = tag.attrs.find(a => a.name === flow);
+				if (a) {
+					errors.push(new BackflipError(`${flow} is not allowed on a partial definition`, attrErrorLoc(tag, flow, filename)));
+				}
+			}
+
 			const partialName = bNameAttr.value;
+			if (compiledFile.partials.has(partialName)) {
+				errors.push(new BackflipError(
+					`partial "${partialName}" is already defined in this file`,
+					attrErrorLoc(tag, 'b-name', filename)
+				));
+			}
 			const tagSrcLoc = tag.sourceCodeLocation as { startOffset?: number; startLine?: number; startCol?: number } | null | undefined;
 			const partialRoot: RootTNode = { type: 'root', tnodes: [], meta: {
 				startOffset: tagSrcLoc?.startOffset ?? 0,
@@ -644,6 +771,130 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 					// Self-closing or void element: end offset is end of this tag
 					partialRoot.meta!.endOffset = (tagSrcLoc?.startOffset ?? 0) + raw.length;
 				}
+			}
+		}
+
+		function handleCustomElementDefinition(tag: StartTag, raw: string) {
+			// Pre-conditions: top level (tag_stack.length === 0), no b-name attr,
+			// and isCustomElementTagName(tag.tagName) — the dispatcher guarantees these.
+
+			for (const flow of ['b-if', 'b-for', 'b-else-if', 'b-else'] as const) {
+				const a = tag.attrs.find(a => a.name === flow);
+				if (a) {
+					errors.push(new BackflipError(`${flow} is not allowed on a partial definition`, attrErrorLoc(tag, flow, filename)));
+				}
+			}
+
+			const partialName = tag.tagName;
+			if (compiledFile.partials.has(partialName)) {
+				errors.push(new BackflipError(
+					`custom element partial <${partialName}> conflicts with another partial of the same name in this file`,
+					errorLoc(filename, tagLoc(tag))
+				));
+			}
+
+			const tagSrcLoc = tag.sourceCodeLocation as { startOffset?: number; endOffset?: number; startLine?: number; startCol?: number; endLine?: number; endCol?: number } | null | undefined;
+			const partialRoot: RootTNode = { type: 'root', tnodes: [], meta: {
+				startOffset: tagSrcLoc?.startOffset ?? 0,
+				endOffset: tagSrcLoc?.startOffset ?? 0, // updated on close
+				startLine: tagSrcLoc?.startLine ?? 1,
+				startCol: tagSrcLoc?.startCol ?? 1,
+				isDocumentLevel: false,
+			} };
+			if (tagSrcLoc?.startLine != null) {
+				partialRoot.loc = {
+					startLine: tagSrcLoc.startLine,
+					startCol: tagSrcLoc.startCol ?? 1,
+					startOffset: tagSrcLoc.startOffset ?? 0,
+					endLine: tagSrcLoc.endLine ?? tagSrcLoc.startLine,
+					endCol: tagSrcLoc.endCol ?? (tagSrcLoc.startCol ?? 1),
+					endOffset: tagSrcLoc.endOffset ?? (tagSrcLoc.startOffset ?? 0) + raw.length,
+				};
+			}
+			partialRoot.exported = tag.attrs.some(a => a.name === 'b-export');
+			partialRoot.customElement = true;
+			partialRoot.definitionAttrNames = effectiveAttrNames(tag.attrs);
+			compiledFile.partials.set(partialName, partialRoot);
+
+			currentPartialRoot = partialRoot;
+			currentPartialName = partialName;
+
+			// For custom element partials, the open tag is rendered by the call site (merged
+			// with caller-side attrs into one tag), so we keep it OFF of partialRoot.tnodes.
+			// We do still need to compile the open tag's attrs (in attrs-only form) and store
+			// them so the call-site renderer can emit them in childCtx.
+			const openNodes = makeOpenTagNode(tag, ['b-export'], partialRoot);
+			partialRoot.definitionAttrNodes = convertToAttrsOnly(openNodes, tag.tagName, partialRoot);
+			// Seed the body with an empty raw sentinel so subsequent text/tags get appended here.
+			const sentinel: RawTNode = { type: 'raw', raw: '', parent: partialRoot };
+			partialRoot.tnodes.push(sentinel);
+			cur_tnode = sentinel;
+			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+				tag_stack.push({ tag: tag.tagName });
+			} else {
+				partialRoot.meta!.endOffset = (tagSrcLoc?.startOffset ?? 0) + raw.length;
+			}
+		}
+
+		function handleCustomElementCall(tag: StartTag, raw: string) {
+			// Pre-conditions: not top-level, isCustomElementTagName(tag.tagName), no b-name, no b-part.
+			// Inside a partial (cur_tnode or currentPartialRoot must be set; the dispatcher's "skip
+			// outside partial" path runs before this).
+
+			const bindings: PartialBinding[] = [];
+			for (const attr of tag.attrs) {
+				if (attr.name.startsWith('b-data:')) {
+					const bindingName = attr.name.slice('b-data:'.length);
+					bindings.push({ name: bindingName, data: interpretBackcode(attr.value) });
+				}
+			}
+
+			const parent: ParentTNode = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
+
+			// Build call-site open-tag TNodes, then convert to attrs-only form. These will
+			// be evaluated in the caller's context and merged with the definition's attrs
+			// inside a single rendered tag at the call site.
+			const fullOpenTag = makeOpenTagNode(tag, ['b-export'], parent);
+			const callerOpenTag = convertToAttrsOnly(fullOpenTag, tag.tagName, parent);
+
+			const partialRef: PartialRefTNode = {
+				type: 'partial-ref',
+				file: null,                        // resolved post-parse via global registry
+				partialName: tag.tagName,
+				wrapper: null,                     // built at codegen time from callerOpenTag + definition's open tag
+				slots: { 'default': [] },
+				slotLocs: {},
+				bindings,
+				parent,
+				customElement: true,
+				callerOpenTag,
+				callerTagName: tag.tagName,
+				callerAttrNames: effectiveAttrNames(tag.attrs),
+				unresolvedRaw: raw,
+			};
+			const tagSrcLoc = tag.sourceCodeLocation as { startLine?: number; startCol?: number; startOffset?: number; endLine?: number; endCol?: number; endOffset?: number } | null | undefined;
+			if (tagSrcLoc?.startLine != null) {
+				partialRef.loc = {
+					startLine: tagSrcLoc.startLine,
+					startCol: tagSrcLoc.startCol ?? 1,
+					startOffset: tagSrcLoc.startOffset ?? 0,
+					endLine: tagSrcLoc.endLine ?? tagSrcLoc.startLine,
+					endCol: tagSrcLoc.endCol ?? (tagSrcLoc.startCol ?? 1),
+					endOffset: tagSrcLoc.endOffset ?? (tagSrcLoc.startOffset ?? 0) + raw.length,
+				};
+			}
+
+			pushNodeHere(partialRef);
+
+			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+				tag_stack.push({
+					tag: tag.tagName,
+					tnode: partialRef,
+					slotCollection: {
+						partialRef,
+						currentSlot: 'default'
+					}
+				});
 			}
 		}
 
@@ -913,6 +1164,11 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			const bNameAttr = tag.attrs.find(a => a.name === 'b-name');
 			if (bNameAttr) return handleBName(tag, raw, bNameAttr);
 
+			// Top-level custom element tag: treat as a partial definition
+			if (tag_stack.length === 0 && currentPartialRoot === null && isCustomElementTagName(tag.tagName)) {
+				return handleCustomElementDefinition(tag, raw);
+			}
+
 			// Track top-level elements that lack b-name
 			if (tag_stack.length === 0 && currentPartialRoot === null) {
 				unnamedTopLevel.push({ tagName: tag.tagName, loc: errorLoc(filename, tagLoc(tag)) });
@@ -938,6 +1194,13 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			// Track document-level tags inside partials
 			if (currentPartialRoot !== null && DOCUMENT_LEVEL_TAGS.has(tag.tagName)) {
 				currentPartialRoot.meta!.isDocumentLevel = true;
+			}
+
+			// Custom element call site (no b-for/b-if on the same tag — wrap with <b-unwrap b-for=...> instead).
+			// b-part precedence already won above; this slot only runs for plain custom element tags.
+			if (isCustomElementTagName(tag.tagName)) {
+				const hasFlowAttr = tag.attrs.some(a => a.name === 'b-for' || a.name === 'b-if' || a.name === 'b-else-if' || a.name === 'b-else');
+				if (!hasFlowAttr) return handleCustomElementCall(tag, raw);
 			}
 
 			// --- b-for / b-if / b-else-if / b-else ---
@@ -980,7 +1243,9 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 
 			// If we just closed the partial's top-level element
 			if (tag_stack.length === 0 && currentPartialRoot !== null) {
-				if (tag.tagName !== 'b-unwrap') {
+				// Custom element partials don't include the wrapping tag in the body —
+				// the open and close tags are reconstructed at the call site.
+				if (tag.tagName !== 'b-unwrap' && !currentPartialRoot.customElement) {
 					pushRawHere(raw);
 				}
 				// Record end offset of the partial
@@ -1039,6 +1304,12 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 				const parent = matchTag.tnode.parent;
 				if ('ifNode' in parent) {
 					cur_tnode = (parent as IfBranch).ifNode as unknown as TNode;
+				} else if (parent.type === 'root') {
+					// RootTNode has no `.parent`, so cur_tnode can't point at it directly —
+					// pushRaw on cur_tnode walks up via cur_tnode.parent. Anchor on the
+					// just-closed node instead; subsequent pushRaw creates siblings inside
+					// the root (since the closed node already lives in root.tnodes).
+					cur_tnode = matchTag.tnode;
 				} else {
 					cur_tnode = parent as TNode;
 				}
@@ -1206,9 +1477,14 @@ export function resolveAssetRefs(compiled: CompiledFile, assetMap: Map<string, s
 			tnodes: [],
 			...(root.loc ? { loc: root.loc } : {}),
 			...(root.exported !== undefined ? { exported: root.exported } : {}),
+			...(root.customElement !== undefined ? { customElement: root.customElement } : {}),
+			...(root.definitionAttrNames ? { definitionAttrNames: root.definitionAttrNames } : {}),
 			...(root.meta ? { meta: root.meta } : {}),
 		};
 		newRoot.tnodes = resolveTNodes(root.tnodes, newRoot, assetMap);
+		if (root.definitionAttrNodes) {
+			newRoot.definitionAttrNodes = resolveTNodes(root.definitionAttrNodes, newRoot, assetMap);
+		}
 		newPartials.set(name, newRoot);
 	}
 	return { partials: newPartials };
@@ -1294,6 +1570,11 @@ function resolveTNodes(tnodes: TNode[], parent: ParentTNode, assetMap: Map<strin
 				};
 				if (n.slotLocs) newNode.slotLocs = n.slotLocs;
 				if (n.loc) newNode.loc = n.loc;
+				if (n.customElement) newNode.customElement = true;
+				if (n.callerTagName) newNode.callerTagName = n.callerTagName;
+				if (n.callerAttrNames) newNode.callerAttrNames = n.callerAttrNames;
+				if (n.unresolvedRaw) newNode.unresolvedRaw = n.unresolvedRaw;
+				if (n.callerOpenTag) newNode.callerOpenTag = resolveTNodes(n.callerOpenTag, parent, assetMap);
 				result.push(newNode);
 				break;
 			}
@@ -1302,6 +1583,7 @@ function resolveTNodes(tnodes: TNode[], parent: ParentTNode, assetMap: Map<strin
 				const newParts: AttrPart[] = resolveAttrParts(n.parts, assetMap);
 				const newNode: AttrBindTNode = { type: 'attr-bind', tagOpen: n.tagOpen, parts: newParts, parent };
 				if (n.selfClosing) newNode.selfClosing = true;
+				if (n.attrsOnly) newNode.attrsOnly = true;
 				result.push(newNode);
 				break;
 			}

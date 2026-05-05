@@ -46,6 +46,10 @@ export function nodeToPhp(n: TNode | RootTNode, assetMap?: Map<string, string>):
 
 function rootToPhp(n: RootTNode, assetMap?: Map<string, string>): string {
 	const nodes = n.tnodes.map(nn => nodeToPhp(nn, assetMap)).join(',\n    ');
+	if (n.customElement && n.definitionAttrNodes) {
+		const defAttrs = n.definitionAttrNodes.map(nn => nodeToPhp(nn, assetMap)).join(',\n    ');
+		return `['type' => 'root', 'customElement' => true, 'definitionAttrNodes' => [\n    ${defAttrs}\n], 'nodes' => [\n    ${nodes}\n]]`;
+	}
 	return `['type' => 'root', 'nodes' => [\n    ${nodes}\n]]`;
 }
 
@@ -92,6 +96,10 @@ function slotToPhp(n: SlotTNode): string {
 }
 
 function partialRefToPhp(n: PartialRefTNode, assetMap?: Map<string, string>): string {
+	if (n.customElement) {
+		return customElementRefToPhp(n, assetMap);
+	}
+
 	const partialIdent = n.file === null
 		? '$' + sanitizeName(n.partialName)
 		: '$' + importAliasFor(n.file, n.partialName);
@@ -116,6 +124,41 @@ function partialRefToPhp(n: PartialRefTNode, assetMap?: Map<string, string>): st
 ]`;
 }
 
+function customElementRefToPhp(n: PartialRefTNode, assetMap?: Map<string, string>): string {
+	const tagName = n.callerTagName ?? n.partialName;
+	const callerOpenTag = (n.callerOpenTag ?? []).map(t => nodeToPhp(t, assetMap)).join(',\n        ');
+	const slots = Object.entries(n.slots)
+		.map(([name, tnodes]) => `'${name}' => [\n        ${tnodes.map(t => nodeToPhp(t, assetMap)).join(',\n        ')}\n    ]`)
+		.join(',\n    ');
+	const bindings = n.bindings
+		.map(b => `['name' => '${b.name}', 'data' => ${backcodeToPhp(b.data)}]`)
+		.join(',\n        ');
+
+	if (n.file === '__unresolved_custom_element__') {
+		return `['type' => 'partial-ref',
+    'customElement' => true,
+    'unresolved' => true,
+    'callerTagName' => '${escapeStr(tagName)}',
+    'callerOpenTag' => [\n        ${callerOpenTag}\n    ],
+    'slots' => [${slots ? ' ' + slots + ' ' : ''}],
+    'bindings' => [${bindings ? '\n        ' + bindings + '\n    ' : ''}]
+]`;
+	}
+
+	const partialIdent = n.file === null
+		? '$' + sanitizeName(n.partialName)
+		: '$' + importAliasFor(n.file, n.partialName);
+
+	return `['type' => 'partial-ref',
+    'customElement' => true,
+    'partial' => ${partialIdent},
+    'callerTagName' => '${escapeStr(tagName)}',
+    'callerOpenTag' => [\n        ${callerOpenTag}\n    ],
+    'slots' => [${slots ? ' ' + slots + ' ' : ''}],
+    'bindings' => [${bindings ? '\n        ' + bindings + '\n    ' : ''}]
+]`;
+}
+
 function attrBindToPhp(n: AttrBindTNode, assetMap?: Map<string, string>): string {
 	if (n.parts.some(p => p.type === 'asset')) {
 		throw new Error("unresolved asset AttrPart — call resolveAssetRefs() before code generation");
@@ -133,7 +176,8 @@ function attrBindToPhp(n: AttrBindTNode, assetMap?: Map<string, string>): string
 		assetMapStr = `, 'assetMap' => [${entries}]`;
 	}
 	const selfClosingStr = n.selfClosing ? ", 'selfClosing' => true" : '';
-	return `['type' => 'attr-bind', 'tagOpen' => '${escapeStr(n.tagOpen)}'${assetMapStr}${selfClosingStr}, 'parts' => [\n        ${parts}\n    ]]`;
+	const attrsOnlyStr = n.attrsOnly ? ", 'attrsOnly' => true" : '';
+	return `['type' => 'attr-bind', 'tagOpen' => '${escapeStr(n.tagOpen)}'${assetMapStr}${selfClosingStr}${attrsOnlyStr}, 'parts' => [\n        ${parts}\n    ]]`;
 }
 
 function escapeStr(s: string): string {
@@ -199,7 +243,7 @@ export function fileToPhpFile(file: CompiledFile, filePath: string, assetMap?: M
 	const crossFileRefs = new Map<string, Set<string>>();  // file → set of partial names
 	for (const root of file.partials.values()) {
 		for (const ref of collectPartialRefs(root)) {
-			if (ref.file !== null) {
+			if (ref.file !== null && ref.file !== '__unresolved_custom_element__') {
 				if (!crossFileRefs.has(ref.file)) crossFileRefs.set(ref.file, new Set());
 				crossFileRefs.get(ref.file)!.add(ref.partialName);
 			}

@@ -1,6 +1,6 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { compileFile, collectSlots, type CompiledFile, type CompileOptions, type PartialRegistry, type PartialRefTNode, type RootTNode, BackflipError } from './compiler.js';
+import { compileFile, collectSlots, isCustomElementTagName, type CompiledFile, type CompileOptions, type PartialRegistry, type PartialRefTNode, type RootTNode, type CustomElementRegistry, type CustomElementDef, BackflipError } from './compiler.js';
 
 export interface CompiledDirectory {
     files: Map<string, CompiledFile>  // key: relative file path e.g. "blog/general.html"
@@ -47,6 +47,92 @@ function scanExportedPartials(html: string): Set<string> {
         if (name) names.add(name);
     }
     return names;
+}
+
+/**
+ * Scan HTML source for top-level custom element partial definitions.
+ *
+ * A "custom element" here is a hyphenated tag name following the HTML custom element
+ * convention (lowercase letter start, contains '-'), excluding b-* directive tags.
+ * "Top-level" means the tag appears at depth 0 of the document — not nested inside
+ * any other element. The scan is best-effort and uses a small state machine that
+ * tracks tag depth, skips comments/CDATA/doctype, and respects quoted attribute values.
+ */
+export function scanCustomElementPartials(html: string): CustomElementDef[] {
+    const results: CustomElementDef[] = [];
+    let depth = 0;
+    let i = 0;
+    let line = 1, col = 1;
+
+    function advanceTo(target: number) {
+        while (i < target && i < html.length) {
+            if (html.charCodeAt(i) === 10) { line++; col = 1; }
+            else col++;
+            i++;
+        }
+    }
+
+    while (i < html.length) {
+        const c = html.charCodeAt(i);
+        if (c !== 60 /* '<' */) { advanceTo(i + 1); continue; }
+
+        // Comment
+        if (html.startsWith('<!--', i)) {
+            const end = html.indexOf('-->', i + 4);
+            advanceTo(end < 0 ? html.length : end + 3);
+            continue;
+        }
+        // Doctype / CDATA-like '<!...>'
+        if (html.startsWith('<!', i)) {
+            const end = html.indexOf('>', i);
+            advanceTo(end < 0 ? html.length : end + 1);
+            continue;
+        }
+        // Closing tag
+        if (html.startsWith('</', i)) {
+            const end = html.indexOf('>', i);
+            if (end < 0) break;
+            depth = Math.max(0, depth - 1);
+            advanceTo(end + 1);
+            continue;
+        }
+        // Opening tag (must be followed by a letter)
+        const next = html.charCodeAt(i + 1);
+        const isLetter = (next >= 65 && next <= 90) || (next >= 97 && next <= 122);
+        if (!isLetter) { advanceTo(i + 1); continue; }
+
+        const tagStart = i;
+        const tagStartLine = line, tagStartCol = col;
+
+        // Find end of tag, skipping over quoted attribute values
+        let j = i + 1;
+        let inQuote: number = 0;
+        while (j < html.length) {
+            const cc = html.charCodeAt(j);
+            if (inQuote) {
+                if (cc === inQuote) inQuote = 0;
+            } else {
+                if (cc === 34 /* " */ || cc === 39 /* ' */) inQuote = cc;
+                else if (cc === 62 /* > */) break;
+            }
+            j++;
+        }
+        if (j >= html.length) break;
+
+        const tagText = html.slice(tagStart + 1, j); // excludes '<' and '>'
+        const selfClosing = tagText.trimEnd().endsWith('/');
+        const nameMatch = tagText.match(/^([a-zA-Z][a-zA-Z0-9-]*)/);
+        const tagName = nameMatch ? nameMatch[1].toLowerCase() : '';
+
+        if (depth === 0 && isCustomElementTagName(tagName)) {
+            const exported = /\bb-export(?:\s|=|\/?>|$)/.test(tagText);
+            results.push({ name: tagName, exported, line: tagStartLine, col: tagStartCol });
+        }
+
+        advanceTo(j + 1);
+        if (!selfClosing) depth++;
+    }
+    return results;
 }
 
 /**
@@ -190,36 +276,69 @@ function validateTNode(
     if (tnode.type === 'partial-ref') {
         const ref = tnode as PartialRefTNode;
 
-        // --- Validate partial existence ---
-        if (ref.file === null) {
-            // Same-file reference
-            if (!ctx.compiledFile.partials.has(ref.partialName)) {
-                ctx.errors.push(new BackflipError(
-                    `b-part references partial "${ref.partialName}" which is not defined in this file`,
-                    errorLoc(ctx.sourceRelPath, ref.loc)
-                ));
-            }
-        } else {
-            // Cross-file reference
-            if (!ctx.registry.has(ref.file)) {
-                ctx.errors.push(new BackflipError(
-                    `b-part references file "${ref.file}" which does not exist in the directory`,
-                    errorLoc(ctx.sourceRelPath, ref.loc)
-                ));
-            } else {
-                const exportedNames = ctx.registry.get(ref.file)!;
-                if (!exportedNames.has(ref.partialName)) {
-                    const targetFile = ctx.allFiles.get(ref.file);
-                    const partialExistsInFile = targetFile?.partials.has(ref.partialName) ?? false;
+        // Custom element calls are resolved by resolveCustomElementCalls; the existence
+        // check has already happened (and a warning was emitted if unresolved). Skip the
+        // b-part existence check for these refs, but still validate slots below.
+        const isUnresolvedCustom = ref.customElement && ref.file === '__unresolved_custom_element__';
 
-                    if (partialExistsInFile) {
+        if (!ref.customElement) {
+            // --- Validate partial existence (b-part) ---
+            if (ref.file === null) {
+                // Same-file reference
+                if (!ctx.compiledFile.partials.has(ref.partialName)) {
+                    ctx.errors.push(new BackflipError(
+                        `b-part references partial "${ref.partialName}" which is not defined in this file`,
+                        errorLoc(ctx.sourceRelPath, ref.loc)
+                    ));
+                }
+            } else {
+                // Cross-file reference
+                if (!ctx.registry.has(ref.file)) {
+                    ctx.errors.push(new BackflipError(
+                        `b-part references file "${ref.file}" which does not exist in the directory`,
+                        errorLoc(ctx.sourceRelPath, ref.loc)
+                    ));
+                } else {
+                    const exportedNames = ctx.registry.get(ref.file)!;
+                    if (!exportedNames.has(ref.partialName)) {
+                        const targetFile = ctx.allFiles.get(ref.file);
+                        const partialExistsInFile = targetFile?.partials.has(ref.partialName) ?? false;
+
+                        if (partialExistsInFile) {
+                            ctx.errors.push(new BackflipError(
+                                `b-part references partial "${ref.partialName}" in file "${ref.file}", but that partial is not exported (missing b-export)`,
+                                errorLoc(ctx.sourceRelPath, ref.loc)
+                            ));
+                        } else {
+                            ctx.errors.push(new BackflipError(
+                                `b-part references partial "${ref.partialName}" in file "${ref.file}", but no partial named "${ref.partialName}" exists in that file`,
+                                errorLoc(ctx.sourceRelPath, ref.loc)
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        if (isUnresolvedCustom) {
+            // No target partial to validate against — recurse into slot contents and stop.
+            for (const slotNodes of Object.values(ref.slots)) {
+                for (const slotTNode of slotNodes) {
+                    validateTNode(slotTNode, ctx);
+                }
+            }
+            return;
+        }
+
+        // --- Validate attribute conflicts for custom element calls ---
+        if (ref.customElement && ref.file !== '__unresolved_custom_element__') {
+            const targetForAttrs = resolvePartial(ref, ctx);
+            if (targetForAttrs && targetForAttrs.customElement && targetForAttrs.definitionAttrNames && ref.callerAttrNames) {
+                const defNames = new Set(targetForAttrs.definitionAttrNames);
+                for (const callerName of ref.callerAttrNames) {
+                    if (defNames.has(callerName)) {
                         ctx.errors.push(new BackflipError(
-                            `b-part references partial "${ref.partialName}" in file "${ref.file}", but that partial is not exported (missing b-export)`,
-                            errorLoc(ctx.sourceRelPath, ref.loc)
-                        ));
-                    } else {
-                        ctx.errors.push(new BackflipError(
-                            `b-part references partial "${ref.partialName}" in file "${ref.file}", but no partial named "${ref.partialName}" exists in that file`,
+                            `attribute "${callerName}" appears on both the call site <${ref.callerTagName}> and the definition of custom element partial <${ref.partialName}>; merge of conflicting attributes is not supported`,
                             errorLoc(ctx.sourceRelPath, ref.loc)
                         ));
                     }
@@ -269,6 +388,134 @@ function validateTNode(
 }
 
 /**
+ * Find an exported custom element partial with this name in the registry.
+ * Returns the file path that defines it, or null.
+ */
+function findExportedCustomElement(
+    name: string,
+    registry: CustomElementRegistry
+): string | null {
+    for (const [file, defs] of registry) {
+        for (const def of defs) {
+            if (def.name === name && def.exported) return file;
+        }
+    }
+    return null;
+}
+
+/**
+ * Walk a TNode tree and call the visitor on every partial-ref node.
+ */
+function visitPartialRefs(
+    nodes: import('./compiler.ts').TNode[],
+    visit: (ref: PartialRefTNode) => void
+): void {
+    for (const n of nodes) {
+        if (n.type === 'partial-ref') {
+            visit(n as PartialRefTNode);
+            for (const slotNodes of Object.values((n as PartialRefTNode).slots)) {
+                visitPartialRefs(slotNodes, visit);
+            }
+        } else if (n.type === 'for') {
+            visitPartialRefs((n as import('./compiler.ts').ForTNode).tnodes, visit);
+        } else if (n.type === 'if') {
+            for (const branch of (n as import('./compiler.ts').IfTNode).branches) {
+                visitPartialRefs(branch.tnodes, visit);
+            }
+        }
+    }
+}
+
+/**
+ * Resolve custom element call sites (partial-ref with customElement: true) against
+ * same-file partials first, then the global exported custom-element registry.
+ *
+ * - Same-file: if the file defines a custom-element partial with the matching name,
+ *   leave file = null (same-file reference).
+ * - Cross-file: if an exported custom-element partial with this name exists in some
+ *   other file, set file to that file's path.
+ * - Unresolved: mark the ref's `file` to a sentinel that codegen will detect, and emit
+ *   a warning. Stage 6 codegen falls back to rendering the raw tag.
+ */
+function resolveCustomElementCalls(
+    files: Map<string, CompiledFile>,
+    customElementRegistry: CustomElementRegistry
+): BackflipError[] {
+    const warnings: BackflipError[] = [];
+
+    for (const [filePath, compiled] of files) {
+        for (const [, root] of compiled.partials) {
+            visitPartialRefs(root.tnodes, (ref) => {
+                if (!ref.customElement) return;
+                if (ref.file !== null) return; // already resolved (shouldn't happen at this stage)
+
+                const sameFilePartial = compiled.partials.get(ref.partialName);
+                if (sameFilePartial && sameFilePartial.customElement) {
+                    // Resolves to same-file definition; keep file = null
+                    return;
+                }
+
+                const exportedFile = findExportedCustomElement(ref.partialName, customElementRegistry);
+                if (exportedFile && exportedFile !== filePath) {
+                    ref.file = exportedFile;
+                    return;
+                }
+
+                // Unresolved — emit a warning. Codegen treats unresolvedRaw as the fallback.
+                ref.file = '__unresolved_custom_element__';
+                warnings.push(new BackflipError(
+                    `unknown custom element <${ref.partialName}> — no matching partial found in this file or among exported custom element partials. Treating as raw HTML.`,
+                    { filename: filePath, line: ref.loc?.startLine, col: ref.loc?.startCol, severity: 'warning' }
+                ));
+            });
+        }
+    }
+
+    return warnings;
+}
+
+/**
+ * Validate global uniqueness rules for custom element partials.
+ *
+ * Rule: Once a custom element partial name is exported anywhere in the directory,
+ * no other definition (exported or not) of that same name is allowed in any file.
+ * Two unexported definitions with the same name in different files are fine.
+ */
+export function validateCustomElementUniqueness(
+    customElementRegistry: CustomElementRegistry
+): BackflipError[] {
+    const errors: BackflipError[] = [];
+
+    // Group definitions by name across all files
+    const byName = new Map<string, { file: string, def: CustomElementDef }[]>();
+    for (const [file, defs] of customElementRegistry) {
+        for (const def of defs) {
+            const list = byName.get(def.name) ?? [];
+            list.push({ file, def });
+            byName.set(def.name, list);
+        }
+    }
+
+    for (const [name, occurrences] of byName) {
+        const exported = occurrences.filter(o => o.def.exported);
+        if (exported.length === 0) continue; // all unexported: same name across files is OK
+
+        if (occurrences.length > 1) {
+            // Conflict: at least one is exported and there are other definitions
+            const locs = occurrences.map(o => `${o.file}:${o.def.line ?? '?'}`).join(', ');
+            for (const o of occurrences) {
+                errors.push(new BackflipError(
+                    `custom element partial <${name}> is exported in one file but also defined elsewhere; an exported custom element partial must be unique across the project (defined in: ${locs})`,
+                    { filename: o.file, line: o.def.line, col: o.def.col }
+                ));
+            }
+        }
+    }
+
+    return errors;
+}
+
+/**
  * Compile all HTML template files in a directory.
  *
  * Pass 1: Build the PartialRegistry by scanning all .html files for b-export attributes.
@@ -283,6 +530,7 @@ export async function compileDirectory(dir: string, options?: CompileOptions): P
 
     const fileContents = new Map<string, string>();
     const registry: PartialRegistry = new Map();
+    const customElementRegistry: CustomElementRegistry = new Map();
 
     await Promise.all(relPaths.map(async (relPath) => {
         const absPath = path.join(dir, relPath);
@@ -290,7 +538,12 @@ export async function compileDirectory(dir: string, options?: CompileOptions): P
         fileContents.set(relPath, html);
         const exported = scanExportedPartials(html);
         registry.set(relPath, exported);
+        const customElements = scanCustomElementPartials(html);
+        customElementRegistry.set(relPath, customElements);
     }));
+
+    // Validate custom element partial uniqueness across the project
+    allErrors.push(...validateCustomElementUniqueness(customElementRegistry));
 
     // Cycle check: build dependency graph and DFS for cycles
     const depGraph = new Map<string, Set<string>>();
@@ -318,6 +571,11 @@ export async function compileDirectory(dir: string, options?: CompileOptions): P
     );
 
     const files = new Map<string, CompiledFile>(compiledPairs);
+
+    // Resolve custom element call sites against same-file partials and the global
+    // exported custom-element registry. Mutates partial-ref nodes in place. May emit
+    // warnings for unresolved hyphenated tags.
+    allErrors.push(...resolveCustomElementCalls(files, customElementRegistry));
 
     // Validate references and slots
     for (const [relPath, compiled] of compiledPairs) {

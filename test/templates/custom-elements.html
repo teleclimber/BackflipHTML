@@ -1,0 +1,43 @@
+<my-notice class="notice">Notice!</my-notice>
+
+<my-card class="card" b-export>
+    <h2>{{ title }}</h2>
+    <div class="body"><b-unwrap b-slot /></div>
+</my-card>
+
+<my-greeting>Hello, {{ name }}!</my-greeting>
+
+<b-unwrap b-name="caller_simple">
+    <my-notice></my-notice>
+</b-unwrap>
+
+<b-unwrap b-name="caller_with_attr">
+    <my-notice id="hi"></my-notice>
+</b-unwrap>
+
+<b-unwrap b-name="caller_card">
+    <my-card b-data:title="heading">
+        <p>{{ body }}</p>
+    </my-card>
+</b-unwrap>
+
+<b-unwrap b-name="caller_greeting">
+    <my-greeting b-data:name="who"></my-greeting>
+</b-unwrap>
+
+<b-unwrap b-name="caller_dyn_attr">
+    <my-notice :data-id="ident"></my-notice>
+</b-unwrap>
+
+<b-unwrap b-name="caller_in_for">
+    <b-unwrap b-for="who in names"><my-greeting b-data:name="who"></my-greeting></b-unwrap>
+</b-unwrap>
+
+<b-unwrap b-name="caller_conditional">
+    <b-unwrap b-if="show"><my-notice></my-notice></b-unwrap>
+    <b-unwrap b-else>nothing</b-unwrap>
+</b-unwrap>
+
+<b-unwrap b-name="caller_unknown">
+    <fancy-widget data-x="1">inside</fancy-widget>
+</b-unwrap>
