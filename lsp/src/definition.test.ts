@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import { deepStrictEqual, ok, strictEqual } from 'node:assert';
-import { findDefinition, findAssetDefinition } from './definition.js';
+import { findDefinition, findAssetDefinition, findCustomElementDefinition } from './definition.js';
 import { makeLoc, makeIndex } from './test-helpers.js';
 
 describe('findDefinition', () => {
@@ -67,6 +67,46 @@ describe('findDefinition', () => {
 				end: { line: 2, character: 24 },
 			},
 		});
+	});
+});
+
+describe('findCustomElementDefinition', () => {
+	const root = '/workspace';
+
+	it('finds the definition of a custom element partial in any file', () => {
+		const index = makeIndex(
+			[{
+				file: 'components.html', name: 'my-card',
+				loc: makeLoc(1, 1, 1, 9), exported: true, customElement: true,
+			}],
+			[],
+		);
+		const result = findCustomElementDefinition('my-card', index, root);
+		deepStrictEqual(result, {
+			uri: 'file:///workspace/components.html',
+			range: {
+				start: { line: 0, character: 0 },
+				end: { line: 0, character: 8 },
+			},
+		});
+	});
+
+	it('returns null for unknown custom element', () => {
+		const index = makeIndex([], []);
+		const result = findCustomElementDefinition('my-card', index, root);
+		strictEqual(result, null);
+	});
+
+	it('skips non-customElement partials with the same name', () => {
+		const index = makeIndex(
+			[{
+				file: 'page.html', name: 'my-thing',
+				loc: makeLoc(1, 1, 1, 12), exported: false, customElement: false,
+			}],
+			[],
+		);
+		const result = findCustomElementDefinition('my-thing', index, root);
+		strictEqual(result, null);
 	});
 });
 

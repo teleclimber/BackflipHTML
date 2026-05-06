@@ -21,11 +21,11 @@ import { analyzeCss, discoverCssFiles, type CssAnalysisResult, type PartialSourc
 import { discoverAssetFileInfos, collectAllAssetReferences, validateAssetFiles, buildAssetUsageReport, filterReport, renderAssetReportHtml } from '@backflip/assets';
 import { buildIndex, type ProjectIndex } from './index.js';
 import { errorsToDiagnostics } from './diagnostics.js';
-import { findDefinition, findAssetDefinition } from './definition.js';
+import { findDefinition, findAssetDefinition, findCustomElementDefinition } from './definition.js';
 import { findReferences, parseAssetRefAtCursor, findAssetReferences } from './references.js';
 import { getDocumentSymbols } from './symbols.js';
 import { parseBPartValue } from './parse-bpart.js';
-import { getHover, findElementsForSelector, findRulesForElement } from './hover.js';
+import { getHover, findElementsForSelector, findRulesForElement, findCustomElementTagAtCursor } from './hover.js';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import * as crypto from 'node:crypto';
@@ -295,6 +295,13 @@ connection.onDefinition((params: DefinitionParams) => {
 	if (assetDirs) {
 		const assetDef = findAssetDefinition(line, params.position.character, assetDirs);
 		if (assetDef) return assetDef;
+	}
+
+	// Check if cursor is on a custom element partial tag
+	const ceTag = findCustomElementTagAtCursor(line, params.position.character);
+	if (ceTag) {
+		const ceDef = findCustomElementDefinition(ceTag.tagName, projectIndex, templateRoot);
+		if (ceDef) return ceDef;
 	}
 
 	// Check if cursor is on a b-part attribute value

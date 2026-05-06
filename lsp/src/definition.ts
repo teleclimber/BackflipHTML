@@ -38,6 +38,36 @@ export function findDefinition(
 }
 
 /**
+ * Given a custom element partial tag name, find the definition location.
+ * Custom element partial names are globally unique, so no targetFile is needed.
+ */
+export function findCustomElementDefinition(
+	tagName: string,
+	index: ProjectIndex,
+	workspaceRoot: string,
+): Location | null {
+	const defs = index.partialDefs.get(tagName);
+	if (!defs || defs.length === 0) return null;
+	const def = defs.find(d => d.customElement);
+	if (!def || !def.loc) return null;
+
+	const uri = `file://${workspaceRoot}/${def.file}`;
+	return {
+		uri,
+		range: {
+			start: {
+				line: def.loc.startLine - 1,
+				character: def.loc.startCol - 1,
+			},
+			end: {
+				line: def.loc.endLine - 1,
+				character: def.loc.endCol - 1,
+			},
+		},
+	};
+}
+
+/**
  * Given a cursor position on an asset reference (@name/subpath),
  * resolve to the file location on disk.
  */

@@ -310,6 +310,142 @@ describe('getHover', () => {
 		});
 	});
 
+	describe('custom element partial', () => {
+		it('shows partial info on def site (open tag, same file)', () => {
+			const index = makeIndex(
+				[{
+					file: 'components.html', name: 'my-card',
+					loc: makeLoc(1, 1, 1, 10), exported: true, customElement: true,
+					slots: ['default', 'header'], freeVars: ['title'],
+				}],
+				[
+					{ file: 'page.html', partialName: 'my-card', targetFile: 'components.html', loc: makeLoc(3, 1, 3, 10) },
+				],
+			);
+			const doc = makeDoc(['<my-card b-export>', '  Body', '</my-card>']);
+			// Cursor on the open tag name
+			const result = getHover(doc, pos(0, 4), 'components.html', index);
+			const v = hoverValue(result);
+			ok(v.includes('Custom element partial'));
+			ok(v.includes('`<my-card>`'));
+			ok(v.includes('Exported'));
+			ok(v.includes('1 reference'));
+			ok(v.includes('`default`'));
+			ok(v.includes('`header`'));
+			ok(v.includes('`title`'));
+		});
+
+		it('shows partial info on call site (cross-file)', () => {
+			const index = makeIndex(
+				[{
+					file: 'components.html', name: 'my-card',
+					loc: makeLoc(1, 1, 1, 10), exported: true, customElement: true,
+					slots: ['default'], freeVars: ['title'],
+				}],
+				[],
+			);
+			const doc = makeDoc([
+				'<div b-name="page">',
+				'  <my-card></my-card>',
+				'</div>',
+			]);
+			// Cursor on the call site tag name
+			const result = getHover(doc, pos(1, 5), 'page.html', index);
+			const v = hoverValue(result);
+			ok(v.includes('Custom element partial'));
+			ok(v.includes('`<my-card>`'));
+			ok(v.includes('`components.html`'));
+			ok(v.includes('exported'));
+			ok(v.includes('`default`'));
+			ok(v.includes('`title`'));
+		});
+
+		it('shows call-site style on closing tag of def', () => {
+			const index = makeIndex(
+				[{
+					file: 'components.html', name: 'my-card',
+					loc: makeLoc(1, 1, 1, 10), exported: false, customElement: true,
+					slots: [], freeVars: [],
+				}],
+				[],
+			);
+			const doc = makeDoc(['<my-card>', '</my-card>']);
+			// Cursor on the closing tag of the def
+			const result = getHover(doc, pos(1, 4), 'components.html', index);
+			const v = hoverValue(result);
+			ok(v.includes('Custom element partial'));
+			ok(v.includes('`<my-card>`'));
+			// Closing tag is treated as a call site (not the def's open-tag location)
+			ok(!v.includes('Exported') && !v.includes('Local'));
+		});
+
+		it('shows call-site style on same-file call', () => {
+			const index = makeIndex(
+				[{
+					file: 'page.html', name: 'my-notice',
+					loc: makeLoc(1, 1, 1, 12), exported: false, customElement: true,
+					slots: [], freeVars: [],
+				}],
+				[],
+			);
+			const doc = makeDoc([
+				'<my-notice>Notice!</my-notice>',
+				'<div b-name="post">',
+				'  <my-notice></my-notice>',
+				'</div>',
+			]);
+			// Cursor on the call site (line 2)
+			const result = getHover(doc, pos(2, 6), 'page.html', index);
+			const v = hoverValue(result);
+			ok(v.includes('Custom element partial'));
+			ok(v.includes('`<my-notice>`'));
+			// Same-file call: no file info shown, no Exported/Local label
+			ok(!v.includes('Exported') && !v.includes('Local'));
+		});
+
+		it('returns null for plain HTML tag', () => {
+			const index = makeIndex([], []);
+			const doc = makeDoc(['<div>Hello</div>']);
+			const result = getHover(doc, pos(0, 2), 'page.html', index);
+			strictEqual(result, null);
+		});
+
+		it('returns null for unknown custom element tag', () => {
+			const index = makeIndex([], []);
+			const doc = makeDoc(['<unknown-tag></unknown-tag>']);
+			const result = getHover(doc, pos(0, 3), 'page.html', index);
+			strictEqual(result, null);
+		});
+
+		it('does not match b-* directive tags', () => {
+			const index = makeIndex(
+				[{
+					file: 'page.html', name: 'b-unwrap',
+					loc: makeLoc(1, 1, 1, 12), exported: false, customElement: true,
+					slots: [], freeVars: [],
+				}],
+				[],
+			);
+			const doc = makeDoc(['<b-unwrap></b-unwrap>']);
+			const result = getHover(doc, pos(0, 3), 'page.html', index);
+			strictEqual(result, null);
+		});
+
+		it('does not match a non-customElement partial that happens to have a hyphen in its b-name', () => {
+			const index = makeIndex(
+				[{
+					file: 'page.html', name: 'my-thing',
+					loc: makeLoc(1, 1, 1, 12), exported: false, customElement: false,
+					slots: [], freeVars: [],
+				}],
+				[],
+			);
+			const doc = makeDoc(['<my-thing></my-thing>']);
+			const result = getHover(doc, pos(0, 3), 'page.html', index);
+			strictEqual(result, null);
+		});
+	});
+
 	describe('no match', () => {
 		it('returns null for plain HTML without CSS analysis', () => {
 			const index = makeIndex([], []);

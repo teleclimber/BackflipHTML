@@ -5,10 +5,10 @@
 ## Features
 
 - **Diagnostics** — red underlines for template compilation errors
-- **Go to Definition** — click a `b-part` reference to jump to the `b-name` definition
+- **Go to Definition** — click a `b-part` reference to jump to the `b-name` definition, or click a custom element partial tag (e.g. `<my-card>`) to jump to its definition
 - **Find All References** — from a `b-name` definition, find all `b-part` usages
 - **Document Symbols** — lists partials in the editor outline/breadcrumbs
-- **Hover (HTML)** — hover over `b-part`, `b-name`, `b-in`, `b-slot`, `b-data:` attributes or HTML elements to see directive info and matching CSS rules
+- **Hover (HTML)** — hover over `b-part`, `b-name`, `b-in`, `b-slot`, `b-data:` attributes, custom element partial tags (e.g. `<my-card>`), or HTML elements to see directive info and matching CSS rules
 - **Hover (CSS)** — hover over a selector in a CSS file to see which partials contain matching elements
 
 ## How it works

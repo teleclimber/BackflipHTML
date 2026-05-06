@@ -32,6 +32,7 @@ export function getHover(
 		?? hoverBIn(doc, line, position, filePath, index)
 		?? hoverBSlot(doc, line, position, filePath, index)
 		?? hoverBData(line, position, filePath, index)
+		?? hoverCustomElement(line, position, filePath, index)
 		?? hoverCssRules(line, position, filePath, cssAnalysis, cssPaths)
 		?? null;
 }
@@ -403,6 +404,59 @@ function hoverBData(
 	}
 
 	return null;
+}
+
+// --- custom element partial hover (call site or definition site) ---
+
+export function findCustomElementTagAtCursor(
+	line: string, character: number,
+): { tagName: string; isClosing: boolean } | null {
+	const regex = /<(\/?)([a-z][a-zA-Z0-9-]*)/g;
+	let m: RegExpExecArray | null;
+	while ((m = regex.exec(line)) !== null) {
+		const tagName = m[2];
+		if (!tagName.includes('-')) continue;
+		if (tagName.startsWith('b-')) continue;
+		const nameStart = m.index + 1 + m[1].length; // after '<' or '</'
+		const nameEnd = nameStart + tagName.length;
+		if (character >= nameStart && character <= nameEnd) {
+			return { tagName, isClosing: m[1] === '/' };
+		}
+	}
+	return null;
+}
+
+function hoverCustomElement(
+	line: string, position: Position, filePath: string, index: ProjectIndex,
+): Hover | null {
+	const tagInfo = findCustomElementTagAtCursor(line, position.character);
+	if (!tagInfo) return null;
+	const { tagName, isClosing } = tagInfo;
+
+	const defs = index.partialDefs.get(tagName);
+	if (!defs || defs.length === 0) return null;
+	const def = defs.find(d => d.customElement);
+	if (!def) return null;
+
+	const isDefSite = !isClosing
+		&& def.file === filePath
+		&& def.loc != null
+		&& def.loc.startLine === position.line + 1;
+
+	const lines: string[] = [];
+	if (isDefSite) {
+		const refCount = countRefs(tagName, def.file, index);
+		const exportInfo = def.exported ? 'Exported' : 'Local';
+		lines.push(`**Custom element partial** \`<${tagName}>\``);
+		lines.push(`${exportInfo} · ${refCount} reference${refCount !== 1 ? 's' : ''}`);
+	} else {
+		const fileInfo = def.file !== filePath ? ` — \`${def.file}\`` : '';
+		const exportInfo = def.exported ? ' · exported' : '';
+		lines.push(`**Custom element partial** \`<${tagName}>\`${fileInfo}${exportInfo}`);
+	}
+	lines.push(formatSlots(def.slots));
+	lines.push(formatDataInfo(def));
+	return mkHover(lines);
 }
 
 // --- CSS selector hover (in stylesheet) ---

@@ -9,6 +9,7 @@ export interface PartialDef {
 	slots: string[];
 	freeVars: string[];
 	dataShape?: Map<string, DataShape>;
+	customElement: boolean;
 }
 
 export interface PartialRef {
@@ -40,6 +41,7 @@ export function buildIndex(directory: CompiledDirectory): ProjectIndex {
 				slots,
 				freeVars: inferFreeVars(root),
 				dataShape: inferDataShape(root),
+				customElement: root.customElement ?? false,
 			};
 			const existing = partialDefs.get(name);
 			if (existing) {
