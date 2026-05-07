@@ -58,8 +58,7 @@ Deno.test("Config: auto-cleans output directory when not empty", async () => {
     // Create a config file pointing to templates and the output dir
     const config = {
         root: TEMPLATES_DIR,
-        output: "out",
-        lang: "js",
+        output: [{ lang: "js", path: "out" }],
         assets: [{ name: "images", path: "images", prefix: "/img/" }],
     };
     await fs.writeFile(path.join(workDir, "backflip.json"), JSON.stringify(config));
@@ -82,6 +81,42 @@ Deno.test("Config: auto-cleans output directory when not empty", async () => {
 
         // New files should have been generated
         assertEquals(stdout.includes("Generated"), true, `Expected 'Generated' in stdout: ${stdout}`);
+    } finally {
+        await fs.rm(workDir, { recursive: true, force: true });
+    }
+});
+
+Deno.test("Config: compiles multiple outputs (js and php)", async () => {
+    const workDir = path.join(TMPDIR, "cli-test-multi");
+    const jsOut = path.join(workDir, "js-out");
+    const phpOut = path.join(workDir, "php-out");
+    await fs.mkdir(workDir, { recursive: true });
+
+    const assetsLink = path.join(workDir, "images");
+    try { await fs.symlink(ASSETS_DIR, assetsLink); } catch { /* may already exist */ }
+
+    const config = {
+        root: TEMPLATES_DIR,
+        output: [
+            { lang: "js", path: "js-out" },
+            { lang: "php", path: "php-out" },
+        ],
+        assets: [{ name: "images", path: "images", prefix: "/img/" }],
+    };
+    await fs.writeFile(path.join(workDir, "backflip.json"), JSON.stringify(config));
+
+    try {
+        const { code, stdout, stderr } = await runCli([], workDir);
+        assertEquals(code, 0, `Expected exit 0, got ${code}. stderr: ${stderr}`);
+
+        // Both output dirs should exist and contain files
+        const jsEntries = await fs.readdir(jsOut);
+        const phpEntries = await fs.readdir(phpOut);
+        assertEquals(jsEntries.length > 0, true, "js output dir should have files");
+        assertEquals(phpEntries.length > 0, true, "php output dir should have files");
+
+        assertEquals(stdout.includes("js"), true, `Expected 'js' in stdout: ${stdout}`);
+        assertEquals(stdout.includes("php"), true, `Expected 'php' in stdout: ${stdout}`);
     } finally {
         await fs.rm(workDir, { recursive: true, force: true });
     }

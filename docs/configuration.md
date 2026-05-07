@@ -5,8 +5,10 @@ Create a `backflip.json` file at the root of your project:
 ```json
 {
   "root": "src/templates",
-  "output": "dist",
-  "lang": "js",
+  "output": [{
+    "lang": "js",
+    "path": "dist/js"
+  }],
   "assets": [
     {
       "name": "images",
@@ -20,9 +22,10 @@ Create a `backflip.json` file at the root of your project:
 | Field    | Required | Description                                          |
 |----------|----------|------------------------------------------------------|
 | `root`   | Yes      | Relative path to the directory containing `.html` templates |
-| `output` | No       | Relative path to the output directory (used by CLI)  |
-| `lang`   | No       | Output language: `"js"` or `"php"` (used by CLI)    |
+| `output` | No       | Array of output entries; each entry has `lang` (`"js"` or `"php"`) and `path` (relative output directory). The CLI compiles for every entry. |
 | `assets` | No       | Array of asset directory configurations (see [Assets](assets.md)) |
+
+Each output entry produces a separate set of files in its own directory. You can target a single language or multiple at once. Output paths must be unique within the array.
 
 ## CLI
 
@@ -33,9 +36,9 @@ backflip              # compile using config
 backflip --check      # check for errors using config
 ```
 
-CLI arguments override config values when both are present.
+CLI arguments override config `output` entries when both are present (the CLI form `<input> <output> --lang <js|php>` defines a single-output run).
 
-When the output directory comes from `backflip.json`, it is automatically emptied before writing. When provided via CLI arguments, the output directory must be empty.
+When the output directories come from `backflip.json`, each is automatically emptied before writing. When provided via CLI arguments, the output directory must be empty.
 
 ## LSP
 

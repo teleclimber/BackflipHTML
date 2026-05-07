@@ -9,10 +9,14 @@ export interface AssetDirConfig {
 	prefix: string;
 }
 
+export interface OutputConfig {
+	lang: 'js' | 'php';
+	path: string;
+}
+
 export interface BackflipConfig {
 	root: string;
-	output?: string;
-	lang?: 'js' | 'php';
+	output?: OutputConfig[];
 	assets?: AssetDirConfig[];
 }
 
@@ -48,12 +52,34 @@ export async function loadConfig(dir: string): Promise<LoadConfigResult> {
 		throw new Error(`${CONFIG_FILENAME}: "root" is required and must be a string`);
 	}
 
-	if (obj.output !== undefined && typeof obj.output !== 'string') {
-		throw new Error(`${CONFIG_FILENAME}: "output" must be a string`);
+	const outputs: OutputConfig[] = [];
+	if (obj.output !== undefined) {
+		if (!Array.isArray(obj.output)) {
+			throw new Error(`${CONFIG_FILENAME}: "output" must be an array of { lang, path } objects`);
+		}
+		const seenPaths = new Set<string>();
+		for (let i = 0; i < obj.output.length; i++) {
+			const entry = obj.output[i];
+			if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+				throw new Error(`${CONFIG_FILENAME}: output[${i}] must be an object`);
+			}
+			const e = entry as Record<string, unknown>;
+			if (e.lang !== 'js' && e.lang !== 'php') {
+				throw new Error(`${CONFIG_FILENAME}: output[${i}].lang must be "js" or "php"`);
+			}
+			if (typeof e.path !== 'string') {
+				throw new Error(`${CONFIG_FILENAME}: output[${i}].path must be a string`);
+			}
+			if (seenPaths.has(e.path)) {
+				throw new Error(`${CONFIG_FILENAME}: duplicate output path "${e.path}"`);
+			}
+			seenPaths.add(e.path);
+			outputs.push({ lang: e.lang as 'js' | 'php', path: e.path });
+		}
 	}
 
-	if (obj.lang !== undefined && obj.lang !== 'js' && obj.lang !== 'php') {
-		throw new Error(`${CONFIG_FILENAME}: "lang" must be "js" or "php"`);
+	if ('lang' in obj) {
+		throw new Error(`${CONFIG_FILENAME}: "lang" is no longer supported; specify "lang" inside each "output" entry`);
 	}
 
 	const configErrors: string[] = [];
@@ -110,8 +136,7 @@ export async function loadConfig(dir: string): Promise<LoadConfigResult> {
 	}
 
 	const config: BackflipConfig = { root: obj.root };
-	if (obj.output !== undefined) config.output = obj.output as string;
-	if (obj.lang !== undefined) config.lang = obj.lang as 'js' | 'php';
+	if (outputs.length > 0) config.output = outputs;
 	if (validAssets.length > 0) {
 		config.assets = validAssets.map(e => ({
 			name: e.name as string,

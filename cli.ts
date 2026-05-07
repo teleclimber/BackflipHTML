@@ -1,7 +1,7 @@
 import { parseArgs } from '@std/cli/parse-args';
 import { join, dirname } from 'node:path';
 import { compileDirectory } from './compiler/partials.ts';
-import { loadConfig, resolveConfigRoot, resolveAssetDirs } from './compiler/config.ts';
+import { loadConfig, resolveConfigRoot, resolveAssetDirs, type OutputConfig } from './compiler/config.ts';
 import { fileToJsModule } from './compiler/generate/js/nodes2js.ts';
 import { fileToPhpFile } from './compiler/generate/php/nodes2php.ts';
 import { resolveAssetRefs } from './compiler/compiler.ts';
@@ -23,8 +23,8 @@ Options:
   --help              Show this help message
 
 Config (backflip.json):
-  { "root": "src/templates", "output": "dist", "lang": "js" }
-  CLI arguments override config values.`;
+  { "root": "src/templates", "output": [{ "lang": "js", "path": "dist" }] }
+  CLI arguments override config output entries.`;
 
 function printUsageAndExit(msg?: string): never {
     if (msg) console.error(msg);
@@ -51,9 +51,10 @@ if (args.help) {
 }
 
 let inputDir = args._[0] as string | undefined;
-let outputDir = args._[1] as string | undefined;
-let lang = args.lang as string | undefined;
-let outputDirFromConfig = false;
+const cliOutputDir = args._[1] as string | undefined;
+const cliLang = args.lang as string | undefined;
+let outputs: OutputConfig[] = [];
+let outputsFromConfig = false;
 
 // Load config as fallback for missing arguments
 const { config, errors: configErrors } = await loadConfig(Deno.cwd());
@@ -61,15 +62,22 @@ let assetMap: Map<string, string> | undefined;
 let assetDirs: Map<string, string> | undefined;
 if (config) {
     if (!inputDir) inputDir = resolveConfigRoot(Deno.cwd(), config);
-    if (!outputDir && config.output) {
-        outputDir = join(Deno.cwd(), config.output);
-        outputDirFromConfig = true;
-    }
-    if (!lang && config.lang) lang = config.lang;
     if (config.assets && config.assets.length > 0) {
         assetMap = new Map(config.assets.map(a => [a.name, a.prefix]));
         assetDirs = resolveAssetDirs(Deno.cwd(), config);
     }
+}
+if (cliOutputDir || cliLang) {
+    if (!cliOutputDir || !cliLang) {
+        // partial CLI override — handled below in generate-mode validation
+    } else if (cliLang !== 'js' && cliLang !== 'php') {
+        printUsageAndExit('--lang <js|php> is required');
+    } else {
+        outputs = [{ lang: cliLang, path: cliOutputDir }];
+    }
+} else if (config?.output) {
+    outputs = config.output.map(o => ({ lang: o.lang, path: join(Deno.cwd(), o.path) }));
+    outputsFromConfig = true;
 }
 for (const err of configErrors) {
     console.error(err);
@@ -143,28 +151,30 @@ if (args.check) {
 
     Deno.exit(report.summary.unusedAssets > 0 ? 1 : 0);
 } else {
-    if (!outputDir) {
-        printUsageAndExit('Missing <output-dir> argument (or set "output" in backflip.json)');
-    }
-    if (!lang || (lang !== 'js' && lang !== 'php')) {
-        printUsageAndExit('--lang <js|php> is required (or set "lang" in backflip.json)');
-    }
-
-    let empty: boolean;
-    try {
-        empty = await isEmptyDir(outputDir);
-    } catch {
-        // Directory doesn't exist — that's fine, we'll create it
-        empty = true;
+    if (outputs.length === 0) {
+        if (cliOutputDir && !cliLang) {
+            printUsageAndExit('--lang <js|php> is required');
+        }
+        if (!cliOutputDir && cliLang) {
+            printUsageAndExit('Missing <output-dir> argument');
+        }
+        printUsageAndExit('Missing output configuration (provide <output-dir> --lang or set "output" in backflip.json)');
     }
 
-    if (!empty) {
-        if (outputDirFromConfig) {
-            // When output dir comes from config, auto-clean it
-            await Deno.remove(outputDir, { recursive: true });
-        } else {
-            console.error(`Output directory is not empty: ${outputDir}`);
-            Deno.exit(1);
+    for (const out of outputs) {
+        let empty: boolean;
+        try {
+            empty = await isEmptyDir(out.path);
+        } catch {
+            empty = true;
+        }
+        if (!empty) {
+            if (outputsFromConfig) {
+                await Deno.remove(out.path, { recursive: true });
+            } else {
+                console.error(`Output directory is not empty: ${out.path}`);
+                Deno.exit(1);
+            }
         }
     }
 
@@ -200,21 +210,22 @@ if (args.check) {
         }
     }
 
-    let count = 0;
-    for (const [relPath, compiledFile] of result.files) {
-        const ext = lang === 'js' ? '.js' : '.php';
-        const outRelPath = relPath.replace(/\.html$/, ext);
-        const outPath = join(outputDir, outRelPath);
-        const resolved = assetMap ? resolveAssetRefs(compiledFile, assetMap) : compiledFile;
-        const generated = lang === 'js'
-            ? fileToJsModule(resolved, relPath, assetMap)
-            : fileToPhpFile(resolved, relPath, assetMap);
-        Deno.mkdirSync(dirname(outPath), { recursive: true });
-        Deno.writeTextFileSync(outPath, generated);
-        count++;
+    for (const out of outputs) {
+        let count = 0;
+        for (const [relPath, compiledFile] of result.files) {
+            const ext = out.lang === 'js' ? '.js' : '.php';
+            const outRelPath = relPath.replace(/\.html$/, ext);
+            const outPath = join(out.path, outRelPath);
+            const resolved = assetMap ? resolveAssetRefs(compiledFile, assetMap) : compiledFile;
+            const generated = out.lang === 'js'
+                ? fileToJsModule(resolved, relPath, assetMap)
+                : fileToPhpFile(resolved, relPath, assetMap);
+            Deno.mkdirSync(dirname(outPath), { recursive: true });
+            Deno.writeTextFileSync(outPath, generated);
+            count++;
+        }
+        console.log(`Generated ${count} ${out.lang} file${count !== 1 ? 's' : ''} to ${out.path}`);
     }
-
-    console.log(`Generated ${count} file${count !== 1 ? 's' : ''} to ${outputDir}`);
 
     if (nonFatalErrors.length > 0) {
         Deno.exit(1);

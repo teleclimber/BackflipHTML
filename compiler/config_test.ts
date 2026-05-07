@@ -30,19 +30,41 @@ Deno.test("loadConfig - returns parsed config with all fields", async () => {
 	const dir = await makeTempDir("all_fields");
 	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({
 		root: "src/templates",
-		output: "dist",
-		lang: "js"
+		output: [{ lang: "js", path: "dist" }]
 	}));
 	const { config, errors } = await loadConfig(dir);
-	assertEquals(config, { root: "src/templates", output: "dist", lang: "js" });
+	assertEquals(config, { root: "src/templates", output: [{ lang: "js", path: "dist" }] });
 	assertEquals(errors, []);
 });
 
-Deno.test("loadConfig - accepts lang php", async () => {
-	const dir = await makeTempDir("lang_php");
-	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({ root: ".", lang: "php" }));
+Deno.test("loadConfig - accepts multiple output entries", async () => {
+	const dir = await makeTempDir("multi_output");
+	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({
+		root: ".",
+		output: [
+			{ lang: "js", path: "dist/js" },
+			{ lang: "php", path: "dist/php" }
+		]
+	}));
 	const { config, errors } = await loadConfig(dir);
-	assertEquals(config, { root: ".", lang: "php" });
+	assertEquals(config, {
+		root: ".",
+		output: [
+			{ lang: "js", path: "dist/js" },
+			{ lang: "php", path: "dist/php" }
+		]
+	});
+	assertEquals(errors, []);
+});
+
+Deno.test("loadConfig - accepts output with lang php", async () => {
+	const dir = await makeTempDir("lang_php");
+	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({
+		root: ".",
+		output: [{ lang: "php", path: "out" }]
+	}));
+	const { config, errors } = await loadConfig(dir);
+	assertEquals(config, { root: ".", output: [{ lang: "php", path: "out" }] });
 	assertEquals(errors, []);
 });
 
@@ -64,10 +86,43 @@ Deno.test("loadConfig - throws when root is not a string", async () => {
 	await assertRejects(() => loadConfig(dir), Error, '"root" is required and must be a string');
 });
 
-Deno.test("loadConfig - throws on invalid lang value", async () => {
+Deno.test("loadConfig - throws on invalid output lang value", async () => {
 	const dir = await makeTempDir("bad_lang");
-	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({ root: ".", lang: "python" }));
-	await assertRejects(() => loadConfig(dir), Error, '"lang" must be "js" or "php"');
+	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({
+		root: ".", output: [{ lang: "python", path: "dist" }]
+	}));
+	await assertRejects(() => loadConfig(dir), Error, 'output[0].lang must be "js" or "php"');
+});
+
+Deno.test("loadConfig - throws when output is not an array", async () => {
+	const dir = await makeTempDir("output_str");
+	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({ root: ".", output: "dist" }));
+	await assertRejects(() => loadConfig(dir), Error, '"output" must be an array');
+});
+
+Deno.test("loadConfig - throws when output entry missing path", async () => {
+	const dir = await makeTempDir("output_no_path");
+	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({
+		root: ".", output: [{ lang: "js" }]
+	}));
+	await assertRejects(() => loadConfig(dir), Error, 'output[0].path must be a string');
+});
+
+Deno.test("loadConfig - throws on duplicate output paths", async () => {
+	const dir = await makeTempDir("output_dup");
+	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({
+		root: ".", output: [
+			{ lang: "js", path: "dist" },
+			{ lang: "php", path: "dist" }
+		]
+	}));
+	await assertRejects(() => loadConfig(dir), Error, 'duplicate output path "dist"');
+});
+
+Deno.test("loadConfig - throws when legacy top-level lang is used", async () => {
+	const dir = await makeTempDir("legacy_lang");
+	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({ root: ".", lang: "js" }));
+	await assertRejects(() => loadConfig(dir), Error, '"lang" is no longer supported');
 });
 
 Deno.test("loadConfig - throws when config is not an object", async () => {
