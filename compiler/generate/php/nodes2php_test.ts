@@ -227,6 +227,135 @@ Deno.test("partial-ref node with binding", () => {
 	assertMatch(php, /'fn' =>/);
 });
 
+Deno.test("partial-ref binding with literal true (bare boolean)", () => {
+	const root = makeRoot();
+	const node: PartialRefTNode = {
+		type: 'partial-ref',
+		file: null,
+		partialName: 'notice',
+		wrapper: null,
+		slots: {},
+		bindings: [{ name: 'premium', literal: true }],
+		parent: root
+	};
+	const php = nodeToPhp(node);
+	assertMatch(php, /'name' => 'premium'/);
+	assertMatch(php, /'literal' => true/);
+	// Should not include 'data' for a literal-only binding
+	assertEquals(/'data' =>/.test(php.split("'bindings' =>")[1] ?? ''), false);
+});
+
+Deno.test("partial-ref binding with literal false", () => {
+	const root = makeRoot();
+	const node: PartialRefTNode = {
+		type: 'partial-ref',
+		file: null,
+		partialName: 'notice',
+		wrapper: null,
+		slots: {},
+		bindings: [{ name: 'premium', literal: false }],
+		parent: root
+	};
+	const php = nodeToPhp(node);
+	assertMatch(php, /'name' => 'premium'/);
+	assertMatch(php, /'literal' => false/);
+});
+
+Deno.test("partial-ref binding with literal string value", () => {
+	const root = makeRoot();
+	const node: PartialRefTNode = {
+		type: 'partial-ref',
+		file: null,
+		partialName: 'notice',
+		wrapper: null,
+		slots: {},
+		bindings: [{ name: 'label', literal: 'hello' }],
+		parent: root
+	};
+	const php = nodeToPhp(node);
+	assertMatch(php, /'name' => 'label'/);
+	assertMatch(php, /'literal' => 'hello'/);
+});
+
+Deno.test("partial-ref binding with literal string escapes single quotes", () => {
+	const root = makeRoot();
+	const node: PartialRefTNode = {
+		type: 'partial-ref',
+		file: null,
+		partialName: 'notice',
+		wrapper: null,
+		slots: {},
+		bindings: [{ name: 'label', literal: "it's" }],
+		parent: root
+	};
+	const php = nodeToPhp(node);
+	assertMatch(php, /'literal' => 'it\\'s'/);
+});
+
+Deno.test("partial-ref binding with cast=bool", () => {
+	const root = makeRoot();
+	const node: PartialRefTNode = {
+		type: 'partial-ref',
+		file: null,
+		partialName: 'notice',
+		wrapper: null,
+		slots: {},
+		bindings: [{ name: 'premium', data: makeParsed('user.isPro'), cast: 'bool' }],
+		parent: root
+	};
+	const php = nodeToPhp(node);
+	assertMatch(php, /'name' => 'premium'/);
+	assertMatch(php, /'data' => \['fn' =>/);
+	assertMatch(php, /'cast' => 'bool'/);
+});
+
+Deno.test("partial-ref binding with cast=string", () => {
+	const root = makeRoot();
+	const node: PartialRefTNode = {
+		type: 'partial-ref',
+		file: null,
+		partialName: 'notice',
+		wrapper: null,
+		slots: {},
+		bindings: [{ name: 'label', data: makeParsed('count'), cast: 'string' }],
+		parent: root
+	};
+	const php = nodeToPhp(node);
+	assertMatch(php, /'name' => 'label'/);
+	assertMatch(php, /'data' => \['fn' =>/);
+	assertMatch(php, /'cast' => 'string'/);
+});
+
+Deno.test("custom-element partial-ref binding shapes coexist", () => {
+	const root = makeRoot();
+	const node: PartialRefTNode = {
+		type: 'partial-ref',
+		file: null,
+		partialName: 'my-card',
+		wrapper: null,
+		slots: {},
+		bindings: [
+			{ name: 'title', data: makeParsed('heading') },
+			{ name: 'premium', literal: true },
+			{ name: 'badge', literal: 'gold' },
+			{ name: 'active', data: makeParsed('isOn'), cast: 'bool' },
+			{ name: 'count', data: makeParsed('n'), cast: 'string' }
+		],
+		customElement: true,
+		callerTagName: 'my-card',
+		callerOpenTag: [],
+		parent: root
+	};
+	const php = nodeToPhp(node);
+	assertMatch(php, /'name' => 'title'/);
+	assertMatch(php, /'name' => 'premium'/);
+	assertMatch(php, /'literal' => true/);
+	assertMatch(php, /'name' => 'badge'/);
+	assertMatch(php, /'literal' => 'gold'/);
+	assertMatch(php, /'cast' => 'bool'/);
+	assertMatch(php, /'cast' => 'string'/);
+});
+
 Deno.test("sanitizeName replaces hyphens and dots", () => {
 	assertEquals(sanitizeName('pie-chart'), 'pie_chart');
 	assertEquals(sanitizeName('my.partial'), 'my_partial');

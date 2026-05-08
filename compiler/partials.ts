@@ -1,6 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { compileFile, collectSlots, isCustomElementTagName, type CompiledFile, type CompileOptions, type PartialRegistry, type PartialRefTNode, type RootTNode, type CustomElementRegistry, type CustomElementDef, BackflipError } from './compiler.js';
+import { compileFile, collectSlots, isCustomElementTagName, type CompiledFile, type CompileOptions, type PartialRegistry, type PartialRefTNode, type RootTNode, type CustomElementRegistry, type CustomElementDef, type PartialBinding, type AttrBindTNode, BackflipError } from './compiler.js';
+import { validateBAttrUsage } from './data-shape.js';
 
 export interface CompiledDirectory {
     files: Map<string, CompiledFile>  // key: relative file path e.g. "blog/general.html"
@@ -344,6 +345,101 @@ function validateTNode(
                     }
                 }
             }
+
+            // --- Validate b-attr declarations against caller-side attributes ---
+            if (targetForAttrs && targetForAttrs.customElement && targetForAttrs.bAttrs && targetForAttrs.bAttrs.length > 0) {
+                const bAttrs = targetForAttrs.bAttrs;
+                const bAttrNameSet = new Set(bAttrs.map(b => b.name));
+                const callerInfos = ref.callerAttrInfos ?? [];
+                const synthesized: PartialBinding[] = [];
+
+                // Reject b-data:NAME on caller when target declares b-attr:NAME.
+                for (const binding of ref.bindings) {
+                    if (bAttrNameSet.has(binding.name)) {
+                        ctx.errors.push(new BackflipError(
+                            `b-data:${binding.name} on <${ref.callerTagName}> conflicts with b-attr:${binding.name} declared on the partial definition; pass the value as an attribute instead`,
+                            errorLoc(ctx.sourceRelPath, ref.loc)
+                        ));
+                    }
+                }
+
+                // Determine whether a 'plain' caller attribute was written bare (just `name`)
+                // or with a value (`name="..."`, including empty `name=""`). parse5 reports
+                // `attr.value === ''` for both, but the source-location range distinguishes
+                // them: bare attrs have a location range equal to the name length.
+                const isBareAttr = (caller: { name: string; value: string; loc?: import('./compiler.ts').SourceLoc }): boolean => {
+                    if (caller.value !== '') return false;
+                    if (!caller.loc) return true; // best effort: no loc → assume bare since value is empty
+                    const span = caller.loc.endOffset - caller.loc.startOffset;
+                    return span === caller.name.length;
+                };
+
+                for (const bAttr of bAttrs) {
+                    const caller = callerInfos.find(c => c.name === bAttr.name);
+                    if (!caller) {
+                        ctx.errors.push(new BackflipError(
+                            `b-attr "${bAttr.name}" required by custom element <${ref.partialName}> but not provided at call site`,
+                            errorLoc(ctx.sourceRelPath, ref.loc)
+                        ));
+                        continue;
+                    }
+
+                    if (!bAttr.isBool) {
+                        // Non-bool b-attr
+                        if (caller.kind === 'plain' && isBareAttr(caller)) {
+                            ctx.errors.push(new BackflipError(
+                                `attribute "${bAttr.name}" on <${ref.callerTagName}> requires a string value (declared as non-bool b-attr in the partial definition)`,
+                                errorLoc(ctx.sourceRelPath, caller.loc ?? ref.loc)
+                            ));
+                            // Even though invalid, continue and don't synthesize this one.
+                            continue;
+                        }
+                        // Synthesize binding
+                        if (caller.kind === 'plain') {
+                            synthesized.push({ name: bAttr.name, literal: caller.value });
+                        } else {
+                            // expr
+                            synthesized.push({ name: bAttr.name, data: caller.expr!, cast: 'string' });
+                        }
+                    } else {
+                        // Bool b-attr
+                        if (caller.kind === 'plain' && !isBareAttr(caller)) {
+                            // premium="..." or premium="" — both warn (string-where-bool-expected)
+                            ctx.errors.push(new BackflipError(
+                                `attribute "${bAttr.name}" on <${ref.callerTagName}> has a string value but the partial definition declares it as bool; the value will be coerced to true`,
+                                { ...(errorLoc(ctx.sourceRelPath, caller.loc ?? ref.loc) ?? { filename: ctx.sourceRelPath }), severity: 'warning' }
+                            ));
+                            synthesized.push({ name: bAttr.name, literal: true });
+                        } else if (caller.kind === 'plain') {
+                            // bare attribute — premium
+                            synthesized.push({ name: bAttr.name, literal: true });
+                        } else {
+                            // expr — :premium="..."
+                            synthesized.push({ name: bAttr.name, data: caller.expr!, cast: 'bool' });
+                        }
+                    }
+                }
+
+                // Append synthesized bindings to ref.bindings.
+                if (synthesized.length > 0) {
+                    ref.bindings.push(...synthesized);
+                }
+
+                // Patch caller-side AttrBind isBoolean for .bool b-attrs so that the
+                // rendered attribute is suppressed when the bound expression is falsy.
+                const boolBAttrNames = new Set(bAttrs.filter(b => b.isBool).map(b => b.name));
+                if (boolBAttrNames.size > 0 && ref.callerOpenTag) {
+                    for (const n of ref.callerOpenTag) {
+                        if (n.type !== 'attr-bind') continue;
+                        const ab = n as AttrBindTNode;
+                        for (const part of ab.parts) {
+                            if (part.type === 'dynamic' && boolBAttrNames.has(part.name)) {
+                                part.isBoolean = true;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // --- Validate slots ---
@@ -581,6 +677,16 @@ export async function compileDirectory(dir: string, options?: CompileOptions): P
     for (const [relPath, compiled] of compiledPairs) {
         const refErrors = validateRefs(compiled, relPath, registry, files);
         allErrors.push(...refErrors);
+
+        // Validate b-attr usage inside each custom element partial body. Errors
+        // and warnings (returned by validateBAttrUsage) flow through alongside
+        // the other compile-time diagnostics — same channel as the unresolved
+        // custom-element warnings emitted earlier.
+        for (const [, root] of compiled.partials) {
+            if (root.customElement === true) {
+                allErrors.push(...validateBAttrUsage(root, relPath));
+            }
+        }
     }
 
     return { directory: { files }, errors: allErrors };

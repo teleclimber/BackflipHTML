@@ -6,7 +6,7 @@ import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { compileDirectory, scanCustomElementPartials, validateCustomElementUniqueness } from './partials.ts';
-import type { CustomElementRegistry } from './compiler.ts';
+import type { CustomElementRegistry, PartialRefTNode, AttrBindTNode, TNode } from './compiler.ts';
 
 // Use /tmp/claude-1000/ as the writable temp dir in this sandbox environment.
 // Deno.env.get('TMPDIR') may point to a read-only path; /tmp/claude-1000/ is always writable.
@@ -802,4 +802,416 @@ Deno.test("compileDirectory - bind:foo on caller conflicts with foo on definitio
     const fatal = errors.filter(e => e.severity !== 'warning');
     assertEquals(fatal.length > 0, true);
     assertStringIncludes(fatal[0].message, 'title');
+});
+
+// --- Stage 2: b-attr validation and binding synthesis ---
+
+/**
+ * Helper to find the first PartialRefTNode (custom element call) inside the
+ * first partial of a compiled file.
+ */
+function findFirstPartialRef(tnodes: TNode[]): PartialRefTNode | null {
+    for (const n of tnodes) {
+        if (n.type === 'partial-ref') return n as PartialRefTNode;
+        if (n.type === 'for') {
+            const r = findFirstPartialRef((n as { tnodes: TNode[] }).tnodes);
+            if (r) return r;
+        } else if (n.type === 'if') {
+            for (const branch of (n as { branches: { tnodes: TNode[] }[] }).branches) {
+                const r = findFirstPartialRef(branch.tnodes);
+                if (r) return r;
+            }
+        }
+    }
+    return null;
+}
+
+Deno.test("compileDirectory - b-attr required: omitted at call site is an error", async () => {
+    const dir = await makeTempDir("battr_missing");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-widget b-attr:premium>defn</my-widget>
+        <article b-name="post">
+            <my-widget></my-widget>
+        </article>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length > 0, true);
+    assertStringIncludes(fatal[0].message, 'premium');
+    assertStringIncludes(fatal[0].message, 'not provided');
+});
+
+Deno.test("compileDirectory - non-bool b-attr with bare attribute is an error", async () => {
+    const dir = await makeTempDir("battr_bare_nonbool");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-widget b-attr:premium>defn</my-widget>
+        <article b-name="post">
+            <my-widget premium></my-widget>
+        </article>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length > 0, true);
+    assertStringIncludes(fatal[0].message, 'premium');
+    assertStringIncludes(fatal[0].message, 'string value');
+});
+
+Deno.test("compileDirectory - bool b-attr with literal string warns", async () => {
+    const dir = await makeTempDir("battr_bool_string_warn");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-widget b-attr:premium.bool>defn</my-widget>
+        <article b-name="post">
+            <my-widget premium="x"></my-widget>
+        </article>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const warnings = errors.filter(e => e.severity === 'warning');
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length, 0, `unexpected fatals: ${JSON.stringify(fatal.map(e => e.message))}`);
+    assertEquals(warnings.length >= 1, true);
+    assertStringIncludes(warnings.map(w => w.message).join('|'), 'premium');
+    assertStringIncludes(warnings.map(w => w.message).join('|'), 'coerced to true');
+});
+
+Deno.test("compileDirectory - bool b-attr with empty string also warns", async () => {
+    const dir = await makeTempDir("battr_bool_empty_warn");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-widget b-attr:premium.bool>defn</my-widget>
+        <article b-name="post">
+            <my-widget premium=""></my-widget>
+        </article>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const warnings = errors.filter(e => e.severity === 'warning');
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length, 0, `unexpected fatals: ${JSON.stringify(fatal.map(e => e.message))}`);
+    assertEquals(warnings.length >= 1, true);
+    assertStringIncludes(warnings.map(w => w.message).join('|'), 'coerced to true');
+});
+
+Deno.test("compileDirectory - b-data:NAME conflicts with b-attr:NAME", async () => {
+    const dir = await makeTempDir("battr_bdata_conflict");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-widget b-attr:premium>defn</my-widget>
+        <article b-name="post">
+            <my-widget premium="ok" b-data:premium="someVar"></my-widget>
+        </article>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length > 0, true);
+    const msgs = fatal.map(e => e.message).join('|');
+    assertStringIncludes(msgs, 'b-data:premium');
+    assertStringIncludes(msgs, 'b-attr:premium');
+});
+
+Deno.test("compileDirectory - synthesized binding: bool bare → literal:true", async () => {
+    const dir = await makeTempDir("battr_synth_bool_bare");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-widget b-attr:premium.bool>defn</my-widget>
+        <article b-name="post">
+            <my-widget premium></my-widget>
+        </article>
+    `);
+    const { directory, errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length, 0, `unexpected fatals: ${JSON.stringify(fatal.map(e => e.message))}`);
+    const post = directory.files.get("page.html")!.partials.get("post")!;
+    const ref = findFirstPartialRef(post.tnodes);
+    if (!ref) throw new Error("no partial-ref");
+    const b = ref.bindings.find(b => b.name === 'premium');
+    if (!b) throw new Error("no premium binding");
+    assertEquals(b.literal, true);
+    assertEquals(b.data, undefined);
+});
+
+Deno.test("compileDirectory - synthesized binding: non-bool plain → literal:string", async () => {
+    const dir = await makeTempDir("battr_synth_nonbool_plain");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-widget b-attr:premium>defn</my-widget>
+        <article b-name="post">
+            <my-widget premium="gold"></my-widget>
+        </article>
+    `);
+    const { directory, errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length, 0, `unexpected fatals: ${JSON.stringify(fatal.map(e => e.message))}`);
+    const post = directory.files.get("page.html")!.partials.get("post")!;
+    const ref = findFirstPartialRef(post.tnodes);
+    if (!ref) throw new Error("no partial-ref");
+    const b = ref.bindings.find(b => b.name === 'premium');
+    if (!b) throw new Error("no premium binding");
+    assertEquals(b.literal, "gold");
+    assertEquals(b.data, undefined);
+});
+
+Deno.test("compileDirectory - synthesized binding: bool :expr → data + cast:bool", async () => {
+    const dir = await makeTempDir("battr_synth_bool_expr");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-widget b-attr:premium.bool>defn</my-widget>
+        <article b-name="post">
+            <my-widget :premium="isVip"></my-widget>
+        </article>
+    `);
+    const { directory, errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length, 0, `unexpected fatals: ${JSON.stringify(fatal.map(e => e.message))}`);
+    const post = directory.files.get("page.html")!.partials.get("post")!;
+    const ref = findFirstPartialRef(post.tnodes);
+    if (!ref) throw new Error("no partial-ref");
+    const b = ref.bindings.find(b => b.name === 'premium');
+    if (!b) throw new Error("no premium binding");
+    assertEquals(b.cast, 'bool');
+    assertEquals(typeof b.data, 'object');
+    assertEquals(b.literal, undefined);
+});
+
+Deno.test("compileDirectory - synthesized binding: non-bool :expr → data + cast:string", async () => {
+    const dir = await makeTempDir("battr_synth_nonbool_expr");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-widget b-attr:premium>defn</my-widget>
+        <article b-name="post">
+            <my-widget :premium="userTier"></my-widget>
+        </article>
+    `);
+    const { directory, errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length, 0, `unexpected fatals: ${JSON.stringify(fatal.map(e => e.message))}`);
+    const post = directory.files.get("page.html")!.partials.get("post")!;
+    const ref = findFirstPartialRef(post.tnodes);
+    if (!ref) throw new Error("no partial-ref");
+    const b = ref.bindings.find(b => b.name === 'premium');
+    if (!b) throw new Error("no premium binding");
+    assertEquals(b.cast, 'string');
+    assertEquals(typeof b.data, 'object');
+    assertEquals(b.literal, undefined);
+});
+
+Deno.test("compileDirectory - bool b-attr called as :expr patches AttrPart.isBoolean", async () => {
+    const dir = await makeTempDir("battr_bool_attrpart_patched");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-widget b-attr:premium.bool>defn</my-widget>
+        <article b-name="post">
+            <my-widget :premium="isVip"></my-widget>
+        </article>
+    `);
+    const { directory, errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length, 0, `unexpected fatals: ${JSON.stringify(fatal.map(e => e.message))}`);
+    const post = directory.files.get("page.html")!.partials.get("post")!;
+    const ref = findFirstPartialRef(post.tnodes);
+    if (!ref || !ref.callerOpenTag) throw new Error("no callerOpenTag");
+    let found = false;
+    for (const n of ref.callerOpenTag) {
+        if (n.type !== 'attr-bind') continue;
+        const ab = n as AttrBindTNode;
+        for (const part of ab.parts) {
+            if (part.type === 'dynamic' && part.name === 'premium') {
+                assertEquals(part.isBoolean, true);
+                found = true;
+            }
+        }
+    }
+    assertEquals(found, true, "expected dynamic AttrPart for premium with isBoolean=true");
+});
+
+Deno.test("compileDirectory - cross-file: b-attr validation and synthesis works across files", async () => {
+    const dir = await makeTempDir("battr_crossfile");
+    await writeFile(path.join(dir, "components.html"), `
+        <my-widget b-attr:premium b-attr:checked.bool b-export>
+            <p b-if="premium">Premium</p>
+        </my-widget>
+    `);
+    await writeFile(path.join(dir, "page.html"), `
+        <article b-name="post" b-export>
+            <my-widget premium="gold" :checked="isOn"></my-widget>
+        </article>
+    `);
+    const { directory, errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length, 0, `unexpected fatals: ${JSON.stringify(fatal.map(e => e.message))}`);
+
+    const post = directory.files.get("page.html")!.partials.get("post")!;
+    const ref = findFirstPartialRef(post.tnodes);
+    if (!ref) throw new Error("no partial-ref");
+    const premium = ref.bindings.find(b => b.name === 'premium');
+    if (!premium) throw new Error("missing premium binding");
+    assertEquals(premium.literal, "gold");
+    const checked = ref.bindings.find(b => b.name === 'checked');
+    if (!checked) throw new Error("missing checked binding");
+    assertEquals(checked.cast, 'bool');
+    assertEquals(typeof checked.data, 'object');
+});
+
+Deno.test("compileDirectory - cross-file: missing required b-attr reports error", async () => {
+    const dir = await makeTempDir("battr_crossfile_missing");
+    await writeFile(path.join(dir, "components.html"), `
+        <my-widget b-attr:premium b-export>defn</my-widget>
+    `);
+    await writeFile(path.join(dir, "page.html"), `
+        <article b-name="post">
+            <my-widget></my-widget>
+        </article>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length > 0, true);
+    assertStringIncludes(fatal.map(e => e.message).join('|'), 'premium');
+});
+
+Deno.test("compileDirectory - regression: class on both sides still errors when not a b-attr", async () => {
+    const dir = await makeTempDir("battr_regression_class");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-card class="def">A</my-card>
+        <article b-name="post">
+            <my-card class="caller"></my-card>
+        </article>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length > 0, true);
+    assertStringIncludes(fatal[0].message, 'class');
+});
+
+Deno.test("compileDirectory - b-attr-declared name on both sides does NOT trigger conflict error", async () => {
+    // Confirms the existing definition/caller name conflict loop excludes b-attr names.
+    const dir = await makeTempDir("battr_no_double_flag");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-widget b-attr:premium>defn</my-widget>
+        <article b-name="post">
+            <my-widget premium="gold"></my-widget>
+        </article>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length, 0, `unexpected fatals: ${JSON.stringify(fatal.map(e => e.message))}`);
+});
+
+Deno.test("compileDirectory - b-bind:NAME long form behaves like :NAME", async () => {
+    const dir = await makeTempDir("battr_bbind_longform");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-widget b-attr:premium.bool>defn</my-widget>
+        <article b-name="post">
+            <my-widget b-bind:premium="isVip"></my-widget>
+        </article>
+    `);
+    const { directory, errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length, 0, `unexpected fatals: ${JSON.stringify(fatal.map(e => e.message))}`);
+    const post = directory.files.get("page.html")!.partials.get("post")!;
+    const ref = findFirstPartialRef(post.tnodes);
+    if (!ref) throw new Error("no partial-ref");
+    const b = ref.bindings.find(b => b.name === 'premium');
+    if (!b) throw new Error("no premium binding");
+    assertEquals(b.cast, 'bool');
+    assertEquals(typeof b.data, 'object');
+});
+
+// --- Stage 3: b-attr usage validation in partial body ---
+
+Deno.test("compileDirectory - b-attr used as iterable in body is an error", async () => {
+    const dir = await makeTempDir("battr_iterable_error");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-widget b-attr:items.bool>
+            <ul><li b-for="item in items">{{ item }}</li></ul>
+        </my-widget>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length >= 1, true);
+    const msgs = fatal.map(e => e.message).join('|');
+    assertStringIncludes(msgs, 'items');
+    assertStringIncludes(msgs, 'object/array/iterable');
+});
+
+Deno.test("compileDirectory - b-attr used as object (member access) is an error", async () => {
+    const dir = await makeTempDir("battr_object_error");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-widget b-attr:user>
+            <p>{{ user.name }}</p>
+        </my-widget>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length >= 1, true);
+    const msgs = fatal.map(e => e.message).join('|');
+    assertStringIncludes(msgs, 'user');
+    assertStringIncludes(msgs, 'object/array/iterable');
+});
+
+Deno.test("compileDirectory - b-attr iterated with elementShape is an error", async () => {
+    const dir = await makeTempDir("battr_iter_element_error");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-widget b-attr:names>
+            <ul><li b-for="n in names">{{ n }}</li></ul>
+        </my-widget>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length >= 1, true);
+    assertStringIncludes(fatal.map(e => e.message).join('|'), 'names');
+});
+
+Deno.test("compileDirectory - bool b-attr printed in body emits a warning", async () => {
+    const dir = await makeTempDir("battr_bool_print_warn");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-widget b-attr:premium.bool>
+            <span>{{ premium }}</span>
+        </my-widget>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    const warnings = errors.filter(e => e.severity === 'warning');
+    assertEquals(fatal.length, 0, `unexpected fatals: ${JSON.stringify(fatal.map(e => e.message))}`);
+    assertEquals(warnings.length >= 1, true);
+    const wmsgs = warnings.map(w => w.message).join('|');
+    assertStringIncludes(wmsgs, 'premium');
+    assertStringIncludes(wmsgs, 'interpolation');
+});
+
+Deno.test("compileDirectory - string b-attr printed in body emits no warning or error", async () => {
+    const dir = await makeTempDir("battr_string_print_ok");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-widget b-attr:premium>
+            <span>{{ premium }}</span>
+        </my-widget>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    const warnings = errors.filter(e => e.severity === 'warning');
+    assertEquals(fatal.length, 0, `unexpected fatals: ${JSON.stringify(fatal.map(e => e.message))}`);
+    // The only allowable warning is the unresolved-custom-element fallback for
+    // `<my-widget>` calls — but here the partial defines it itself, so no warnings.
+    const battrWarnings = warnings.filter(w => w.message.includes('premium'));
+    assertEquals(battrWarnings.length, 0, `unexpected b-attr warnings: ${JSON.stringify(battrWarnings.map(e => e.message))}`);
+});
+
+Deno.test("compileDirectory - string b-attr used as boolean (b-if) emits no warning", async () => {
+    const dir = await makeTempDir("battr_string_as_bool_ok");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-widget b-attr:premium>
+            <p b-if="premium">premium content</p>
+        </my-widget>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    const warnings = errors.filter(e => e.severity === 'warning');
+    assertEquals(fatal.length, 0, `unexpected fatals: ${JSON.stringify(fatal.map(e => e.message))}`);
+    const battrWarnings = warnings.filter(w => w.message.includes('premium'));
+    assertEquals(battrWarnings.length, 0, `unexpected b-attr warnings: ${JSON.stringify(battrWarnings.map(e => e.message))}`);
+});
+
+Deno.test("compileDirectory - bool b-attr used as boolean (b-if) emits no warning (correct usage)", async () => {
+    const dir = await makeTempDir("battr_bool_as_bool_ok");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-widget b-attr:premium.bool>
+            <p b-if="premium">premium content</p>
+        </my-widget>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    const warnings = errors.filter(e => e.severity === 'warning');
+    assertEquals(fatal.length, 0, `unexpected fatals: ${JSON.stringify(fatal.map(e => e.message))}`);
+    const battrWarnings = warnings.filter(w => w.message.includes('premium'));
+    assertEquals(battrWarnings.length, 0, `unexpected b-attr warnings: ${JSON.stringify(battrWarnings.map(e => e.message))}`);
 });

@@ -416,6 +416,54 @@ Deno.test("custom-element: cross-file exported partial is callable from another 
 });
 
 // ---------------------------------------------------------------------------
+// battr.html — b-attr:* declared on custom element partial definitions.
+// Tests that bindings synthesized from caller-side attrs make it into childCtx
+// with the correct cast / literal handling, and that the merged tag renders
+// boolean attrs (suppressed when false, bare when true) and string attrs as
+// stringified values.
+// ---------------------------------------------------------------------------
+
+Deno.test("b-attr: :premium=true sets childCtx and renders bare premium", () => {
+    const html = normalize(renderRoot(getModule("battr.html").caller_premium_true, {}));
+    // Body's <span b-if="premium">PRO</span> is rendered → premium bound to true
+    assertStringIncludes(html, "<span>PRO</span>");
+    // Tag has bare `premium` because :premium evaluates true and isBoolean was patched
+    assertStringIncludes(html, "<my-widget premium");
+});
+
+Deno.test("b-attr: :premium=false sets childCtx and suppresses premium attr", () => {
+    const html = normalize(renderRoot(getModule("battr.html").caller_premium_false, {}));
+    // Body's <span b-if="!premium">FREE</span> is rendered → premium bound to false
+    assertStringIncludes(html, "<span>FREE</span>");
+    assertEquals(html.includes(" premium"), false);
+});
+
+Deno.test("b-attr: :premium=expr evaluates in caller ctx with bool cast", () => {
+    const html = normalize(renderRoot(getModule("battr.html").caller_premium_expr, { isPro: true }));
+    assertStringIncludes(html, "<span>PRO</span>");
+    const html2 = normalize(renderRoot(getModule("battr.html").caller_premium_expr, { isPro: 0 }));
+    // 0 cast to bool → false
+    assertStringIncludes(html2, "<span>FREE</span>");
+});
+
+Deno.test("b-attr: literal string label arrives as-is in childCtx", () => {
+    const html = normalize(renderRoot(getModule("battr.html").caller_label_literal, {}));
+    assertStringIncludes(html, "<em>hello</em>");
+});
+
+Deno.test("b-attr: expression label is cast to string in childCtx", () => {
+    const html = normalize(renderRoot(getModule("battr.html").caller_label_expr, { answer: 42 }));
+    // 42 cast to string → "42"
+    assertStringIncludes(html, "<em>42</em>");
+});
+
+Deno.test("b-attr: bare premium attribute synthesizes literal=true binding", () => {
+    const html = normalize(renderRoot(getModule("battr.html").caller_premium_bare, {}));
+    // The childCtx should receive premium=true (literal) so PRO renders.
+    assertStringIncludes(html, "<span>PRO</span>");
+});
+
+// ---------------------------------------------------------------------------
 // binds.html — :attr / b-bind:attr dynamic attribute binding
 // ---------------------------------------------------------------------------
 

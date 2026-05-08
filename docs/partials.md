@@ -170,6 +170,8 @@ The compiler reports errors for:
 - Default slot content provided to a partial that declares no default slot
 - Circular cross-file dependencies (A includes B which includes A)
 - `b-if`, `b-for`, `b-else`, or `b-else-if` on a partial *definition* (these are call-site directives only)
+- `b-attr` outside a custom element partial definition, with a value, with an unknown modifier, or with a conflicting plain attribute on the same tag (see [Declared attributes](#declared-attributes-b-attr))
+- A required `b-attr` not provided at the call site, or `b-data:NAME` colliding with a declared `b-attr:NAME`
 
 ---
 
@@ -251,9 +253,74 @@ This means you can mix dynamic attrs from both sides:
 
 renders as `<my-notice data-id="42" class="notice">…</my-notice>` when `ident` is `42` in the caller.
 
+### Declared attributes (`b-attr`)
+
+A custom element partial can declare attributes that double as context variables. On the definition tag, list each declared attribute with `b-attr:NAME`:
+
+```html
+<!-- definition -->
+<my-widget b-attr:label b-attr:premium.bool>
+    <h2>{{ label }}</h2>
+    <p b-if="premium">Premium content!</p>
+</my-widget>
+```
+
+Each `b-attr:NAME` makes `NAME` available as a context variable inside the partial body. The caller passes the value through a regular HTML attribute on the call tag — no `b-data:` needed:
+
+```html
+<my-widget label="Hello" :premium="user.isPremium"></my-widget>
+```
+
+The attribute is also rendered on the output tag (subject to the boolean rule below).
+
+#### The `.bool` modifier
+
+Without a modifier, the declared attribute is a **string** variable. Append `.bool` to declare it as a **boolean**:
+
+```html
+<my-widget b-attr:label b-attr:premium.bool>...</my-widget>
+```
+
+The modifier affects how the caller's value is coerced into the context (`String(...)` vs `Boolean(...)`) and how the rendered HTML attribute behaves: a boolean attribute is rendered as a bare `NAME` when truthy and omitted when falsy, mirroring the existing `b-bind:` boolean rule.
+
+#### Call-site forms
+
+For `b-attr:NAME` (string):
+
+| Call site | Context value | Rendered |
+|---|---|---|
+| `<my-widget>` (omitted) | — *compile error* | — |
+| `<my-widget premium>` (bare) | — *compile error* | — |
+| `<my-widget premium="hello">` | `"hello"` | `premium="hello"` |
+| `<my-widget :premium="expr">` | `String(expr)` | `premium="<value>"` |
+
+For `b-attr:NAME.bool` (boolean):
+
+| Call site | Context value | Rendered |
+|---|---|---|
+| `<my-widget>` (omitted) | — *compile error* | — |
+| `<my-widget premium>` (bare) | `true` | bare `premium` |
+| `<my-widget premium="hello">` | `true` (and **warning**: string used where bool expected) | `premium="hello"` |
+| `<my-widget :premium="true">` | `true` | bare `premium` |
+| `<my-widget :premium="false">` | `false` | omitted |
+| `<my-widget :premium="expr">` | `Boolean(expr)` | bare `premium` if true, omitted if false |
+
+`:NAME` and the long form `b-bind:NAME` behave identically.
+
+#### Rules and errors
+
+- `b-attr` is allowed only on a custom element partial **definition** tag. Using it on a `b-name` partial, on a call site, or on any nested element is a compile error.
+- `b-attr:NAME` cannot have a value: `b-attr:NAME="x"` is reserved for future use and is an error.
+- The only modifier currently supported is `.bool`.
+- A declared attribute name cannot also appear as a plain attribute on the same definition tag (`<my-widget b-attr:foo foo="x">` is an error).
+- The caller must provide every required `b-attr` on the call site; omitting one is an error.
+- Using `b-data:NAME` on the call site when the partial declares `b-attr:NAME` is an error — pass the value as an attribute instead.
+- Inside the partial body, a `b-attr` variable is a scalar (string or bool). Using it as an array, object, or iterable (`b-for`, member access, indexing) is a compile error.
+- A boolean `b-attr` used directly in a `{{ }}` interpolation produces a warning. Use a string `b-attr` if you need to print the value, or convert explicitly. (No warning for the reverse: a string `b-attr` used in a boolean context like `b-if`.)
+
 ### Conflicting attributes
 
-If the same attribute name appears on both the call site and the definition (e.g. both set `class`), the compiler reports an error. Special handling for class merging is not yet implemented.
+If the same attribute name appears on both the call site and the definition (e.g. both set `class`), the compiler reports an error. Special handling for class merging is not yet implemented. Names declared via `b-attr:NAME` are exempt from this check — that's the whole point of `b-attr`.
 
 ### Flow control on call sites
 

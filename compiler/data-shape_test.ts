@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import { inferFreeVars, inferDataShape, type DataShape } from './data-shape.ts';
+import { inferFreeVars, inferDataShape, validateBAttrUsage, type DataShape } from './data-shape.ts';
 import { interpretBackcode } from './backcode.ts';
 import type { RootTNode, TNode, ForTNode, IfTNode, PrintTNode, AttrBindTNode, PartialRefTNode, SlotTNode, RawTNode, ParentTNode } from './compiler.ts';
 import type { Parsed } from './backcode.ts';
@@ -552,4 +552,143 @@ Deno.test("inferDataShape: b-if condition + body vars tracked separately", () =>
 	assertUsages(shapes.get('isVisible')!, ['boolean']);
 	assertUsages(shapes.get('title')!, ['printed']);
 	assertUsages(shapes.get('fallback')!, ['printed']);
+});
+
+// --- b-attr pre-seeding (Stage 3) ---
+
+Deno.test("inferDataShape: pre-seeds b-attr non-bool variable as scalar 'string'", () => {
+	const root = makeRoot([makePrintReal('premium')]);
+	root.bAttrs = [{ name: 'premium', isBool: false }];
+	const shapes = inferDataShape(root);
+	const s = shapes.get('premium')!;
+	assertEquals(s.scalar, 'string');
+	assertUsages(s, ['printed']);
+});
+
+Deno.test("inferDataShape: pre-seeds b-attr bool variable as scalar 'bool'", () => {
+	const root = makeRoot([makePrintReal('premium')]);
+	root.bAttrs = [{ name: 'premium', isBool: true }];
+	const shapes = inferDataShape(root);
+	const s = shapes.get('premium')!;
+	assertEquals(s.scalar, 'bool');
+});
+
+Deno.test("inferDataShape: unused b-attr variable still appears in shape map", () => {
+	const root = makeRoot([
+		{ type: 'raw', raw: '<p>static</p>', parent: {} as ParentTNode } as RawTNode,
+	]);
+	root.bAttrs = [{ name: 'premium', isBool: true }, { name: 'label', isBool: false }];
+	const shapes = inferDataShape(root);
+	assertEquals(shapes.has('premium'), true);
+	assertEquals(shapes.get('premium')!.scalar, 'bool');
+	assertEquals(shapes.get('label')!.scalar, 'string');
+});
+
+Deno.test("inferDataShape: pre-seeds multiple b-attrs with mixed bool/string", () => {
+	const root = makeRoot([]);
+	root.bAttrs = [
+		{ name: 'premium', isBool: true },
+		{ name: 'label', isBool: false },
+		{ name: 'checked', isBool: true },
+	];
+	const shapes = inferDataShape(root);
+	assertEquals(shapes.get('premium')!.scalar, 'bool');
+	assertEquals(shapes.get('label')!.scalar, 'string');
+	assertEquals(shapes.get('checked')!.scalar, 'bool');
+});
+
+// --- validateBAttrUsage tests (Stage 3) ---
+
+Deno.test("validateBAttrUsage: returns no errors for partial without b-attrs", () => {
+	const root = makeRoot([makePrintReal('foo')]);
+	const errors = validateBAttrUsage(root, 'test.html');
+	assertEquals(errors.length, 0);
+});
+
+Deno.test("validateBAttrUsage: error when b-attr used as iterable (b-for)", () => {
+	const root = makeRoot([
+		makeForReal('item', 'items', [makePrintReal('item')]),
+	]);
+	root.bAttrs = [{ name: 'items', isBool: false }];
+	const errors = validateBAttrUsage(root, 'test.html');
+	assertEquals(errors.length, 1);
+	assertEquals(errors[0].severity, 'fatal');
+	assertEquals(errors[0].message.includes('items'), true);
+	assertEquals(errors[0].message.includes('object/array/iterable'), true);
+});
+
+Deno.test("validateBAttrUsage: error when b-attr used as object (member access)", () => {
+	const root = makeRoot([makePrintReal('user.name')]);
+	root.bAttrs = [{ name: 'user', isBool: false }];
+	const errors = validateBAttrUsage(root, 'test.html');
+	assertEquals(errors.length, 1);
+	assertEquals(errors[0].message.includes('user'), true);
+});
+
+Deno.test("validateBAttrUsage: error when b-attr is indexed", () => {
+	const root = makeRoot([makePrintReal('items[0]')]);
+	root.bAttrs = [{ name: 'items', isBool: false }];
+	const errors = validateBAttrUsage(root, 'test.html');
+	assertEquals(errors.length, 1);
+});
+
+Deno.test("validateBAttrUsage: warning when bool b-attr is printed", () => {
+	const root = makeRoot([makePrintReal('premium')]);
+	root.bAttrs = [{ name: 'premium', isBool: true }];
+	const errors = validateBAttrUsage(root, 'test.html');
+	assertEquals(errors.length, 1);
+	assertEquals(errors[0].severity, 'warning');
+	assertEquals(errors[0].message.includes('premium'), true);
+});
+
+Deno.test("validateBAttrUsage: no warning when string b-attr is printed", () => {
+	const root = makeRoot([makePrintReal('label')]);
+	root.bAttrs = [{ name: 'label', isBool: false }];
+	const errors = validateBAttrUsage(root, 'test.html');
+	assertEquals(errors.length, 0);
+});
+
+Deno.test("validateBAttrUsage: no warning when string b-attr is used as boolean", () => {
+	const root = makeRoot([
+		makeIfReal([{ conditionCode: 'premium', children: [] }]),
+	]);
+	root.bAttrs = [{ name: 'premium', isBool: false }];
+	const errors = validateBAttrUsage(root, 'test.html');
+	assertEquals(errors.length, 0);
+});
+
+Deno.test("validateBAttrUsage: no warning when bool b-attr is used as boolean (correct usage)", () => {
+	const root = makeRoot([
+		makeIfReal([{ conditionCode: 'premium', children: [] }]),
+	]);
+	root.bAttrs = [{ name: 'premium', isBool: true }];
+	const errors = validateBAttrUsage(root, 'test.html');
+	assertEquals(errors.length, 0);
+});
+
+Deno.test("validateBAttrUsage: no error/warning when b-attr passed to sub-partial", () => {
+	const root = makeRoot([
+		makePartialRefReal('card', [{ name: 'title', code: 'label' }]),
+	]);
+	root.bAttrs = [{ name: 'label', isBool: false }];
+	const errors = validateBAttrUsage(root, 'test.html');
+	assertEquals(errors.length, 0);
+});
+
+Deno.test("validateBAttrUsage: no warning when bool b-attr is used in attribute binding", () => {
+	const root = makeRoot([
+		makeAttrBindReal([{ name: 'title', code: 'premium' }]),
+	]);
+	root.bAttrs = [{ name: 'premium', isBool: true }];
+	const errors = validateBAttrUsage(root, 'test.html');
+	// Only 'attribute' usage (not 'printed'), so no warning per spec.
+	assertEquals(errors.length, 0);
+});
+
+Deno.test("validateBAttrUsage: error includes filename in loc", () => {
+	const root = makeRoot([makePrintReal('user.name')]);
+	root.bAttrs = [{ name: 'user', isBool: false }];
+	const errors = validateBAttrUsage(root, 'pages/index.html');
+	assertEquals(errors.length, 1);
+	assertEquals(errors[0].filename, 'pages/index.html');
 });

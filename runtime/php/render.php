@@ -67,6 +67,30 @@ function backflip_execFn(array $fnData, array $ctx): mixed
 }
 
 /**
+ * Evaluate a partial-ref binding to produce the value placed in childCtx.
+ *
+ * Three shapes are supported:
+ *   - literal: value as-is (string|bool, including false)
+ *   - data only: evaluate expression in caller ctx
+ *   - data + cast: evaluate then coerce to bool or string
+ */
+function backflip_evalBinding(array $binding, array $ctx): mixed
+{
+    if (array_key_exists('literal', $binding)) {
+        return $binding['literal'];
+    }
+    $value = backflip_execFn($binding['data'], $ctx);
+    $cast = $binding['cast'] ?? null;
+    if ($cast === 'bool') {
+        return backflip_isTruthy($value);
+    }
+    if ($cast === 'string') {
+        return (string) $value;
+    }
+    return $value;
+}
+
+/**
  * Render all nodes in $node['nodes'], join and return.
  */
 function backflip_renderRoot(array $node, array $ctx, array $slots = []): string
@@ -179,7 +203,7 @@ function backflip_streamRenderPartialRef(array $node, array $ctx): Generator
     // 1. Build child context: start with caller ctx, overlay bindings evaluated in caller ctx
     $childCtx = $ctx;
     foreach ($node['bindings'] as $binding) {
-        $childCtx[$binding['name']] = backflip_execFn($binding['data'], $ctx);
+        $childCtx[$binding['name']] = backflip_evalBinding($binding, $ctx);
     }
 
     // 2. Build slot map: capture nodes + caller ctx (NOT childCtx)
@@ -227,7 +251,7 @@ function backflip_streamRenderCustomElementRef(array $node, array $ctx): Generat
     // Bindings evaluated in caller ctx, applied to childCtx for body and definition attrs.
     $childCtx = $ctx;
     foreach ($node['bindings'] as $binding) {
-        $childCtx[$binding['name']] = backflip_execFn($binding['data'], $ctx);
+        $childCtx[$binding['name']] = backflip_evalBinding($binding, $ctx);
     }
     $slotMap = [];
     foreach ($node['slots'] as $slotName => $nodes) {

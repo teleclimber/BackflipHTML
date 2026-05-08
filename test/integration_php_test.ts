@@ -296,6 +296,44 @@ Deno.test("php: custom-element: unknown tag falls back to plain HTML", async () 
     );
 });
 
+// ---------------------------------------------------------------------------
+// battr.html — b-attr:* declared on custom element partial definitions
+// ---------------------------------------------------------------------------
+
+Deno.test("php: b-attr: :premium=true sets childCtx and renders bare premium", async () => {
+    const html = normalize(await renderPhp("battr.html", "caller_premium_true", {}));
+    assertStringIncludes(html, "<span>PRO</span>");
+    assertStringIncludes(html, "<my-widget premium");
+});
+
+Deno.test("php: b-attr: :premium=false sets childCtx and suppresses premium attr", async () => {
+    const html = normalize(await renderPhp("battr.html", "caller_premium_false", {}));
+    assertStringIncludes(html, "<span>FREE</span>");
+    assertEquals(html.includes(" premium"), false);
+});
+
+Deno.test("php: b-attr: :premium=expr evaluates in caller ctx with bool cast", async () => {
+    const html = normalize(await renderPhp("battr.html", "caller_premium_expr", { isPro: true }));
+    assertStringIncludes(html, "<span>PRO</span>");
+    const html2 = normalize(await renderPhp("battr.html", "caller_premium_expr", { isPro: 0 }));
+    assertStringIncludes(html2, "<span>FREE</span>");
+});
+
+Deno.test("php: b-attr: literal string label arrives as-is in childCtx", async () => {
+    const html = normalize(await renderPhp("battr.html", "caller_label_literal", {}));
+    assertStringIncludes(html, "<em>hello</em>");
+});
+
+Deno.test("php: b-attr: expression label is cast to string in childCtx", async () => {
+    const html = normalize(await renderPhp("battr.html", "caller_label_expr", { answer: 42 }));
+    assertStringIncludes(html, "<em>42</em>");
+});
+
+Deno.test("php: b-attr: bare premium attribute synthesizes literal=true binding", async () => {
+    const html = normalize(await renderPhp("battr.html", "caller_premium_bare", {}));
+    assertStringIncludes(html, "<span>PRO</span>");
+});
+
 Deno.test("php: custom-element: cross-file exported partial is callable from another file", async () => {
     assertEquals(
         normalize(await renderPhp("ce-consumer.html", "cross_file_card", { heading: "Hi", body: "Lorem" })),

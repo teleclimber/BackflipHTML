@@ -255,6 +255,135 @@ Deno.test("partial-ref node with binding", () => {
 	assertMatch(js, /fn:/);
 });
 
+Deno.test("partial-ref binding with literal true (bare boolean)", () => {
+	const root = makeRoot();
+	const node: PartialRefTNode = {
+		type: 'partial-ref',
+		file: null,
+		partialName: 'notice',
+		wrapper: null,
+		slots: {},
+		bindings: [{ name: 'premium', literal: true }],
+		parent: root
+	};
+	const js = nodeToJS(node);
+	assertMatch(js, /name:\s*'premium'/);
+	assertMatch(js, /literal:\s*true/);
+	// Should not have data: for a literal-only binding
+	assertEquals(/data:/.test(js.split('bindings:')[1] ?? ''), false);
+});
+
+Deno.test("partial-ref binding with literal false", () => {
+	const root = makeRoot();
+	const node: PartialRefTNode = {
+		type: 'partial-ref',
+		file: null,
+		partialName: 'notice',
+		wrapper: null,
+		slots: {},
+		bindings: [{ name: 'premium', literal: false }],
+		parent: root
+	};
+	const js = nodeToJS(node);
+	assertMatch(js, /name:\s*'premium'/);
+	assertMatch(js, /literal:\s*false/);
+});
+
+Deno.test("partial-ref binding with literal string value", () => {
+	const root = makeRoot();
+	const node: PartialRefTNode = {
+		type: 'partial-ref',
+		file: null,
+		partialName: 'notice',
+		wrapper: null,
+		slots: {},
+		bindings: [{ name: 'label', literal: "hello" }],
+		parent: root
+	};
+	const js = nodeToJS(node);
+	assertMatch(js, /name:\s*'label'/);
+	assertMatch(js, /literal:\s*'hello'/);
+});
+
+Deno.test("partial-ref binding with literal string escapes single quotes", () => {
+	const root = makeRoot();
+	const node: PartialRefTNode = {
+		type: 'partial-ref',
+		file: null,
+		partialName: 'notice',
+		wrapper: null,
+		slots: {},
+		bindings: [{ name: 'label', literal: "it's" }],
+		parent: root
+	};
+	const js = nodeToJS(node);
+	assertMatch(js, /literal:\s*'it\\'s'/);
+});
+
+Deno.test("partial-ref binding with cast=bool", () => {
+	const root = makeRoot();
+	const node: PartialRefTNode = {
+		type: 'partial-ref',
+		file: null,
+		partialName: 'notice',
+		wrapper: null,
+		slots: {},
+		bindings: [{ name: 'premium', data: makeParsed('user.isPro'), cast: 'bool' }],
+		parent: root
+	};
+	const js = nodeToJS(node);
+	assertMatch(js, /name:\s*'premium'/);
+	assertMatch(js, /data:\s*\{\s*fn:/);
+	assertMatch(js, /cast:\s*'bool'/);
+});
+
+Deno.test("partial-ref binding with cast=string", () => {
+	const root = makeRoot();
+	const node: PartialRefTNode = {
+		type: 'partial-ref',
+		file: null,
+		partialName: 'notice',
+		wrapper: null,
+		slots: {},
+		bindings: [{ name: 'label', data: makeParsed('count'), cast: 'string' }],
+		parent: root
+	};
+	const js = nodeToJS(node);
+	assertMatch(js, /name:\s*'label'/);
+	assertMatch(js, /data:\s*\{\s*fn:/);
+	assertMatch(js, /cast:\s*'string'/);
+});
+
+Deno.test("custom-element partial-ref binding shapes coexist", () => {
+	const root = makeRoot();
+	const node: PartialRefTNode = {
+		type: 'partial-ref',
+		file: null,
+		partialName: 'my-card',
+		wrapper: null,
+		slots: {},
+		bindings: [
+			{ name: 'title', data: makeParsed('heading') },
+			{ name: 'premium', literal: true },
+			{ name: 'badge', literal: 'gold' },
+			{ name: 'active', data: makeParsed('isOn'), cast: 'bool' },
+			{ name: 'count', data: makeParsed('n'), cast: 'string' }
+		],
+		customElement: true,
+		callerTagName: 'my-card',
+		callerOpenTag: [],
+		parent: root
+	};
+	const js = nodeToJS(node);
+	assertMatch(js, /name:\s*'title'/);
+	assertMatch(js, /name:\s*'premium'/);
+	assertMatch(js, /literal:\s*true/);
+	assertMatch(js, /name:\s*'badge'/);
+	assertMatch(js, /literal:\s*'gold'/);
+	assertMatch(js, /cast:\s*'bool'/);
+	assertMatch(js, /cast:\s*'string'/);
+});
+
 Deno.test("partial-ref with cross-file reference uses import alias", () => {
 	const root = makeRoot();
 	const node: PartialRefTNode = {

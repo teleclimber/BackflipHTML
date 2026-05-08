@@ -96,6 +96,24 @@ function slotToJS(n: SlotTNode) :string {
 	return `{ type: 'slot', name: ${name} }`;
 }
 
+function bindingToJS(b: PartialBinding): string {
+	const parts: string[] = [`name: '${escapeStr(b.name)}'`];
+	if (b.data !== undefined) {
+		parts.push(`data: ${backcodeToJS(b.data)}`);
+	}
+	if (b.literal !== undefined) {
+		if (typeof b.literal === 'boolean') {
+			parts.push(`literal: ${b.literal ? 'true' : 'false'}`);
+		} else {
+			parts.push(`literal: '${escapeStr(b.literal)}'`);
+		}
+	}
+	if (b.cast !== undefined) {
+		parts.push(`cast: '${b.cast}'`);
+	}
+	return `{ ${parts.join(', ')} }`;
+}
+
 function partialRefToJS(n: PartialRefTNode, assetMap?: Map<string, string>) :string {
 	if (n.customElement) {
 		return customElementRefToJS(n, assetMap);
@@ -113,9 +131,7 @@ function partialRefToJS(n: PartialRefTNode, assetMap?: Map<string, string>) :str
 		.map(([name, tnodes]) => `'${name}': [\n${tnodes.map(t => nodeToJS(t, assetMap)).join(',\n')}\n]`)
 		.join(',\n');
 
-	const bindings = n.bindings
-		.map(b => `{ name: '${b.name}', data: ${backcodeToJS(b.data)} }`)
-		.join(',\n');
+	const bindings = n.bindings.map(bindingToJS).join(',\n');
 
 	return `{ type: 'partial-ref',
 	partial: ${partialIdent},
@@ -131,9 +147,7 @@ function customElementRefToJS(n: PartialRefTNode, assetMap?: Map<string, string>
 	const slots = Object.entries(n.slots)
 		.map(([name, tnodes]) => `'${name}': [\n${tnodes.map(t => nodeToJS(t, assetMap)).join(',\n')}\n]`)
 		.join(',\n');
-	const bindings = n.bindings
-		.map(b => `{ name: '${b.name}', data: ${backcodeToJS(b.data)} }`)
-		.join(',\n');
+	const bindings = n.bindings.map(bindingToJS).join(',\n');
 
 	if (n.file === '__unresolved_custom_element__') {
 		// Fallback: render as raw HTML — no partial reference, slots in caller ctx.

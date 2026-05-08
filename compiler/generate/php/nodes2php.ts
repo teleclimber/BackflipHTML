@@ -95,6 +95,24 @@ function slotToPhp(n: SlotTNode): string {
 	return `['type' => 'slot', 'name' => ${name}]`;
 }
 
+function bindingToPhp(b: PartialBinding): string {
+	const parts: string[] = [`'name' => '${escapeStr(b.name)}'`];
+	if (b.data !== undefined) {
+		parts.push(`'data' => ${backcodeToPhp(b.data)}`);
+	}
+	if (b.literal !== undefined) {
+		if (typeof b.literal === 'boolean') {
+			parts.push(`'literal' => ${b.literal ? 'true' : 'false'}`);
+		} else {
+			parts.push(`'literal' => '${escapeStr(b.literal)}'`);
+		}
+	}
+	if (b.cast !== undefined) {
+		parts.push(`'cast' => '${b.cast}'`);
+	}
+	return `[${parts.join(', ')}]`;
+}
+
 function partialRefToPhp(n: PartialRefTNode, assetMap?: Map<string, string>): string {
 	if (n.customElement) {
 		return customElementRefToPhp(n, assetMap);
@@ -112,9 +130,7 @@ function partialRefToPhp(n: PartialRefTNode, assetMap?: Map<string, string>): st
 		.map(([name, tnodes]) => `'${name}' => [\n        ${tnodes.map(t => nodeToPhp(t, assetMap)).join(',\n        ')}\n    ]`)
 		.join(',\n    ');
 
-	const bindings = n.bindings
-		.map(b => `['name' => '${b.name}', 'data' => ${backcodeToPhp(b.data)}]`)
-		.join(',\n        ');
+	const bindings = n.bindings.map(bindingToPhp).join(',\n        ');
 
 	return `['type' => 'partial-ref',
     'partial' => ${partialIdent},
@@ -130,9 +146,7 @@ function customElementRefToPhp(n: PartialRefTNode, assetMap?: Map<string, string
 	const slots = Object.entries(n.slots)
 		.map(([name, tnodes]) => `'${name}' => [\n        ${tnodes.map(t => nodeToPhp(t, assetMap)).join(',\n        ')}\n    ]`)
 		.join(',\n    ');
-	const bindings = n.bindings
-		.map(b => `['name' => '${b.name}', 'data' => ${backcodeToPhp(b.data)}]`)
-		.join(',\n        ');
+	const bindings = n.bindings.map(bindingToPhp).join(',\n        ');
 
 	if (n.file === '__unresolved_custom_element__') {
 		return `['type' => 'partial-ref',

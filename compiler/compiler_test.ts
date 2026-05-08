@@ -695,6 +695,161 @@ Deno.test("compileFile: custom element call site stores callerOpenTag in attrs-o
 	assertEquals(rendered.endsWith('>'), false);
 });
 
+// ---- compileFile: b-attr on custom element partial definitions ----
+
+Deno.test("compileFile: b-attr declarations populate partialRoot.bAttrs", async () => {
+	const { compiled, errors } = await compileFile('<my-widget b-attr:premium b-attr:checked.bool>body</my-widget>');
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('my-widget');
+	assertExists(root);
+	assertExists(root.bAttrs);
+	assertEquals(root.bAttrs.length, 2);
+	assertEquals(root.bAttrs[0].name, 'premium');
+	assertEquals(root.bAttrs[0].isBool, false);
+	assertEquals(root.bAttrs[1].name, 'checked');
+	assertEquals(root.bAttrs[1].isBool, true);
+});
+
+Deno.test("compileFile: b-attr with a value reports error", async () => {
+	const { errors } = await compileFile('<my-widget b-attr:premium="x">body</my-widget>');
+	assertEquals(errors.length > 0, true);
+	assertStringIncludes(errors[0].message, "does not accept a value");
+});
+
+Deno.test("compileFile: b-attr with unknown modifier reports error", async () => {
+	const { errors } = await compileFile('<my-widget b-attr:premium.weird>body</my-widget>');
+	assertEquals(errors.length > 0, true);
+	assertStringIncludes(errors[0].message, "unknown b-attr modifier");
+	assertStringIncludes(errors[0].message, "weird");
+});
+
+Deno.test("compileFile: b-attr conflicts with plain attribute on definition tag", async () => {
+	const { errors } = await compileFile('<my-widget b-attr:premium premium="x">body</my-widget>');
+	assertEquals(errors.length > 0, true);
+	assertStringIncludes(errors[0].message, "premium");
+	assertStringIncludes(errors[0].message, "conflicts with b-attr:premium");
+});
+
+Deno.test("compileFile: b-attr conflicts with bind attribute on definition tag", async () => {
+	const { errors } = await compileFile('<my-widget b-attr:premium :premium="x">body</my-widget>');
+	assertEquals(errors.length > 0, true);
+	assertStringIncludes(errors[0].message, "premium");
+	assertStringIncludes(errors[0].message, "conflicts with b-attr:premium");
+});
+
+Deno.test("compileFile: b-attr on b-name partial definition is an error", async () => {
+	const { errors } = await compileFile('<article b-name="post" b-attr:foo>body</article>');
+	assertEquals(errors.length > 0, true);
+	const msgs = errors.map(e => e.message).join(' | ');
+	assertStringIncludes(msgs, "b-attr is only allowed on custom element partial definitions");
+});
+
+Deno.test("compileFile: b-attr on a custom element call site is an error", async () => {
+	const { errors } = await compileFile('<div b-name="page"><my-widget b-attr:foo></my-widget></div>');
+	assertEquals(errors.length > 0, true);
+	const msgs = errors.map(e => e.message).join(' | ');
+	assertStringIncludes(msgs, "b-attr is only allowed on custom element partial definitions");
+});
+
+Deno.test("compileFile: b-attr on a nested element is an error", async () => {
+	const { errors } = await compileFile('<my-widget><span b-attr:foo>x</span></my-widget>');
+	assertEquals(errors.length > 0, true);
+	const msgs = errors.map(e => e.message).join(' | ');
+	assertStringIncludes(msgs, "b-attr is only allowed on custom element partial definitions");
+});
+
+Deno.test("compileFile: b-attr on a b-part call is an error", async () => {
+	const { errors } = await compileFile('<div b-name="page"><div b-part="#hero" b-attr:foo></div></div>');
+	assertEquals(errors.length > 0, true);
+	const msgs = errors.map(e => e.message).join(' | ');
+	assertStringIncludes(msgs, "b-attr is only allowed on custom element partial definitions");
+});
+
+Deno.test("compileFile: b-attr declared name is excluded from definitionAttrNames", async () => {
+	const { compiled, errors } = await compileFile('<my-widget b-attr:premium class="card">body</my-widget>');
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('my-widget');
+	assertExists(root);
+	assertExists(root.definitionAttrNames);
+	assertEquals(root.definitionAttrNames.includes('premium'), false);
+	assertEquals(root.definitionAttrNames.includes('class'), true);
+});
+
+Deno.test("compileFile: call site captures callerAttrInfos for plain and bind attrs", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><my-widget :premium="isPremium" foo="y"></my-widget></div>'
+	);
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('page')!;
+	let found: PartialRefTNode | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'partial-ref') { found = n as PartialRefTNode; break; }
+	}
+	assertExists(found);
+	assertExists(found.callerAttrInfos);
+	const premium = found.callerAttrInfos.find(a => a.name === 'premium');
+	const foo = found.callerAttrInfos.find(a => a.name === 'foo');
+	assertExists(premium);
+	assertExists(foo);
+	assertEquals(premium.kind, 'expr');
+	assertEquals(premium.value, 'isPremium');
+	assertExists(premium.expr);
+	assertEquals(foo.kind, 'plain');
+	assertEquals(foo.value, 'y');
+	assertEquals(foo.expr, undefined);
+});
+
+Deno.test("compileFile: call site captures bare attribute as plain with empty value", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><my-widget premium></my-widget></div>'
+	);
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('page')!;
+	let found: PartialRefTNode | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'partial-ref') { found = n as PartialRefTNode; break; }
+	}
+	assertExists(found);
+	assertExists(found.callerAttrInfos);
+	const premium = found.callerAttrInfos.find(a => a.name === 'premium');
+	assertExists(premium);
+	assertEquals(premium.kind, 'plain');
+	assertEquals(premium.value, '');
+});
+
+Deno.test("compileFile: b-attr declarations are not rendered on definition open tag", async () => {
+	const { compiled, errors } = await compileFile(
+		'<my-widget b-attr:premium b-attr:checked.bool class="card">body</my-widget>'
+	);
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('my-widget')!;
+	assertExists(root.definitionAttrNodes);
+	const rendered = root.definitionAttrNodes.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
+	assertEquals(rendered.includes('b-attr'), false);
+	assertStringIncludes(rendered, 'class="card"');
+});
+
+Deno.test("compileFile: b-attr declarations are not rendered on call-site open tag", async () => {
+	// b-attr on the call site is an error, but we also want to confirm that even
+	// when downstream code rebuilds the rendered open-tag from a definition that
+	// has b-attr declarations, the call-site does not reflect them. This test uses
+	// the call site of a custom element with no b-attr on it; it just confirms
+	// that callerOpenTag never contains 'b-attr' text.
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><my-widget data-x="1"></my-widget></div>'
+	);
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('page')!;
+	let found: PartialRefTNode | undefined;
+	for (const n of root.tnodes) {
+		if (n.type === 'partial-ref') { found = n as PartialRefTNode; break; }
+	}
+	assertExists(found);
+	assertExists(found.callerOpenTag);
+	const rendered = found.callerOpenTag.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
+	assertEquals(rendered.includes('b-attr'), false);
+});
+
 Deno.test("compileFile: multiple partials in one file", async () => {
 	const { compiled: result } = await compileFile('<div b-name="first">A</div><div b-name="second">B</div>');
 	assertEquals(result.partials.size, 2);
@@ -756,7 +911,7 @@ Deno.test("compileFile: b-data: creates bindings on PartialRefTNode", async () =
 	assertEquals(ref !== undefined, true);
 	assertEquals(ref!.bindings.length, 1);
 	assertEquals(ref!.bindings[0].name, "title");
-	assertEquals(ref!.bindings[0].data.vars.includes("item"), true);
+	assertEquals(ref!.bindings[0].data!.vars.includes("item"), true);
 });
 
 // ---- compileFile: slots ----

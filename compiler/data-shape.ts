@@ -1,6 +1,7 @@
 import * as acorn from 'acorn';
 import type { RootTNode, TNode, ForTNode, IfTNode, PrintTNode, AttrBindTNode, PartialRefTNode } from './compiler.js';
 import type { Parsed } from './backcode.js';
+import { BackflipError } from './errors.js';
 
 // --- DataShape types ---
 
@@ -13,6 +14,7 @@ export interface DataShape {
 	elementShape?: DataShape;
 	attributes?: Set<string>;
 	passedTo?: Array<{ partial: string; as: string }>;
+	scalar?: 'string' | 'bool';
 }
 
 // --- Public API ---
@@ -24,6 +26,15 @@ export interface DataShape {
  */
 export function inferDataShape(root: RootTNode): Map<string, DataShape> {
 	const shapes = new Map<string, DataShape>();
+	// Pre-seed b-attr-declared variables with their scalar marker so that the
+	// resulting map always has an entry for every b-attr (even unused ones), and
+	// so downstream tooling sees that they're scalars.
+	if (root.bAttrs) {
+		for (const a of root.bAttrs) {
+			const shape = getOrCreateShape(shapes, a.name);
+			shape.scalar = a.isBool ? 'bool' : 'string';
+		}
+	}
 	walkNodesForShape(root.tnodes, new Set(), shapes);
 	return shapes;
 }
@@ -342,6 +353,7 @@ function walkNodesForShape(
 			case 'partial-ref': {
 				const n = node as PartialRefTNode;
 				for (const binding of n.bindings) {
+					if (!binding.data) continue;
 					const passedInfo = { partial: n.partialName, as: binding.name };
 					collectFromParsed(binding.data, 'passed', undefined, scoped, shapes, passedInfo);
 				}
@@ -356,4 +368,71 @@ function walkNodesForShape(
 				break;
 		}
 	}
+}
+
+// --- b-attr usage validation ---
+
+/**
+ * Validate that variables declared via `b-attr:NAME` on a custom element partial
+ * definition are used appropriately within the partial body. Returns a list of
+ * compiler errors and warnings.
+ *
+ * Rules 
+ * - A b-attr variable is, by definition, a string or boolean (depending on the
+ *   `.bool` modifier). Using it as an array, object, indexed, or iterable is a
+ *   compilation error.
+ * - A bool b-attr variable used as a string (e.g. in `{{ premium }}` or any
+ *   other printed-string context) is a compiler warning.
+ * - A string b-attr used as a boolean (e.g. `b-if="premium"`) is allowed.
+ * - 'attribute' usage means the variable is being used to populate an HTML
+ *   attribute value via b-bind/`:`. This is a printable-string context, so it
+ *   is fine for both string and bool b-attrs (with the same warning rule for
+ *   bool b-attrs being printed).
+ * - 'passed' usage (passing the value to another partial via b-data:) is fine.
+ */
+export function validateBAttrUsage(root: RootTNode, sourceRelPath: string): BackflipError[] {
+	const errors: BackflipError[] = [];
+	if (!root.bAttrs || root.bAttrs.length === 0) return errors;
+
+	const shapes = inferDataShape(root);
+
+	for (const bAttr of root.bAttrs) {
+		const shape = shapes.get(bAttr.name);
+		if (!shape) continue; // pre-seeded by inferDataShape, but be defensive
+
+		const loc = bAttr.loc ?? root.loc;
+		const errLoc = {
+			filename: sourceRelPath,
+			line: loc?.startLine,
+			col: loc?.startCol,
+			endLine: loc?.endLine,
+			endCol: loc?.endCol,
+		};
+
+		// Object/array/iterable usage → error
+		const usedAsIterable = shape.usages.has('iterable');
+		const usedAsIndexed = shape.indexed === true;
+		const usedAsObject = !!(shape.properties && shape.properties.size > 0);
+		const usedAsArrayElement = !!shape.elementShape;
+
+		if (usedAsIterable || usedAsIndexed || usedAsObject || usedAsArrayElement) {
+			errors.push(new BackflipError(
+				`b-attr variable "${bAttr.name}" is used as an object/array/iterable in partial; b-attr values must be string or boolean`,
+				errLoc
+			));
+			// Skip the bool-printed warning when we already have a fatal — the variable
+			// is being misused at a more fundamental level.
+			continue;
+		}
+
+		// Bool b-attr used in a printed/string context → warning
+		if (bAttr.isBool && shape.usages.has('printed')) {
+			errors.push(new BackflipError(
+				`boolean b-attr "${bAttr.name}" is used in interpolation in partial; convert to a string explicitly if you need to print it`,
+				{ ...errLoc, severity: 'warning' }
+			));
+		}
+	}
+
+	return errors;
 }

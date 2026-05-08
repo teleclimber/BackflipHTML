@@ -34,12 +34,18 @@ export interface SlotRNode {
 	type: 'slot',
 	name: string | undefined
 }
+export interface PartialBindingR {
+	name: string,
+	data?: rfn,
+	literal?: string | boolean,
+	cast?: 'bool' | 'string'
+}
 export interface PartialRefRNode {
 	type: 'partial-ref',
 	partial?: RootRNode,
 	wrapper?: { open: string, close: string } | null,
 	slots: { [slotName: string]: RNode[] },
-	bindings: { name: string, data: rfn }[],
+	bindings: PartialBindingR[],
 	customElement?: boolean,
 	unresolved?: boolean,
 	callerTagName?: string,
@@ -146,6 +152,16 @@ export function escapeHtml(s: string): string {
 		.replace(/'/g, '&#39;');
 }
 
+function evalBinding(binding: PartialBindingR, ctx: any): any {
+	if (binding.literal !== undefined) {
+		return binding.literal;
+	}
+	let value = execFn(binding.data!, ctx);
+	if (binding.cast === 'bool') value = Boolean(value);
+	else if (binding.cast === 'string') value = String(value);
+	return value;
+}
+
 function* streamRenderPartialRef(node: PartialRefRNode, ctx: any) :Generator<string> {
 	if (node.customElement) {
 		yield* streamRenderCustomElementRef(node, ctx);
@@ -154,7 +170,7 @@ function* streamRenderPartialRef(node: PartialRefRNode, ctx: any) :Generator<str
 	// Evaluate bindings in caller ctx, build child ctx
 	let childCtx = { ...ctx };
 	for( const binding of node.bindings ) {
-		childCtx[binding.name] = execFn(binding.data, ctx);
+		childCtx[binding.name] = evalBinding(binding, ctx);
 	}
 	// Build slot map: capture caller ctx with each slot's nodes
 	const slotMap: SlotMap = {};
@@ -189,7 +205,7 @@ function* streamRenderCustomElementRef(node: PartialRefRNode, ctx: any) :Generat
 	// definition-side attrs see.
 	let childCtx = { ...ctx };
 	for (const binding of node.bindings) {
-		childCtx[binding.name] = execFn(binding.data, ctx);
+		childCtx[binding.name] = evalBinding(binding, ctx);
 	}
 	const slotMap: SlotMap = {};
 	for (const [name, nodes] of Object.entries(node.slots)) {

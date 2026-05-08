@@ -36,6 +36,7 @@ export interface RootTNode {
 	customElement?: boolean,
 	definitionAttrNames?: string[],  // effective attribute names on the definition's wrapping tag (custom element partials only)
 	definitionAttrNodes?: TNode[],   // attrs-only TNodes for the definition's wrapping tag (custom element partials only). Excludes the leading `<tagName` and trailing `>`. Renders the definition's attrs in childCtx at call sites.
+	bAttrs?: { name: string; isBool: boolean; loc?: SourceLoc }[],  // declared b-attr:* directives on the custom element definition tag (custom element partials only)
 	meta?: PartialMeta
 }
 export interface RawTNode extends ChildTNode {
@@ -72,7 +73,9 @@ export interface SlotTNode extends ChildTNode {
 }
 export interface PartialBinding {
 	name: string,
-	data: Parsed
+	data?: Parsed,                  // present for expression bindings (b-data, or b-attr expression form)
+	literal?: string | boolean,     // present for literal-value bindings (b-attr plain attribute or bare boolean)
+	cast?: 'bool' | 'string',       // applied at runtime to evaluated `data` (for b-attr expression bindings)
 }
 export interface PartialRefTNode extends ChildTNode {
 	type: 'partial-ref',
@@ -87,6 +90,13 @@ export interface PartialRefTNode extends ChildTNode {
 	callerOpenTag?: TNode[],    // for customElement calls: the call-site opening tag broken into TNodes (rendered in caller ctx).
 	callerTagName?: string,     // for customElement calls: the call-site tag name (= the partial name, but kept explicit for symmetry)
 	callerAttrNames?: string[], // for customElement calls: effective attribute names on the call-site tag (used for conflict validation)
+	callerAttrInfos?: {
+		name: string;             // effective attr name (after stripping b-bind: / : / trailing ~)
+		kind: 'plain' | 'expr';   // plain = static HTML attr (bare or with literal value); expr = b-bind:/: with backcode
+		value: string;            // raw value from the source ('' for bare boolean)
+		expr?: Parsed;            // parsed backcode for kind='expr'
+		loc?: SourceLoc;
+	}[],                          // for customElement calls: rich per-attribute info used for b-attr resolution and conflict checks
 	unresolvedRaw?: string      // for customElement calls: the raw text of the call-site open tag, used as fallback if the partial can't be resolved
 }
 
@@ -133,6 +143,7 @@ export function effectiveAttrNames(attrs: { name: string, value: string }[]): st
 		if (n === 'b-if' || n === 'b-for' || n === 'b-else' || n === 'b-else-if') continue;
 		if (n === 'b-part' || n === 'b-slot' || n === 'b-in') continue;
 		if (n.startsWith('b-data:')) continue;
+		if (n.startsWith('b-attr:')) continue;
 		if (n.startsWith('b-bind:')) { names.push(n.slice('b-bind:'.length).replace(/~$/, '')); continue; }
 		if (n.startsWith(':')) { names.push(n.slice(1).replace(/~$/, '')); continue; }
 		if (n.endsWith('~')) { names.push(n.slice(0, -1)); continue; }
@@ -514,12 +525,12 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			return { refs: [ref], originalValue: value };
 		}
 
-		// Helper: build tag prefix (no closing >) excluding certain attrs, b-data:*, bind attrs, and asset~ attrs
+		// Helper: build tag prefix (no closing >) excluding certain attrs, b-data:*, b-attr:*, bind attrs, and asset~ attrs
 		function buildTagPrefix(tag: {tagName:string, attrs:{name:string,value:string}[], sourceCodeLocation?: unknown}, excludeAttrs: string[]): string {
 			let tag_str = `<${tag.tagName}`;
 			const processed: string[] = [];
 			for (const attr of tag.attrs) {
-				if (excludeAttrs.includes(attr.name) || attr.name.startsWith('b-data:') || isBindAttr(attr.name) || isAssetAttr(attr.name)) continue;
+				if (excludeAttrs.includes(attr.name) || attr.name.startsWith('b-data:') || attr.name.startsWith('b-attr:') || isBindAttr(attr.name) || isAssetAttr(attr.name)) continue;
 				processed.push(`${attr.name}="${attr.value}"`);
 			}
 			if (processed.length > 0) tag_str += ' ' + processed.join(' ');
@@ -551,7 +562,7 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 				const nodes: TNode[] = [];
 				let buf = `<${tag.tagName}`;
 				for (const attr of tag.attrs) {
-					if (excludeAttrs.includes(attr.name) || attr.name.startsWith('b-data:')) continue;
+					if (excludeAttrs.includes(attr.name) || attr.name.startsWith('b-data:') || attr.name.startsWith('b-attr:')) continue;
 					if (isAssetAttr(attr.name)) {
 						const realName = stripAssetSuffix(attr.name);
 						const { refs, originalValue, error } = validateStaticAssetAttr(realName, attr.value, tag, attr.name);
@@ -576,7 +587,7 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			const parts: AttrPart[] = [];
 			let staticBuf = '';
 			for (const attr of tag.attrs) {
-				if (excludeAttrs.includes(attr.name) || attr.name.startsWith('b-data:')) continue;
+				if (excludeAttrs.includes(attr.name) || attr.name.startsWith('b-data:') || attr.name.startsWith('b-attr:')) continue;
 				if (isBindAttr(attr.name)) {
 					if (staticBuf) { parts.push({ type: 'static', raw: staticBuf }); staticBuf = ''; }
 					let bindName = getBindAttrName(attr.name);
@@ -730,6 +741,17 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 				}
 			}
 
+			// b-attr is only allowed on custom element partial definitions (a hyphenated tag).
+			// b-name partials are NOT custom element partials — flag b-attr:* as an error here.
+			for (const attr of tag.attrs) {
+				if (attr.name.startsWith('b-attr:')) {
+					errors.push(new BackflipError(
+						`b-attr is only allowed on custom element partial definitions`,
+						attrErrorLoc(tag, attr.name, filename)
+					));
+				}
+			}
+
 			const partialName = bNameAttr.value;
 			if (compiledFile.partials.has(partialName)) {
 				errors.push(new BackflipError(
@@ -813,7 +835,62 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			}
 			partialRoot.exported = tag.attrs.some(a => a.name === 'b-export');
 			partialRoot.customElement = true;
-			partialRoot.definitionAttrNames = effectiveAttrNames(tag.attrs);
+
+			// Parse b-attr:* declarations on the custom element definition tag.
+			const bAttrs: { name: string; isBool: boolean; loc?: SourceLoc }[] = [];
+			for (const attr of tag.attrs) {
+				if (!attr.name.startsWith('b-attr:')) continue;
+				const rest = attr.name.slice('b-attr:'.length);
+				const m = rest.match(/^([^.]+)(?:\.(.+))?$/);
+				if (!m || !m[1]) {
+					errors.push(new BackflipError(
+						`invalid b-attr directive "${attr.name}"`,
+						attrErrorLoc(tag, attr.name, filename)
+					));
+					continue;
+				}
+				const declName = m[1];
+				const modifier = m[2];
+				if (modifier !== undefined && modifier !== 'bool') {
+					errors.push(new BackflipError(
+						`unknown b-attr modifier '${modifier}' (only '.bool' is supported)`,
+						attrErrorLoc(tag, attr.name, filename)
+					));
+					continue;
+				}
+				if (attr.value !== '') {
+					errors.push(new BackflipError(
+						`b-attr does not accept a value (reserved for future use)`,
+						attrErrorLoc(tag, attr.name, filename)
+					));
+					continue;
+				}
+				const entry: { name: string; isBool: boolean; loc?: SourceLoc } = { name: declName, isBool: modifier === 'bool' };
+				const aLoc = attrLoc(tag, attr.name);
+				if (aLoc) entry.loc = aLoc;
+				bAttrs.push(entry);
+			}
+
+			// Validate: a declared b-attr name must not also appear as a plain/bind attribute
+			// on the same definition tag. Use effectiveAttrNames over all attrs (which already
+			// strips the b-attr:* declarations themselves).
+			if (bAttrs.length > 0) {
+				const allEffective = effectiveAttrNames(tag.attrs);
+				for (const ba of bAttrs) {
+					if (allEffective.includes(ba.name)) {
+						errors.push(new BackflipError(
+							`attribute '${ba.name}' on the custom element definition tag conflicts with b-attr:${ba.name}; remove the plain attribute`,
+							attrErrorLoc(tag, ba.name, filename) ?? errorLoc(filename, tagLoc(tag))
+						));
+					}
+				}
+			}
+
+			// definitionAttrNames excludes b-attr-declared names so that the call-site-vs-definition
+			// conflict check (compiler/partials.ts) doesn't false-positive when the caller passes the same name.
+			const bAttrNameSet = new Set(bAttrs.map(b => b.name));
+			partialRoot.definitionAttrNames = effectiveAttrNames(tag.attrs).filter(n => !bAttrNameSet.has(n));
+			if (bAttrs.length > 0) partialRoot.bAttrs = bAttrs;
 			compiledFile.partials.set(partialName, partialRoot);
 
 			currentPartialRoot = partialRoot;
@@ -857,6 +934,42 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			const fullOpenTag = makeOpenTagNode(tag, ['b-export'], parent);
 			const callerOpenTag = convertToAttrsOnly(fullOpenTag, tag.tagName, parent);
 
+			// Build rich per-attribute info from the call-site tag for downstream
+			// stages (b-attr resolution, conflict checks, codegen). Skip everything
+			// effectiveAttrNames already skips, plus b-attr:* (which shouldn't appear
+			// on a call site anyway — the dispatcher already errors on those).
+			const callerAttrInfos: NonNullable<PartialRefTNode['callerAttrInfos']> = [];
+			for (const attr of tag.attrs) {
+				const n = attr.name;
+				if (n === 'b-name' || n === 'b-export') continue;
+				if (n === 'b-if' || n === 'b-for' || n === 'b-else' || n === 'b-else-if') continue;
+				if (n === 'b-part' || n === 'b-slot' || n === 'b-in') continue;
+				if (n.startsWith('b-data:')) continue;
+				if (n.startsWith('b-attr:')) continue;
+				const aLoc = attrLoc(tag, n);
+				if (n.startsWith('b-bind:') || n.startsWith(':')) {
+					const stripped = n.startsWith('b-bind:') ? n.slice('b-bind:'.length) : n.slice(1);
+					const effName = stripped.replace(/~$/, '');
+					const info: { name: string; kind: 'plain' | 'expr'; value: string; expr?: Parsed; loc?: SourceLoc } = {
+						name: effName,
+						kind: 'expr',
+						value: attr.value,
+						expr: interpretBackcode(attr.value),
+					};
+					if (aLoc) info.loc = aLoc;
+					callerAttrInfos.push(info);
+				} else {
+					const effName = n.endsWith('~') ? n.slice(0, -1) : n;
+					const info: { name: string; kind: 'plain' | 'expr'; value: string; expr?: Parsed; loc?: SourceLoc } = {
+						name: effName,
+						kind: 'plain',
+						value: attr.value,
+					};
+					if (aLoc) info.loc = aLoc;
+					callerAttrInfos.push(info);
+				}
+			}
+
 			const partialRef: PartialRefTNode = {
 				type: 'partial-ref',
 				file: null,                        // resolved post-parse via global registry
@@ -870,6 +983,7 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 				callerOpenTag,
 				callerTagName: tag.tagName,
 				callerAttrNames: effectiveAttrNames(tag.attrs),
+				callerAttrInfos,
 				unresolvedRaw: raw,
 			};
 			const tagSrcLoc = tag.sourceCodeLocation as { startLine?: number; startCol?: number; startOffset?: number; endLine?: number; endCol?: number; endOffset?: number } | null | undefined;
@@ -1167,6 +1281,18 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			// Top-level custom element tag: treat as a partial definition
 			if (tag_stack.length === 0 && currentPartialRoot === null && isCustomElementTagName(tag.tagName)) {
 				return handleCustomElementDefinition(tag, raw);
+			}
+
+			// b-attr is only allowed on custom element definition tags. Anything that
+			// reaches this point in the dispatcher is NOT a custom element definition
+			// (those returned above), so any b-attr:* here is an error.
+			for (const attr of tag.attrs) {
+				if (attr.name.startsWith('b-attr:')) {
+					errors.push(new BackflipError(
+						`b-attr is only allowed on custom element partial definitions`,
+						attrErrorLoc(tag, attr.name, filename)
+					));
+				}
 			}
 
 			// Track top-level elements that lack b-name
@@ -1479,6 +1605,7 @@ export function resolveAssetRefs(compiled: CompiledFile, assetMap: Map<string, s
 			...(root.exported !== undefined ? { exported: root.exported } : {}),
 			...(root.customElement !== undefined ? { customElement: root.customElement } : {}),
 			...(root.definitionAttrNames ? { definitionAttrNames: root.definitionAttrNames } : {}),
+			...(root.bAttrs ? { bAttrs: root.bAttrs } : {}),
 			...(root.meta ? { meta: root.meta } : {}),
 		};
 		newRoot.tnodes = resolveTNodes(root.tnodes, newRoot, assetMap);
@@ -1573,6 +1700,7 @@ function resolveTNodes(tnodes: TNode[], parent: ParentTNode, assetMap: Map<strin
 				if (n.customElement) newNode.customElement = true;
 				if (n.callerTagName) newNode.callerTagName = n.callerTagName;
 				if (n.callerAttrNames) newNode.callerAttrNames = n.callerAttrNames;
+				if (n.callerAttrInfos) newNode.callerAttrInfos = n.callerAttrInfos;
 				if (n.unresolvedRaw) newNode.unresolvedRaw = n.unresolvedRaw;
 				if (n.callerOpenTag) newNode.callerOpenTag = resolveTNodes(n.callerOpenTag, parent, assetMap);
 				result.push(newNode);

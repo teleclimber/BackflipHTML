@@ -1,0 +1,29 @@
+<my-widget b-attr:premium.bool b-attr:label>
+    <span b-if="premium">PRO</span>
+    <span b-if="!premium">FREE</span>
+    <em>{{ label }}</em>
+</my-widget>
+
+<b-unwrap b-name="caller_premium_true">
+    <my-widget :premium="true" :label="'hi'"></my-widget>
+</b-unwrap>
+
+<b-unwrap b-name="caller_premium_false">
+    <my-widget :premium="false" :label="'hi'"></my-widget>
+</b-unwrap>
+
+<b-unwrap b-name="caller_premium_bare">
+    <my-widget premium :label="'hi'"></my-widget>
+</b-unwrap>
+
+<b-unwrap b-name="caller_label_literal">
+    <my-widget :premium="true" label="hello"></my-widget>
+</b-unwrap>
+
+<b-unwrap b-name="caller_label_expr">
+    <my-widget :premium="true" :label="answer"></my-widget>
+</b-unwrap>
+
+<b-unwrap b-name="caller_premium_expr">
+    <my-widget :premium="isPro" :label="'x'"></my-widget>
+</b-unwrap>
