@@ -215,6 +215,29 @@ Deno.test("btn: renders empty button when no slot content provided", () => {
     assertEquals(renderRoot(getModule("ui.html").btn, {}), "<button></button>");
 });
 
+Deno.test("wrapped_btn: b-slot on a regular element wraps slot content", () => {
+    assertEquals(
+        renderRoot(getModule("ui.html").wrapped_btn, {}, {
+            default: { nodes: [{ type: "raw", raw: "click me" }], ctx: {} }
+        }),
+        '<div><span class="label">click me</span></div>'
+    );
+});
+
+Deno.test("wrapped_btn: b-slot wrapper renders even when no slot content is provided", () => {
+    assertEquals(
+        renderRoot(getModule("ui.html").wrapped_btn, {}),
+        '<div><span class="label"></span></div>'
+    );
+});
+
+Deno.test("wrapped_caller: b-slot on a regular element rendered through b-part", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("ui.html").wrapped_caller, {})),
+        '<div><div><span class="label">click me</span></div></div>'
+    );
+});
+
 // ---------------------------------------------------------------------------
 // ui.html — slot_interp: interpolation inside nested element in slot content
 //

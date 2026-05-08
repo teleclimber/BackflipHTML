@@ -15,3 +15,9 @@
 <b-unwrap b-name="slot_if">
     <div b-part="#btn"><span b-if="show">yes</span><span b-else>no</span></div>
 </b-unwrap>
+
+<div b-name="wrapped_btn"><span b-slot class="label"></span></div>
+
+<b-unwrap b-name="wrapped_caller">
+    <div b-part="#wrapped_btn">click me</div>
+</b-unwrap>

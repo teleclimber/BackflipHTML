@@ -130,6 +130,17 @@ Use `b-in="name"` inside the `b-part` element to direct content to a named slot.
 
 If a slot is declared but no content is provided, the slot renders empty. If a slot does not exist in the partial, that is a compilation error.
 
+**Wrapping element:** `b-slot` on a regular tag (anything other than `<b-unwrap>`) keeps that tag in the output and renders the slot content inside it. Use `<b-unwrap b-slot />` to inject only the slot content with no wrapper.
+
+```html
+<!-- partial definition -->
+<div b-name="card">
+    <span b-slot class="body"></span>
+</div>
+```
+
+Called with slot content `Hi`, this renders `<div><span class="body">Hi</span></div>`.
+
 ---
 
 ## Passing data to partials

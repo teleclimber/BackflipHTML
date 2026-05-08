@@ -1092,6 +1092,20 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			const slotName = bSlotAttr.value !== '' ? bSlotAttr.value : undefined;
 			const parent: ParentTNode = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
 
+			// For non-b-unwrap tags, the carrying element wraps the slot in the output:
+			// emit the open tag before the slot node; the close tag is added after
+			// through the regular endTag path (matched via tnode = slot_node).
+			if (tag.tagName !== 'b-unwrap') {
+				const openNodes = makeOpenTagNode(tag, ['b-slot'], parent);
+				for (const n of openNodes) {
+					if (cur_tnode !== null) {
+						cur_tnode.parent.tnodes!.push(n);
+					} else if (currentPartialRoot !== null) {
+						currentPartialRoot.tnodes.push(n);
+					}
+				}
+			}
+
 			const slot_node: SlotTNode = { type: 'slot', name: slotName, parent };
 			slot_node.loc = attrLoc(tag, 'b-slot');
 
