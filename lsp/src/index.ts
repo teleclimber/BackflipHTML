@@ -10,6 +10,7 @@ export interface PartialDef {
 	freeVars: string[];
 	dataShape?: Map<string, DataShape>;
 	customElement: boolean;
+	bAttrs?: { name: string; isBool: boolean }[];
 }
 
 export interface PartialRef {
@@ -42,6 +43,7 @@ export function buildIndex(directory: CompiledDirectory): ProjectIndex {
 				freeVars: inferFreeVars(root),
 				dataShape: inferDataShape(root),
 				customElement: root.customElement ?? false,
+				bAttrs: root.bAttrs?.map(a => ({ name: a.name, isBool: a.isBool })),
 			};
 			const existing = partialDefs.get(name);
 			if (existing) {

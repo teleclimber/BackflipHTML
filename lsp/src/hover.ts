@@ -31,7 +31,8 @@ export function getHover(
 		?? hoverBName(line, position, filePath, index)
 		?? hoverBIn(doc, line, position, filePath, index)
 		?? hoverBSlot(doc, line, position, filePath, index)
-		?? hoverBData(line, position, filePath, index)
+		?? hoverBData(doc, line, position, filePath, index)
+		?? hoverBAttrCallSite(doc, line, position, filePath, index)
 		?? hoverCustomElement(line, position, filePath, index)
 		?? hoverCssRules(line, position, filePath, cssAnalysis, cssPaths)
 		?? null;
@@ -93,19 +94,37 @@ function formatFreeVars(freeVars: string[]): string {
 }
 
 function formatDataInfo(def: PartialDef): string {
+	const exclude = new Set(def.bAttrs?.map(a => a.name) ?? []);
 	if (def.dataShape && def.dataShape.size > 0) {
-		return formatDataShape(def.dataShape);
+		return formatDataShape(def.dataShape, exclude);
 	}
-	return formatFreeVars(def.freeVars);
+	return formatFreeVars(def.freeVars.filter(v => !exclude.has(v)));
 }
 
-function formatDataShape(shapes: Map<string, DataShape>): string {
-	if (shapes.size === 0) return '**Data:** none';
+function formatDataShape(shapes: Map<string, DataShape>, exclude?: Set<string>): string {
 	const entries: string[] = [];
 	for (const [name, shape] of shapes) {
+		if (exclude && exclude.has(name)) continue;
 		entries.push(`\`${name}\` — ${describeShape(name, shape)}`);
 	}
+	if (entries.length === 0) return '**Data:** none';
 	return `**Data:**  \n${entries.join('  \n')}`;
+}
+
+function formatAttributes(def: PartialDef): string | null {
+	if (!def.bAttrs || def.bAttrs.length === 0) return null;
+	const entries: string[] = [];
+	for (const attr of def.bAttrs) {
+		const typeStr = attr.isBool ? 'bool' : 'string';
+		const shape = def.dataShape?.get(attr.name);
+		let suffix = '';
+		if (shape) {
+			const desc = describeShape(attr.name, shape);
+			if (desc && desc !== 'used') suffix = ` · ${desc}`;
+		}
+		entries.push(`\`${attr.name}\` — ${typeStr}${suffix}`);
+	}
+	return `**Attributes:**  \n${entries.join('  \n')}`;
 }
 
 function describeShape(_name: string, shape: DataShape): string {
@@ -371,7 +390,7 @@ function hoverBSlot(
 // --- b-data: hover ---
 
 function hoverBData(
-	line: string, position: Position, filePath: string, index: ProjectIndex,
+	doc: TextDocument, line: string, position: Position, filePath: string, index: ProjectIndex,
 ): Hover | null {
 	// Match b-data:varname="..." — cursor can be on the attribute name or value
 	const regex = /b-data:([a-zA-Z_][a-zA-Z0-9_]*)="([^"]*)"/g;
@@ -383,17 +402,23 @@ function hoverBData(
 
 		const varName = m[1];
 
-		// Find b-part on the same line
-		const bPartMatch = line.match(/b-part="([^"]*)"/);
-		if (!bPartMatch) {
-			return mkHover([`**Data** \`${varName}\` — *no b-part on this element*`]);
+		const partialCtx = findCallSitePartial(doc, position, filePath, index);
+		if (!partialCtx) {
+			return mkHover([`**Data** \`${varName}\` — *no enclosing partial reference*`]);
 		}
 
-		const { partialName, targetFile } = parseBPartValue(bPartMatch[1]);
-		const def = resolvePartialDef(partialName, targetFile, filePath, index);
-
+		const { partialName, def } = partialCtx;
 		if (!def) {
 			return mkHover([`**Data** \`${varName}\` → partial \`${partialName}\` — *partial not found*`]);
+		}
+
+		// On a custom element call site, b-data:NAME conflicts with a declared b-attr:NAME
+		// (compiler error). Surface this in the hover.
+		if (def.bAttrs?.some(a => a.name === varName)) {
+			return mkHover([
+				`**Data** \`${varName}\` → partial \`${partialName}\``,
+				`✗ Conflicts with declared \`b-attr:${varName}\` — pass as an attribute instead`,
+			]);
 		}
 
 		const used = def.freeVars.includes(varName);
@@ -401,6 +426,147 @@ function hoverBData(
 		lines.push(`**Data** \`${varName}\` → partial \`${partialName}\``);
 		lines.push(used ? '✓ Used in partial' : '✗ Not used in partial');
 		return mkHover(lines);
+	}
+
+	return null;
+}
+
+/**
+ * Resolve the partial reference for the opening tag enclosing the cursor.
+ * Recognises both `<element b-part="...">` and a custom-element tag.
+ * Walks up across lines to support multi-line opening tags.
+ */
+function findCallSitePartial(
+	doc: TextDocument, position: Position, filePath: string, index: ProjectIndex,
+): { partialName: string; def: PartialDef | null } | null {
+	const tag = findEnclosingOpeningTag(doc, position.line, position.character);
+	if (!tag) return null;
+
+	const bPartMatch = tag.openTagText.match(/b-part="([^"]*)"/);
+	if (bPartMatch) {
+		const { partialName, targetFile } = parseBPartValue(bPartMatch[1]);
+		return { partialName, def: resolvePartialDef(partialName, targetFile, filePath, index) };
+	}
+
+	if (tag.tagName.includes('-') && !tag.tagName.startsWith('b-')) {
+		const defs = index.partialDefs.get(tag.tagName);
+		const def = defs?.find(d => d.customElement) ?? null;
+		if (def) return { partialName: tag.tagName, def };
+	}
+
+	return null;
+}
+
+/**
+ * Mask quoted attribute values with spaces so embedded `<` or `>` don't confuse
+ * a tag-boundary scan. Lengths are preserved.
+ */
+function maskQuoted(s: string): string {
+	return s
+		.replace(/"[^"]*"/g, m => ' '.repeat(m.length))
+		.replace(/'[^']*'/g, m => ' '.repeat(m.length));
+}
+
+/**
+ * Find the opening tag whose attribute area contains the cursor. Walks back up
+ * to ~50 lines and forward up to ~50 lines so multi-line opening tags resolve.
+ * Returns the tag name and the opening-tag text (`<TAG ... >` or partial if `>`
+ * not found within the lookahead window).
+ */
+function findEnclosingOpeningTag(
+	doc: TextDocument, lineIdx: number, character: number,
+): { tagName: string; openTagText: string } | null {
+	const maxLookback = 50;
+	const maxLookahead = 50;
+	const startLine = Math.max(0, lineIdx - maxLookback);
+	const before = doc.getText({
+		start: { line: startLine, character: 0 },
+		end: { line: lineIdx, character },
+	});
+	const beforeMasked = maskQuoted(before);
+	const lastGt = beforeMasked.lastIndexOf('>');
+	const tagRe = /<([a-zA-Z][a-zA-Z0-9-]*)/g;
+	let lastMatch: RegExpExecArray | null = null;
+	let m: RegExpExecArray | null;
+	while ((m = tagRe.exec(beforeMasked)) !== null) lastMatch = m;
+	if (!lastMatch) return null;
+	if (lastGt > lastMatch.index) return null; // tag closed before cursor
+
+	const after = doc.getText({
+		start: { line: lineIdx, character },
+		end: { line: lineIdx + maxLookahead, character: 0 },
+	});
+	const afterMasked = maskQuoted(after);
+	const closeIdx = afterMasked.indexOf('>');
+	const afterPart = closeIdx !== -1 ? after.substring(0, closeIdx + 1) : after;
+
+	return {
+		tagName: lastMatch[1],
+		openTagText: before.substring(lastMatch.index) + afterPart,
+	};
+}
+
+// --- b-attr at call site (plain, :attr, b-bind:attr) ---
+
+function hoverBAttrCallSite(
+	doc: TextDocument, line: string, position: Position, filePath: string, index: ProjectIndex,
+): Hover | null {
+	const attrName = findAttrNameAtCursor(line, position.character);
+	if (!attrName) return null;
+
+	const tag = findEnclosingOpeningTag(doc, position.line, position.character);
+	if (!tag) return null;
+	if (!tag.tagName.includes('-') || tag.tagName.startsWith('b-')) return null;
+
+	const defs = index.partialDefs.get(tag.tagName);
+	if (!defs) return null;
+	const def = defs.find(d => d.customElement);
+	if (!def) return null;
+
+	const bAttr = def.bAttrs?.find(a => a.name === attrName);
+	if (!bAttr) return null;
+
+	const typeStr = bAttr.isBool ? 'bool' : 'string';
+	const shape = def.dataShape?.get(bAttr.name);
+	let suffix = '';
+	if (shape) {
+		const desc = describeShape(bAttr.name, shape);
+		if (desc && desc !== 'used') suffix = ` · ${desc}`;
+	}
+	return mkHover([
+		`**Attribute** \`${attrName}\` → partial \`${tag.tagName}\``,
+		`Type: ${typeStr}${suffix}`,
+	]);
+}
+
+/**
+ * Find the attribute name at the cursor on a line. Recognises `b-bind:NAME[.mod]`,
+ * `:NAME[.mod]`, and plain `NAME` attributes (with or without a `="value"`).
+ * Returns the bare attribute name (without prefix or modifier).
+ */
+function findAttrNameAtCursor(line: string, character: number): string | null {
+	const valuePart = `(?:\\s*=\\s*"[^"]*")?`;
+
+	// b-bind:NAME[.mod][="..."]
+	const bbindRe = new RegExp(`b-bind:([a-zA-Z_][a-zA-Z0-9_-]*)(?:\\.[\\w-]+)?${valuePart}`, 'g');
+	let m: RegExpExecArray | null;
+	while ((m = bbindRe.exec(line)) !== null) {
+		if (character >= m.index && character <= m.index + m[0].length) return m[1];
+	}
+
+	// :NAME[.mod][="..."] — the colon must not follow a word char or hyphen
+	const colonRe = new RegExp(`(?<![\\w-]):([a-zA-Z_][a-zA-Z0-9_-]*)(?:\\.[\\w-]+)?${valuePart}`, 'g');
+	while ((m = colonRe.exec(line)) !== null) {
+		if (character >= m.index && character <= m.index + m[0].length) return m[1];
+	}
+
+	// Plain attribute: whitespace-then-name, optionally followed by ="..."
+	const plainRe = new RegExp(`\\s([a-zA-Z][\\w-]*)${valuePart}`, 'g');
+	while ((m = plainRe.exec(line)) !== null) {
+		if (m[1].startsWith('b-')) continue;
+		const nameStart = m.index + 1;
+		const matchEnd = m.index + m[0].length;
+		if (character >= nameStart && character <= matchEnd) return m[1];
 	}
 
 	return null;
@@ -455,6 +621,8 @@ function hoverCustomElement(
 		lines.push(`**Custom element partial** \`<${tagName}>\`${fileInfo}${exportInfo}`);
 	}
 	lines.push(formatSlots(def.slots));
+	const attrLine = formatAttributes(def);
+	if (attrLine) lines.push(attrLine);
 	lines.push(formatDataInfo(def));
 	return mkHover(lines);
 }

@@ -39,17 +39,24 @@ function analyze(input: { cssContent: string; templateFiles: Map<string, string>
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 import type { Position } from 'vscode-languageserver';
 
-/** Create a fake TextDocument from lines of text. */
+/** Create a fake TextDocument from lines of text. Honours character offsets within each line. */
 function makeDoc(lines: string[]): TextDocument {
 	const text = lines.join('\n');
+	const lineStarts: number[] = [0];
+	for (let i = 0; i < text.length; i++) {
+		if (text[i] === '\n') lineStarts.push(i + 1);
+	}
+	const offsetAt = (p: { line: number; character: number }): number => {
+		if (p.line >= lineStarts.length) return text.length;
+		if (p.line < 0) return 0;
+		const lineStart = lineStarts[p.line];
+		const lineEnd = p.line + 1 < lineStarts.length ? lineStarts[p.line + 1] - 1 : text.length;
+		return Math.min(lineStart + Math.max(0, p.character), lineEnd);
+	};
 	return {
 		getText(range?: any): string {
 			if (!range) return text;
-			const allLines = text.split('\n');
-			const startLine = range.start.line;
-			const endLine = range.end.line;
-			// Return the requested line range
-			return allLines.slice(startLine, endLine).join('\n') + (endLine > startLine ? '\n' : '');
+			return text.substring(offsetAt(range.start), offsetAt(range.end));
 		},
 	} as TextDocument;
 }
@@ -301,12 +308,68 @@ describe('getHover', () => {
 			ok(v.includes('✗ Not used in partial'));
 		});
 
-		it('shows error when no b-part on line', () => {
+		it('shows error when no enclosing partial reference on line', () => {
 			const index = makeIndex([], []);
 			const doc = makeDoc(['<div b-data:title="val"></div>']);
 			const result = getHover(doc, pos(0, 14), 'page.html', index);
 			const v = hoverValue(result);
-			ok(v.includes('no b-part on this element'));
+			ok(v.includes('no enclosing partial reference'));
+		});
+
+		it('resolves partial via custom-element call site (no b-part on line)', () => {
+			const index = makeIndex(
+				[{
+					file: 'components.html', name: 'my-card',
+					loc: makeLoc(1, 1, 1, 10), exported: true, customElement: true,
+					slots: [], freeVars: ['checklistid'],
+				}],
+				[],
+			);
+			const doc = makeDoc(['<my-card b-data:checklistid="42"></my-card>']);
+			const result = getHover(doc, pos(0, 12), 'page.html', index);
+			const v = hoverValue(result);
+			ok(v.includes('`checklistid`'));
+			ok(v.includes('partial `my-card`'));
+			ok(v.includes('✓ Used in partial'));
+		});
+
+		it('resolves partial when the opening tag spans multiple lines', () => {
+			const index = makeIndex(
+				[{
+					file: 'components.html', name: 'my-card',
+					loc: makeLoc(1, 1, 1, 10), exported: true, customElement: true,
+					slots: [], freeVars: ['checklistid'],
+				}],
+				[],
+			);
+			const doc = makeDoc([
+				'<my-card',
+				'  b-data:checklistid="42"',
+				'>',
+				'</my-card>',
+			]);
+			// cursor on `checklistid` (line 1)
+			const result = getHover(doc, pos(1, 12), 'page.html', index);
+			const v = hoverValue(result);
+			ok(v.includes('`checklistid`'));
+			ok(v.includes('partial `my-card`'));
+			ok(v.includes('✓ Used in partial'));
+		});
+
+		it('flags b-data: that conflicts with a declared b-attr on the call site', () => {
+			const index = makeIndex(
+				[{
+					file: 'components.html', name: 'my-card',
+					loc: makeLoc(1, 1, 1, 10), exported: true, customElement: true,
+					slots: [], freeVars: ['premium'],
+					bAttrs: [{ name: 'premium', isBool: true }],
+				}],
+				[],
+			);
+			const doc = makeDoc(['<my-card b-data:premium="x"></my-card>']);
+			const result = getHover(doc, pos(0, 12), 'page.html', index);
+			const v = hoverValue(result);
+			ok(v.includes('Conflicts with declared `b-attr:premium`'));
 		});
 	});
 
@@ -431,6 +494,71 @@ describe('getHover', () => {
 			strictEqual(result, null);
 		});
 
+		it('shows Attributes section listing b-attrs with their type', () => {
+			const dataShape = new Map<string, import('@backflip/html').DataShape>([
+				['label', { usages: new Set(['printed'] as const), scalar: 'string' }],
+				['premium', { usages: new Set(['boolean'] as const), scalar: 'bool' }],
+			]);
+			const index = makeIndex(
+				[{
+					file: 'components.html', name: 'my-card',
+					loc: makeLoc(1, 1, 1, 10), exported: true, customElement: true,
+					slots: ['default'], freeVars: ['label', 'premium'], dataShape,
+					bAttrs: [{ name: 'label', isBool: false }, { name: 'premium', isBool: true }],
+				}],
+				[],
+			);
+			const doc = makeDoc(['<my-card label="hi" premium></my-card>']);
+			const result = getHover(doc, pos(0, 4), 'page.html', index);
+			const v = hoverValue(result);
+			ok(v.includes('**Slots:**'), 'should show Slots section');
+			ok(v.includes('**Attributes:**'), 'should show Attributes section');
+			ok(v.includes('`label` — string · printed'), 'should show string attr with usage');
+			ok(v.includes('`premium` — bool · boolean'), 'should show bool attr with usage');
+			ok(v.includes('**Data:**'), 'should still show Data section');
+			// b-attr names should be excluded from Data section to avoid duplication
+			const dataIdx = v.indexOf('**Data:**');
+			const dataSection = v.slice(dataIdx);
+			ok(!dataSection.includes('`label`'), 'label should not appear under Data');
+			ok(!dataSection.includes('`premium`'), 'premium should not appear under Data');
+		});
+
+		it('Attributes section also shows for unused b-attrs without usage suffix', () => {
+			const dataShape = new Map<string, import('@backflip/html').DataShape>([
+				['flag', { usages: new Set(), scalar: 'bool' }],
+			]);
+			const index = makeIndex(
+				[{
+					file: 'components.html', name: 'my-tag',
+					loc: makeLoc(1, 1, 1, 10), exported: false, customElement: true,
+					slots: [], freeVars: ['flag'], dataShape,
+					bAttrs: [{ name: 'flag', isBool: true }],
+				}],
+				[],
+			);
+			const doc = makeDoc(['<my-tag></my-tag>']);
+			const result = getHover(doc, pos(0, 3), 'page.html', index);
+			const v = hoverValue(result);
+			ok(v.includes('**Attributes:**'));
+			ok(v.includes('`flag` — bool'));
+			ok(!v.includes('`flag` — bool ·'), 'should not include trailing usage separator for unused b-attr');
+		});
+
+		it('omits Attributes section when partial has no b-attrs', () => {
+			const index = makeIndex(
+				[{
+					file: 'components.html', name: 'plain-tag',
+					loc: makeLoc(1, 1, 1, 10), exported: false, customElement: true,
+					slots: [], freeVars: [],
+				}],
+				[],
+			);
+			const doc = makeDoc(['<plain-tag></plain-tag>']);
+			const result = getHover(doc, pos(0, 3), 'page.html', index);
+			const v = hoverValue(result);
+			ok(!v.includes('**Attributes:**'));
+		});
+
 		it('does not match a non-customElement partial that happens to have a hyphen in its b-name', () => {
 			const index = makeIndex(
 				[{
@@ -442,6 +570,123 @@ describe('getHover', () => {
 			);
 			const doc = makeDoc(['<my-thing></my-thing>']);
 			const result = getHover(doc, pos(0, 3), 'page.html', index);
+			strictEqual(result, null);
+		});
+	});
+
+	describe('b-attr call site', () => {
+		function bAttrIndex() {
+			const dataShape = new Map<string, import('@backflip/html').DataShape>([
+				['label', { usages: new Set(['printed'] as const), scalar: 'string' }],
+				['premium', { usages: new Set(['boolean'] as const), scalar: 'bool' }],
+			]);
+			return makeIndex(
+				[{
+					file: 'components.html', name: 'my-card',
+					loc: makeLoc(1, 1, 1, 10), exported: true, customElement: true,
+					slots: [], freeVars: ['label', 'premium'], dataShape,
+					bAttrs: [{ name: 'label', isBool: false }, { name: 'premium', isBool: true }],
+				}],
+				[],
+			);
+		}
+
+		it('shows b-attr info on a plain attribute at the call site', () => {
+			const index = bAttrIndex();
+			const doc = makeDoc(['<my-card label="hi"></my-card>']);
+			// cursor on `label`
+			const result = getHover(doc, pos(0, 12), 'page.html', index);
+			const v = hoverValue(result);
+			ok(v.includes('**Attribute** `label`'));
+			ok(v.includes('partial `my-card`'));
+			ok(v.includes('Type: string · printed'));
+		});
+
+		it('shows b-attr info on a bare boolean attribute', () => {
+			const index = bAttrIndex();
+			const doc = makeDoc(['<my-card premium></my-card>']);
+			// cursor on `premium`
+			const result = getHover(doc, pos(0, 12), 'page.html', index);
+			const v = hoverValue(result);
+			ok(v.includes('**Attribute** `premium`'));
+			ok(v.includes('Type: bool · boolean'));
+		});
+
+		it('shows b-attr info on `:attr` shorthand bind', () => {
+			const index = bAttrIndex();
+			const doc = makeDoc(['<my-card :premium="isPro"></my-card>']);
+			// cursor on `premium` (after the `:`)
+			const result = getHover(doc, pos(0, 12), 'page.html', index);
+			const v = hoverValue(result);
+			ok(v.includes('**Attribute** `premium`'));
+			ok(v.includes('Type: bool'));
+		});
+
+		it('shows b-attr info on `b-bind:attr`', () => {
+			const index = bAttrIndex();
+			const doc = makeDoc(['<my-card b-bind:label="t"></my-card>']);
+			// cursor on `label` part of b-bind:label
+			const result = getHover(doc, pos(0, 18), 'page.html', index);
+			const v = hoverValue(result);
+			ok(v.includes('**Attribute** `label`'));
+			ok(v.includes('Type: string'));
+		});
+
+		it('handles `.bool` modifier on `:attr`', () => {
+			const index = bAttrIndex();
+			const doc = makeDoc(['<my-card :premium.bool="isPro"></my-card>']);
+			// cursor on `premium`
+			const result = getHover(doc, pos(0, 12), 'page.html', index);
+			const v = hoverValue(result);
+			ok(v.includes('**Attribute** `premium`'));
+		});
+
+		it('returns null for an attribute that is not a declared b-attr', () => {
+			const index = bAttrIndex();
+			const doc = makeDoc(['<my-card class="foo"></my-card>']);
+			// cursor on `class`
+			const result = getHover(doc, pos(0, 12), 'page.html', index);
+			strictEqual(result, null);
+		});
+
+		it('returns null when not on a custom-element call site', () => {
+			const index = bAttrIndex();
+			const doc = makeDoc(['<div label="hi"></div>']);
+			const result = getHover(doc, pos(0, 7), 'page.html', index);
+			strictEqual(result, null);
+		});
+
+		it('resolves the b-attr when the opening tag spans multiple lines', () => {
+			const index = bAttrIndex();
+			const doc = makeDoc([
+				'<my-card',
+				'  label="hi"',
+				'  :premium="isPro"',
+				'>',
+				'</my-card>',
+			]);
+			// cursor on `label` (line 1)
+			let result = getHover(doc, pos(1, 4), 'page.html', index);
+			let v = hoverValue(result);
+			ok(v.includes('**Attribute** `label`'));
+			ok(v.includes('Type: string'));
+
+			// cursor on `premium` (line 2, inside `:premium`)
+			result = getHover(doc, pos(2, 6), 'page.html', index);
+			v = hoverValue(result);
+			ok(v.includes('**Attribute** `premium`'));
+			ok(v.includes('Type: bool'));
+		});
+
+		it('does not match when the cursor is past the opening tag close', () => {
+			const index = bAttrIndex();
+			const doc = makeDoc([
+				'<my-card label="hi">',
+				'  Some content',
+				'</my-card>',
+			]);
+			// cursor on `Some` — outside the opening tag
+			const result = getHover(doc, pos(1, 4), 'page.html', index);
 			strictEqual(result, null);
 		});
 	});
