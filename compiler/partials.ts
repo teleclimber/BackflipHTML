@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { compileFile, collectSlots, isCustomElementTagName, type CompiledFile, type CompileOptions, type PartialRegistry, type PartialRefTNode, type RootTNode, type CustomElementRegistry, type CustomElementDef, type PartialBinding, type AttrBindTNode, BackflipError } from './compiler.js';
-import { validateBAttrUsage } from './data-shape.js';
+import { validateBAttrUsage, inferDataShape } from './data-shape.js';
 
 export interface CompiledDirectory {
     files: Map<string, CompiledFile>  // key: relative file path e.g. "blog/general.html"
@@ -465,6 +465,23 @@ function validateTNode(
                         ));
                     }
                 }
+            }
+        }
+
+        // --- Validate b-data binding names against the target partial's data shape ---
+        // Each b-data:NAME passed at the call site must correspond to a free variable
+        // (or declared b-attr) that the target partial actually uses. Otherwise the
+        // value would be silently discarded — almost certainly a typo or stale code.
+        if (targetPartial) {
+            const shape = inferDataShape(targetPartial);
+            for (const binding of ref.bindings) {
+                // Synthesized b-attr bindings (data + cast, or literal) carry b-attr-declared
+                // names which are pre-seeded into the shape, so they always pass the check.
+                if (shape.has(binding.name)) continue;
+                ctx.errors.push(new BackflipError(
+                    `variable ${binding.name} is unused in partial <${ref.partialName}>`,
+                    errorLoc(ctx.sourceRelPath, binding.nameLoc ?? ref.loc)
+                ));
             }
         }
 

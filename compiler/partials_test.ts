@@ -1215,3 +1215,141 @@ Deno.test("compileDirectory - bool b-attr used as boolean (b-if) emits no warnin
     const battrWarnings = warnings.filter(w => w.message.includes('premium'));
     assertEquals(battrWarnings.length, 0, `unexpected b-attr warnings: ${JSON.stringify(battrWarnings.map(e => e.message))}`);
 });
+
+// --- b-data:NAME unknown-name validation ---
+
+Deno.test("compileDirectory - b-data:NAME unknown to same-file b-name partial is an error", async () => {
+    const dir = await makeTempDir("bdata_unknown_samefile_bname");
+    const content = `<div b-name="card"><h1>{{ title }}</h1></div>\n<div b-name="page"><div b-part="#card" b-data:title="t" b-data:bogus="x"></div></div>\n`;
+    await writeFile(path.join(dir, "page.html"), content);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length, 1, `unexpected fatals: ${JSON.stringify(fatal.map(e => e.message))}`);
+    assertStringIncludes(fatal[0].message, 'variable bogus is unused');
+    assertStringIncludes(fatal[0].message, '<card>');
+    // The error span should cover only the NAME portion of `b-data:bogus`, not the whole tag.
+    const err = fatal[0];
+    assertEquals(err.line, 2);
+    // Find the position of "bogus" in the source line
+    const lines = content.split('\n');
+    const bogusCol = lines[1].indexOf('b-data:bogus') + 'b-data:'.length + 1; // 1-based
+    assertEquals(err.col, bogusCol);
+    assertEquals(err.endCol, bogusCol + 'bogus'.length);
+});
+
+Deno.test("compileDirectory - b-data:NAME known to same-file b-name partial is OK", async () => {
+    const dir = await makeTempDir("bdata_known_samefile_bname");
+    await writeFile(path.join(dir, "page.html"), `
+        <div b-name="card">
+            <h1>{{ title }}</h1>
+        </div>
+        <div b-name="page">
+            <div b-part="#card" b-data:title="t"></div>
+        </div>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length, 0, `unexpected fatals: ${JSON.stringify(fatal.map(e => e.message))}`);
+});
+
+Deno.test("compileDirectory - b-data:NAME unknown to cross-file b-name partial is an error", async () => {
+    const dir = await makeTempDir("bdata_unknown_crossfile_bname");
+    await writeFile(path.join(dir, "components.html"), `
+        <div b-name="card" b-export>
+            <h1>{{ title }}</h1>
+        </div>
+    `);
+    await writeFile(path.join(dir, "page.html"), `
+        <div b-name="page">
+            <div b-part="components.html#card" b-data:title="t" b-data:bogus="x"></div>
+        </div>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length, 1, `unexpected fatals: ${JSON.stringify(fatal.map(e => e.message))}`);
+    assertStringIncludes(fatal[0].message, 'variable bogus is unused');
+    assertStringIncludes(fatal[0].message, '<card>');
+});
+
+Deno.test("compileDirectory - b-data:NAME unknown to custom element partial is an error", async () => {
+    const dir = await makeTempDir("bdata_unknown_custom_element");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-card>
+            <h2>{{ title }}</h2>
+        </my-card>
+        <article b-name="post">
+            <my-card b-data:title="t" b-data:bogus="x"></my-card>
+        </article>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length, 1, `unexpected fatals: ${JSON.stringify(fatal.map(e => e.message))}`);
+    assertStringIncludes(fatal[0].message, 'variable bogus is unused');
+    assertStringIncludes(fatal[0].message, '<my-card>');
+});
+
+Deno.test("compileDirectory - b-data:NAME known to custom element partial is OK", async () => {
+    const dir = await makeTempDir("bdata_known_custom_element");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-card>
+            <h2>{{ title }}</h2>
+        </my-card>
+        <article b-name="post">
+            <my-card b-data:title="t"></my-card>
+        </article>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length, 0, `unexpected fatals: ${JSON.stringify(fatal.map(e => e.message))}`);
+});
+
+Deno.test("compileDirectory - b-data:NAME passed-through to sub-partial is known (not flagged)", async () => {
+    // HTML attribute names are lowercased, so the receiving partial must use the
+    // lowercased name internally; this test verifies a clean pass-through chain.
+    const dir = await makeTempDir("bdata_passthrough");
+    await writeFile(path.join(dir, "page.html"), `
+        <b-unwrap b-name="badge">{{ label }}</b-unwrap>
+        <b-unwrap b-name="profile">
+            <b-unwrap b-part="#badge" b-data:label="userlabel"></b-unwrap>
+        </b-unwrap>
+        <div b-name="page">
+            <b-unwrap b-part="#profile" b-data:userlabel="me.name"></b-unwrap>
+        </div>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length, 0, `unexpected fatals: ${JSON.stringify(fatal.map(e => e.message))}`);
+});
+
+Deno.test("compileDirectory - b-data:NAME for b-attr-declared name does not double-error as unknown", async () => {
+    // The existing b-data/b-attr conflict error still fires; we should not also
+    // emit an "unknown variable" error for the same name.
+    const dir = await makeTempDir("bdata_battr_no_double");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-widget b-attr:premium>defn</my-widget>
+        <article b-name="post">
+            <my-widget premium="ok" b-data:premium="someVar"></my-widget>
+        </article>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    // Exactly one fatal: the b-data/b-attr conflict. No extra "unknown" error.
+    const conflictMsgs = fatal.filter(e => e.message.includes('conflicts with b-attr'));
+    const unknownMsgs = fatal.filter(e => e.message.includes('is unused in partial'));
+    assertEquals(conflictMsgs.length, 1);
+    assertEquals(unknownMsgs.length, 0, `unexpected unknown-binding errors: ${JSON.stringify(unknownMsgs.map(e => e.message))}`);
+});
+
+Deno.test("compileDirectory - b-data:NAME on unresolved custom element does not error", async () => {
+    // Unresolved custom elements fall through as raw HTML and only emit a warning
+    // for the unknown tag; we shouldn't add a confusing b-data error on top.
+    const dir = await makeTempDir("bdata_unresolved_ce");
+    await writeFile(path.join(dir, "page.html"), `
+        <article b-name="post">
+            <my-typo b-data:foo="x"></my-typo>
+        </article>
+    `);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length, 0, `unexpected fatals: ${JSON.stringify(fatal.map(e => e.message))}`);
+});

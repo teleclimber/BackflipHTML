@@ -167,6 +167,8 @@ Multiple variables can be passed on the same element:
 
 Data bindings are scoped to the partial — they are not visible outside it, and they do not override the caller's context for slot content.
 
+Each `b-data:NAME` must correspond to a variable used inside the target partial. Passing `b-data:NAME` for a name the partial doesn't use is a compilation error (it usually means a typo or a stale binding).
+
 ---
 
 ## Compilation errors
@@ -183,6 +185,7 @@ The compiler reports errors for:
 - `b-if`, `b-for`, `b-else`, or `b-else-if` on a partial *definition* (these are call-site directives only)
 - `b-attr` outside a custom element partial definition, with a value, with an unknown modifier, or with a conflicting plain attribute on the same tag (see [Declared attributes](#declared-attributes-b-attr))
 - A required `b-attr` not provided at the call site, or `b-data:NAME` colliding with a declared `b-attr:NAME`
+- `b-data:NAME` at a call site where `NAME` does not appear in the target partial's data shape (i.e. the partial does not use a variable of that name and does not declare a `b-attr:NAME`). This catches typos and stale bindings that would otherwise be silently discarded.
 
 ---
 

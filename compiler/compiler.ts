@@ -76,6 +76,7 @@ export interface PartialBinding {
 	data?: Parsed,                  // present for expression bindings (b-data, or b-attr expression form)
 	literal?: string | boolean,     // present for literal-value bindings (b-attr plain attribute or bare boolean)
 	cast?: 'bool' | 'string',       // applied at runtime to evaluated `data` (for b-attr expression bindings)
+	nameLoc?: SourceLoc,             // location of just the NAME portion in `b-data:NAME` (excludes the `b-data:` prefix)
 }
 export interface PartialRefTNode extends ChildTNode {
 	type: 'partial-ref',
@@ -229,6 +230,25 @@ function attrErrorLoc(tag: { sourceCodeLocation?: unknown }, attrName: string, f
 	const a = attrLoc(tag, attrName);
 	if (a) return { filename, line: a.startLine, col: a.startCol, endLine: a.endLine, endCol: a.endCol };
 	return errorLoc(filename, tagLoc(tag));
+}
+
+/**
+ * Compute the source location of just the NAME portion of a `b-data:NAME` attribute,
+ * starting after the `b-data:` prefix and ending at the close of the name. Returns
+ * undefined when no parser-provided location is available.
+ */
+function bDataNameLoc(tag: { sourceCodeLocation?: unknown }, attrName: string, bindingName: string): SourceLoc | undefined {
+	const a = attrLoc(tag, attrName);
+	if (!a) return undefined;
+	const prefixLen = 'b-data:'.length;
+	return {
+		startLine: a.startLine,
+		startCol: a.startCol + prefixLen,
+		startOffset: a.startOffset + prefixLen,
+		endLine: a.startLine,
+		endCol: a.startCol + prefixLen + bindingName.length,
+		endOffset: a.startOffset + prefixLen + bindingName.length,
+	};
 }
 
 function interpolationLoc(
@@ -940,7 +960,10 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			for (const attr of tag.attrs) {
 				if (attr.name.startsWith('b-data:')) {
 					const bindingName = attr.name.slice('b-data:'.length);
-					bindings.push({ name: bindingName, data: interpretBackcode(attr.value) });
+					const binding: PartialBinding = { name: bindingName, data: interpretBackcode(attr.value) };
+					const nameLoc = bDataNameLoc(tag, attr.name, bindingName);
+					if (nameLoc) binding.nameLoc = nameLoc;
+					bindings.push(binding);
 				}
 			}
 
@@ -1059,7 +1082,10 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			for (const attr of tag.attrs) {
 				if (attr.name.startsWith('b-data:')) {
 					const bindingName = attr.name.slice('b-data:'.length);
-					bindings.push({ name: bindingName, data: interpretBackcode(attr.value) });
+					const binding: PartialBinding = { name: bindingName, data: interpretBackcode(attr.value) };
+					const nameLoc = bDataNameLoc(tag, attr.name, bindingName);
+					if (nameLoc) binding.nameLoc = nameLoc;
+					bindings.push(binding);
 				}
 			}
 
