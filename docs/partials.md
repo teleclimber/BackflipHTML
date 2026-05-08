@@ -328,6 +328,7 @@ For `b-attr:NAME.bool` (boolean):
 - Using `b-data:NAME` on the call site when the partial declares `b-attr:NAME` is an error — pass the value as an attribute instead.
 - Inside the partial body, a `b-attr` variable is a scalar (string or bool). Using it as an array, object, or iterable (`b-for`, member access, indexing) is a compile error.
 - A boolean `b-attr` used directly in a `{{ }}` interpolation produces a warning. Use a string `b-attr` if you need to print the value, or convert explicitly. (No warning for the reverse: a string `b-attr` used in a boolean context like `b-if`.)
+- `b-attr:NAME` should be all lowercase (hyphens are fine). HTML lowercases attribute names, so a name written as `b-attr:fooBar` is silently treated as `foobar`, and references to `fooBar` inside the partial body will not work. The compiler emits a warning when a `b-attr:` name contains uppercase letters.
 
 ### Conflicting attributes
 

@@ -765,6 +765,37 @@ Deno.test("compileFile: b-attr on a b-part call is an error", async () => {
 	assertStringIncludes(msgs, "b-attr is only allowed on custom element partial definitions");
 });
 
+Deno.test("compileFile: b-attr with uppercase letters in name produces warning", async () => {
+	const { errors } = await compileFile('<my-widget b-attr:fooBar>body</my-widget>');
+	const warnings = errors.filter(e => e.severity === 'warning');
+	const fatal = errors.filter(e => e.severity !== 'warning');
+	assertEquals(fatal.length, 0);
+	assertEquals(warnings.length, 1);
+	assertStringIncludes(warnings[0].message, 'fooBar');
+	assertStringIncludes(warnings[0].message, 'uppercase');
+});
+
+Deno.test("compileFile: b-attr with all uppercase letters in name produces warning", async () => {
+	const { errors } = await compileFile('<my-widget b-attr:PREMIUM>body</my-widget>');
+	const warnings = errors.filter(e => e.severity === 'warning');
+	assertEquals(warnings.length, 1);
+	assertStringIncludes(warnings[0].message, 'PREMIUM');
+});
+
+Deno.test("compileFile: b-attr with uppercase letters and .bool modifier produces warning", async () => {
+	const { errors } = await compileFile('<my-widget b-attr:isPremium.bool>body</my-widget>');
+	const warnings = errors.filter(e => e.severity === 'warning');
+	const fatal = errors.filter(e => e.severity !== 'warning');
+	assertEquals(fatal.length, 0);
+	assertEquals(warnings.length, 1);
+	assertStringIncludes(warnings[0].message, 'isPremium');
+});
+
+Deno.test("compileFile: b-attr with all-lowercase name produces no uppercase warning", async () => {
+	const { errors } = await compileFile('<my-widget b-attr:premium b-attr:foo-bar.bool>body</my-widget>');
+	assertEquals(errors.length, 0);
+});
+
 Deno.test("compileFile: b-attr declared name is excluded from definitionAttrNames", async () => {
 	const { compiled, errors } = await compileFile('<my-widget b-attr:premium class="card">body</my-widget>');
 	assertEquals(errors.length, 0);

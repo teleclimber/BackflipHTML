@@ -840,6 +840,24 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			const bAttrs: { name: string; isBool: boolean; loc?: SourceLoc }[] = [];
 			for (const attr of tag.attrs) {
 				if (!attr.name.startsWith('b-attr:')) continue;
+				// HTML lowercases attribute names, so a b-attr name written with
+				// uppercase letters won't match when referenced inside the partial body.
+				// Recover the original-case name from the source via the parser's
+				// attribute offset (lowercasing preserves length).
+				const srcLoc = attrLoc(tag, attr.name);
+				if (srcLoc) {
+					const rawAttrName = html.slice(srcLoc.startOffset, srcLoc.startOffset + attr.name.length);
+					const afterPrefix = rawAttrName.slice('b-attr:'.length);
+					const dotIdx = afterPrefix.indexOf('.');
+					const namePart = dotIdx === -1 ? afterPrefix : afterPrefix.slice(0, dotIdx);
+					if (/[A-Z]/.test(namePart)) {
+						const errLoc = attrErrorLoc(tag, attr.name, filename) ?? { filename };
+						errors.push(new BackflipError(
+							`b-attr name "${namePart}" contains uppercase letters; HTML attribute names are lowercased, so this declares "${namePart.toLowerCase()}". Use a lowercase name to avoid confusion.`,
+							{ ...errLoc, severity: 'warning' }
+						));
+					}
+				}
 				const rest = attr.name.slice('b-attr:'.length);
 				const m = rest.match(/^([^.]+)(?:\.(.+))?$/);
 				if (!m || !m[1]) {
