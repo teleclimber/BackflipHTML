@@ -109,8 +109,11 @@ export interface PartialDef {
 	name: string;            // partial name (b-name value, or hyphenated tag name for custom element partials)
 	exported: boolean;       // has b-export attribute
 	customElement: boolean;  // true when defined as a top-level hyphenated tag (custom element partial)
-	line?: number;           // 1-based start line of the defining tag (best effort, from pre-scan)
-	col?: number;            // 1-based start col of the defining tag (best effort, from pre-scan)
+	loc: {
+		filename: string;    // relative path of the file that defines this partial
+		from: number;        // 1-based line number of the opening tag
+		to: number;          // 1-based line number of the closing tag
+	};
 }
 
 export type PartialRegistry = Map<string, PartialDef[]>

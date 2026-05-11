@@ -591,15 +591,16 @@ Deno.test("compileDirectory - no error for empty b-part (no slot content provide
 // --- scanPartials ---
 
 Deno.test("scanPartials: detects top-level custom element tags", async () => {
-    const found = await scanPartials('<my-card>content</my-card>');
+    const found = await scanPartials('<my-card>content</my-card>', 'page.html');
     assertEquals(found.length, 1);
     assertEquals(found[0].name, 'my-card');
     assertEquals(found[0].exported, false);
     assertEquals(found[0].customElement, true);
+    assertEquals(found[0].loc.filename, 'page.html');
 });
 
 Deno.test("scanPartials: detects b-export on custom element", async () => {
-    const found = await scanPartials('<my-card b-export>content</my-card>');
+    const found = await scanPartials('<my-card b-export>content</my-card>', 'page.html');
     assertEquals(found.length, 1);
     assertEquals(found[0].name, 'my-card');
     assertEquals(found[0].exported, true);
@@ -607,7 +608,7 @@ Deno.test("scanPartials: detects b-export on custom element", async () => {
 });
 
 Deno.test("scanPartials: detects top-level b-name partial", async () => {
-    const found = await scanPartials('<div b-name="hero">x</div>');
+    const found = await scanPartials('<div b-name="hero">x</div>', 'page.html');
     assertEquals(found.length, 1);
     assertEquals(found[0].name, 'hero');
     assertEquals(found[0].exported, false);
@@ -615,7 +616,7 @@ Deno.test("scanPartials: detects top-level b-name partial", async () => {
 });
 
 Deno.test("scanPartials: detects b-export on b-name partial", async () => {
-    const found = await scanPartials('<div b-name="hero" b-export>x</div>');
+    const found = await scanPartials('<div b-name="hero" b-export>x</div>', 'page.html');
     assertEquals(found.length, 1);
     assertEquals(found[0].name, 'hero');
     assertEquals(found[0].exported, true);
@@ -623,26 +624,26 @@ Deno.test("scanPartials: detects b-export on b-name partial", async () => {
 });
 
 Deno.test("scanPartials: b-name on a hyphenated tag is a b-name partial, not a custom element", async () => {
-    const found = await scanPartials('<my-card b-name="foo">x</my-card>');
+    const found = await scanPartials('<my-card b-name="foo">x</my-card>', 'page.html');
     assertEquals(found.length, 1);
     assertEquals(found[0].name, 'foo');
     assertEquals(found[0].customElement, false);
 });
 
 Deno.test("scanPartials: ignores nested custom elements", async () => {
-    const found = await scanPartials('<my-outer><my-inner>x</my-inner></my-outer>');
+    const found = await scanPartials('<my-outer><my-inner>x</my-inner></my-outer>', 'page.html');
     assertEquals(found.length, 1);
     assertEquals(found[0].name, 'my-outer');
 });
 
 Deno.test("scanPartials: ignores nested b-name partials", async () => {
-    const found = await scanPartials('<div b-name="outer"><span b-name="inner">x</span></div>');
+    const found = await scanPartials('<div b-name="outer"><span b-name="inner">x</span></div>', 'page.html');
     assertEquals(found.length, 1);
     assertEquals(found[0].name, 'outer');
 });
 
 Deno.test("scanPartials: handles multiple top-level definitions of mixed kinds", async () => {
-    const found = await scanPartials('<my-a>a</my-a><div b-name="b">B</div><my-c>c</my-c>');
+    const found = await scanPartials('<my-a>a</my-a><div b-name="b">B</div><my-c>c</my-c>', 'page.html');
     assertEquals(found.length, 3);
     assertEquals(found[0].name, 'my-a');
     assertEquals(found[0].customElement, true);
@@ -653,47 +654,70 @@ Deno.test("scanPartials: handles multiple top-level definitions of mixed kinds",
 });
 
 Deno.test("scanPartials: ignores b-* directive tags without b-name", async () => {
-    const found = await scanPartials('<b-unwrap>y</b-unwrap>');
+    const found = await scanPartials('<b-unwrap>y</b-unwrap>', 'page.html');
     assertEquals(found.length, 0);
 });
 
 Deno.test("scanPartials: ignores plain (non-hyphenated) tags without b-name", async () => {
-    const found = await scanPartials('<div>y</div>');
+    const found = await scanPartials('<div>y</div>', 'page.html');
     assertEquals(found.length, 0);
 });
 
 Deno.test("scanPartials: ignores tags inside HTML comments", async () => {
-    const found = await scanPartials('<!-- <my-card>x</my-card> --><my-real>y</my-real>');
+    const found = await scanPartials('<!-- <my-card>x</my-card> --><my-real>y</my-real>', 'page.html');
     assertEquals(found.length, 1);
     assertEquals(found[0].name, 'my-real');
 });
 
 Deno.test("scanPartials: ignores '>' inside attribute values", async () => {
-    const found = await scanPartials('<my-card data-x="a > b">content</my-card>');
+    const found = await scanPartials('<my-card data-x="a > b">content</my-card>', 'page.html');
     assertEquals(found.length, 1);
     assertEquals(found[0].name, 'my-card');
 });
 
 Deno.test("scanPartials: handles self-closing tags", async () => {
-    const found = await scanPartials('<my-card /><my-other>x</my-other>');
+    const found = await scanPartials('<my-card /><my-other>x</my-other>', 'page.html');
     assertEquals(found.length, 2);
     assertEquals(found[0].name, 'my-card');
     assertEquals(found[1].name, 'my-other');
 });
 
-Deno.test("scanPartials: captures line/col from sourceCodeLocation", async () => {
-    const found = await scanPartials('\n  <my-card>x</my-card>');
+Deno.test("scanPartials: loc.from is opening tag line, loc.to is closing tag line", async () => {
+    const html = '\n  <my-card>\n    x\n  </my-card>';
+    const found = await scanPartials(html, 'page.html');
     assertEquals(found.length, 1);
-    assertEquals(found[0].line, 2);
-    assertEquals(found[0].col, 3);
+    assertEquals(found[0].loc.from, 2);
+    assertEquals(found[0].loc.to, 4);
+});
+
+Deno.test("scanPartials: loc.from === loc.to for self-closing tags", async () => {
+    const found = await scanPartials('<my-card />', 'page.html');
+    assertEquals(found.length, 1);
+    assertEquals(found[0].loc.from, 1);
+    assertEquals(found[0].loc.to, 1);
+});
+
+Deno.test("scanPartials: filename propagates to every def", async () => {
+    const found = await scanPartials('<my-a></my-a><my-b></my-b>', 'dir/sub.html');
+    assertEquals(found.length, 2);
+    assertEquals(found[0].loc.filename, 'dir/sub.html');
+    assertEquals(found[1].loc.filename, 'dir/sub.html');
 });
 
 // --- validateCustomElementUniqueness ---
 
+const mkDef = (overrides: { name: string; exported: boolean; customElement: boolean; filename: string; from?: number; to?: number }) =>
+    ({
+        name: overrides.name,
+        exported: overrides.exported,
+        customElement: overrides.customElement,
+        loc: { filename: overrides.filename, from: overrides.from ?? 1, to: overrides.to ?? 1 },
+    });
+
 Deno.test("validateCustomElementUniqueness: no error for unique exported", () => {
     const reg: PartialRegistry = new Map([
-        ['a.html', [{ name: 'my-card', exported: true, customElement: true }]],
-        ['b.html', [{ name: 'my-button', exported: true, customElement: true }]],
+        ['a.html', [mkDef({ name: 'my-card', exported: true, customElement: true, filename: 'a.html' })]],
+        ['b.html', [mkDef({ name: 'my-button', exported: true, customElement: true, filename: 'b.html' })]],
     ]);
     const errors = validateCustomElementUniqueness(reg);
     assertEquals(errors.length, 0);
@@ -701,8 +725,8 @@ Deno.test("validateCustomElementUniqueness: no error for unique exported", () =>
 
 Deno.test("validateCustomElementUniqueness: no error for two unexported with same name", () => {
     const reg: PartialRegistry = new Map([
-        ['a.html', [{ name: 'my-card', exported: false, customElement: true }]],
-        ['b.html', [{ name: 'my-card', exported: false, customElement: true }]],
+        ['a.html', [mkDef({ name: 'my-card', exported: false, customElement: true, filename: 'a.html' })]],
+        ['b.html', [mkDef({ name: 'my-card', exported: false, customElement: true, filename: 'b.html' })]],
     ]);
     const errors = validateCustomElementUniqueness(reg);
     assertEquals(errors.length, 0);
@@ -710,8 +734,8 @@ Deno.test("validateCustomElementUniqueness: no error for two unexported with sam
 
 Deno.test("validateCustomElementUniqueness: error when exported name also defined elsewhere unexported", () => {
     const reg: PartialRegistry = new Map([
-        ['a.html', [{ name: 'my-card', exported: true, customElement: true }]],
-        ['b.html', [{ name: 'my-card', exported: false, customElement: true }]],
+        ['a.html', [mkDef({ name: 'my-card', exported: true, customElement: true, filename: 'a.html' })]],
+        ['b.html', [mkDef({ name: 'my-card', exported: false, customElement: true, filename: 'b.html' })]],
     ]);
     const errors = validateCustomElementUniqueness(reg);
     assertEquals(errors.length > 0, true);
@@ -721,8 +745,8 @@ Deno.test("validateCustomElementUniqueness: error when exported name also define
 
 Deno.test("validateCustomElementUniqueness: error when same name exported in two files", () => {
     const reg: PartialRegistry = new Map([
-        ['a.html', [{ name: 'my-card', exported: true, customElement: true }]],
-        ['b.html', [{ name: 'my-card', exported: true, customElement: true }]],
+        ['a.html', [mkDef({ name: 'my-card', exported: true, customElement: true, filename: 'a.html' })]],
+        ['b.html', [mkDef({ name: 'my-card', exported: true, customElement: true, filename: 'b.html' })]],
     ]);
     const errors = validateCustomElementUniqueness(reg);
     assertEquals(errors.length > 0, true);

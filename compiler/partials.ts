@@ -47,45 +47,58 @@ async function collectHtmlFiles(dir: string, base: string = dir): Promise<string
  * and self-closing/void tags are handled correctly. `sourceCodeLocationInfo` is always
  * enabled on RewritingStream, so the line/col are taken from the parser.
  */
-export function scanPartials(html: string): Promise<PartialDef[]> {
+export function scanPartials(html: string, filename: string): Promise<PartialDef[]> {
     return new Promise((resolve, reject) => {
         const defs: PartialDef[] = [];
         let depth = 0;
+        let currentDef: PartialDef | null = null;  // the top-level partial currently being scanned, if any
 
         const rewriteStream = new RewritingStream();
 
         rewriteStream.on('startTag', (tag) => {
+            const isContainer = !tag.selfClosing && !VOID_ELEMENTS.has(tag.tagName);
+
             if (depth === 0) {
                 const bNameAttr = tag.attrs.find(a => a.name === 'b-name');
                 const exported = tag.attrs.some(a => a.name === 'b-export');
-                const loc = tag.sourceCodeLocation as { startLine?: number; startCol?: number } | null | undefined;
+                const loc = tag.sourceCodeLocation as { startLine?: number; endLine?: number } | null | undefined;
+                const startLine = loc?.startLine ?? 1;
+                const endLine = loc?.endLine ?? startLine;
 
+                let def: PartialDef | null = null;
                 if (bNameAttr) {
-                    defs.push({
+                    def = {
                         name: bNameAttr.value,
                         exported,
                         customElement: false,
-                        line: loc?.startLine,
-                        col: loc?.startCol,
-                    });
+                        loc: { filename, from: startLine, to: isContainer ? startLine : endLine },
+                    };
                 } else if (isCustomElementTagName(tag.tagName)) {
-                    defs.push({
+                    def = {
                         name: tag.tagName,
                         exported,
                         customElement: true,
-                        line: loc?.startLine,
-                        col: loc?.startCol,
-                    });
+                        loc: { filename, from: startLine, to: isContainer ? startLine : endLine },
+                    };
+                }
+
+                if (def) {
+                    defs.push(def);
+                    if (isContainer) currentDef = def;
                 }
             }
 
-            if (!tag.selfClosing && !VOID_ELEMENTS.has(tag.tagName)) {
-                depth++;
-            }
+            if (isContainer) depth++;
         });
 
-        rewriteStream.on('endTag', () => {
-            if (depth > 0) depth--;
+        rewriteStream.on('endTag', (tag) => {
+            if (depth === 0) return;
+            depth--;
+            if (depth === 0 && currentDef) {
+                const loc = tag.sourceCodeLocation as { startLine?: number } | null | undefined;
+                if (loc?.startLine) currentDef.loc.to = loc.startLine;
+                currentDef = null;
+            }
         });
 
         const s = new stream.Readable({ encoding: 'utf8' });
@@ -564,27 +577,27 @@ export function validateCustomElementUniqueness(
     const errors: BackflipError[] = [];
 
     // Group custom-element definitions by name across all files
-    const byName = new Map<string, { file: string, def: PartialDef }[]>();
-    for (const [file, defs] of registry) {
+    const byName = new Map<string, PartialDef[]>();
+    for (const [, defs] of registry) {
         for (const def of defs) {
             if (!def.customElement) continue;
             const list = byName.get(def.name) ?? [];
-            list.push({ file, def });
+            list.push(def);
             byName.set(def.name, list);
         }
     }
 
     for (const [name, occurrences] of byName) {
-        const exported = occurrences.filter(o => o.def.exported);
+        const exported = occurrences.filter(d => d.exported);
         if (exported.length === 0) continue; // all unexported: same name across files is OK
 
         if (occurrences.length > 1) {
             // Conflict: at least one is exported and there are other definitions
-            const locs = occurrences.map(o => `${o.file}:${o.def.line ?? '?'}`).join(', ');
-            for (const o of occurrences) {
+            const locs = occurrences.map(d => `${d.loc.filename}:${d.loc.from}`).join(', ');
+            for (const d of occurrences) {
                 errors.push(new BackflipError(
                     `custom element partial <${name}> is exported in one file but also defined elsewhere; an exported custom element partial must be unique across the project (defined in: ${locs})`,
-                    { filename: o.file, line: o.def.line, col: o.def.col }
+                    { filename: d.loc.filename, line: d.loc.from }
                 ));
             }
         }
@@ -613,7 +626,7 @@ export async function compileDirectory(dir: string, options?: CompileOptions): P
         const absPath = path.join(dir, relPath);
         const html = await fs.readFile(absPath, 'utf-8');
         fileContents.set(relPath, html);
-        const defs = await scanPartials(html);
+        const defs = await scanPartials(html, relPath);
         registry.set(relPath, defs);
     }));
 
