@@ -1,6 +1,6 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { compileFile, collectSlots, isCustomElementTagName, type CompiledFile, type CompileOptions, type PartialRegistry, type PartialRefTNode, type RootTNode, type CustomElementRegistry, type CustomElementDef, type PartialBinding, type AttrBindTNode, BackflipError } from './compiler.js';
+import { compileFile, collectSlots, isCustomElementTagName, type CompiledFile, type CompileOptions, type PartialRegistry, type PartialRefTNode, type RootTNode, type PartialDef, type PartialBinding, type AttrBindTNode, BackflipError } from './compiler.js';
 import { validateBAttrUsage, inferDataShape } from './data-shape.js';
 
 export interface CompiledDirectory {
@@ -29,25 +29,23 @@ async function collectHtmlFiles(dir: string, base: string = dir): Promise<string
 }
 
 /**
- * Scan HTML source for elements that have both b-name="..." and b-export attributes.
- * Returns the set of exported partial names found in this file.
+ * Scan HTML source for elements with b-name="..." attributes, returning a PartialDef
+ * entry for each (regardless of whether b-export is also present).
  *
- * We look for tags that contain both b-name="..." and b-export (in any order/spacing).
- * We match on a single tag's attribute span using a simple heuristic: find all
- * opening tags that contain both attributes.
+ * Best-effort regex pre-scan: matches any opening tag containing b-name="value", then
+ * inspects the tag's attribute span for a b-export flag.
  */
-function scanExportedPartials(html: string): Set<string> {
-    const names = new Set<string>();
-    // Match opening tags that contain both b-export and b-name="..."
-    // We use a regex that finds <tagName ...attrs...> where attrs contain both.
-    // Strategy: find all b-name="value" occurrences and check if the enclosing tag also has b-export.
-    const tagRegex = /<[a-zA-Z][^>]*\bb-name="([^"]*)"[^>]*\bb-export\b[^>]*>|<[a-zA-Z][^>]*\bb-export\b[^>]*\bb-name="([^"]*)"[^>]*>/g;
+function scanBNamePartials(html: string): PartialDef[] {
+    const defs: PartialDef[] = [];
+    const tagRegex = /<[a-zA-Z][^>]*\bb-name="([^"]*)"[^>]*>/g;
     let m: RegExpExecArray | null;
     while ((m = tagRegex.exec(html)) !== null) {
-        const name = m[1] ?? m[2];
-        if (name) names.add(name);
+        const name = m[1];
+        if (!name) continue;
+        const exported = /\bb-export\b/.test(m[0]);
+        defs.push({ name, exported, customElement: false });
     }
-    return names;
+    return defs;
 }
 
 /**
@@ -59,8 +57,8 @@ function scanExportedPartials(html: string): Set<string> {
  * any other element. The scan is best-effort and uses a small state machine that
  * tracks tag depth, skips comments/CDATA/doctype, and respects quoted attribute values.
  */
-export function scanCustomElementPartials(html: string): CustomElementDef[] {
-    const results: CustomElementDef[] = [];
+export function scanCustomElementPartials(html: string): PartialDef[] {
+    const results: PartialDef[] = [];
     let depth = 0;
     let i = 0;
     let line = 1, col = 1;
@@ -127,7 +125,7 @@ export function scanCustomElementPartials(html: string): CustomElementDef[] {
 
         if (depth === 0 && isCustomElementTagName(tagName)) {
             const exported = /\bb-export(?:\s|=|\/?>|$)/.test(tagText);
-            results.push({ name: tagName, exported, line: tagStartLine, col: tagStartCol });
+            results.push({ name: tagName, exported, customElement: true, line: tagStartLine, col: tagStartCol });
         }
 
         advanceTo(j + 1);
@@ -300,8 +298,9 @@ function validateTNode(
                         errorLoc(ctx.sourceRelPath, ref.loc)
                     ));
                 } else {
-                    const exportedNames = ctx.registry.get(ref.file)!;
-                    if (!exportedNames.has(ref.partialName)) {
+                    const defs = ctx.registry.get(ref.file)!;
+                    const isExported = defs.some(d => d.name === ref.partialName && d.exported);
+                    if (!isExported) {
                         const targetFile = ctx.allFiles.get(ref.file);
                         const partialExistsInFile = targetFile?.partials.has(ref.partialName) ?? false;
 
@@ -506,11 +505,11 @@ function validateTNode(
  */
 function findExportedCustomElement(
     name: string,
-    registry: CustomElementRegistry
+    registry: PartialRegistry
 ): string | null {
     for (const [file, defs] of registry) {
         for (const def of defs) {
-            if (def.name === name && def.exported) return file;
+            if (def.customElement && def.exported && def.name === name) return file;
         }
     }
     return null;
@@ -552,7 +551,7 @@ function visitPartialRefs(
  */
 function resolveCustomElementCalls(
     files: Map<string, CompiledFile>,
-    customElementRegistry: CustomElementRegistry
+    registry: PartialRegistry
 ): BackflipError[] {
     const warnings: BackflipError[] = [];
 
@@ -568,7 +567,7 @@ function resolveCustomElementCalls(
                     return;
                 }
 
-                const exportedFile = findExportedCustomElement(ref.partialName, customElementRegistry);
+                const exportedFile = findExportedCustomElement(ref.partialName, registry);
                 if (exportedFile && exportedFile !== filePath) {
                     ref.file = exportedFile;
                     return;
@@ -595,14 +594,15 @@ function resolveCustomElementCalls(
  * Two unexported definitions with the same name in different files are fine.
  */
 export function validateCustomElementUniqueness(
-    customElementRegistry: CustomElementRegistry
+    registry: PartialRegistry
 ): BackflipError[] {
     const errors: BackflipError[] = [];
 
-    // Group definitions by name across all files
-    const byName = new Map<string, { file: string, def: CustomElementDef }[]>();
-    for (const [file, defs] of customElementRegistry) {
+    // Group custom-element definitions by name across all files
+    const byName = new Map<string, { file: string, def: PartialDef }[]>();
+    for (const [file, defs] of registry) {
         for (const def of defs) {
+            if (!def.customElement) continue;
             const list = byName.get(def.name) ?? [];
             list.push({ file, def });
             byName.set(def.name, list);
@@ -643,20 +643,17 @@ export async function compileDirectory(dir: string, options?: CompileOptions): P
 
     const fileContents = new Map<string, string>();
     const registry: PartialRegistry = new Map();
-    const customElementRegistry: CustomElementRegistry = new Map();
 
     await Promise.all(relPaths.map(async (relPath) => {
         const absPath = path.join(dir, relPath);
         const html = await fs.readFile(absPath, 'utf-8');
         fileContents.set(relPath, html);
-        const exported = scanExportedPartials(html);
-        registry.set(relPath, exported);
-        const customElements = scanCustomElementPartials(html);
-        customElementRegistry.set(relPath, customElements);
+        const defs = [...scanBNamePartials(html), ...scanCustomElementPartials(html)];
+        registry.set(relPath, defs);
     }));
 
     // Validate custom element partial uniqueness across the project
-    allErrors.push(...validateCustomElementUniqueness(customElementRegistry));
+    allErrors.push(...validateCustomElementUniqueness(registry));
 
     // Cycle check: build dependency graph and DFS for cycles
     const depGraph = new Map<string, Set<string>>();
@@ -688,7 +685,7 @@ export async function compileDirectory(dir: string, options?: CompileOptions): P
     // Resolve custom element call sites against same-file partials and the global
     // exported custom-element registry. Mutates partial-ref nodes in place. May emit
     // warnings for unresolved hyphenated tags.
-    allErrors.push(...resolveCustomElementCalls(files, customElementRegistry));
+    allErrors.push(...resolveCustomElementCalls(files, registry));
 
     // Validate references and slots
     for (const [relPath, compiled] of compiledPairs) {

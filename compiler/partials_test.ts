@@ -6,7 +6,7 @@ import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { compileDirectory, scanCustomElementPartials, validateCustomElementUniqueness } from './partials.ts';
-import type { CustomElementRegistry, PartialRefTNode, AttrBindTNode, TNode } from './compiler.ts';
+import type { PartialRegistry, PartialRefTNode, AttrBindTNode, TNode } from './compiler.ts';
 
 // Use /tmp/claude-1000/ as the writable temp dir in this sandbox environment.
 // Deno.env.get('TMPDIR') may point to a read-only path; /tmp/claude-1000/ is always writable.
@@ -649,27 +649,27 @@ Deno.test("scanCustomElementPartials: handles self-closing tags", () => {
 // --- validateCustomElementUniqueness ---
 
 Deno.test("validateCustomElementUniqueness: no error for unique exported", () => {
-    const reg: CustomElementRegistry = new Map([
-        ['a.html', [{ name: 'my-card', exported: true }]],
-        ['b.html', [{ name: 'my-button', exported: true }]],
+    const reg: PartialRegistry = new Map([
+        ['a.html', [{ name: 'my-card', exported: true, customElement: true }]],
+        ['b.html', [{ name: 'my-button', exported: true, customElement: true }]],
     ]);
     const errors = validateCustomElementUniqueness(reg);
     assertEquals(errors.length, 0);
 });
 
 Deno.test("validateCustomElementUniqueness: no error for two unexported with same name", () => {
-    const reg: CustomElementRegistry = new Map([
-        ['a.html', [{ name: 'my-card', exported: false }]],
-        ['b.html', [{ name: 'my-card', exported: false }]],
+    const reg: PartialRegistry = new Map([
+        ['a.html', [{ name: 'my-card', exported: false, customElement: true }]],
+        ['b.html', [{ name: 'my-card', exported: false, customElement: true }]],
     ]);
     const errors = validateCustomElementUniqueness(reg);
     assertEquals(errors.length, 0);
 });
 
 Deno.test("validateCustomElementUniqueness: error when exported name also defined elsewhere unexported", () => {
-    const reg: CustomElementRegistry = new Map([
-        ['a.html', [{ name: 'my-card', exported: true }]],
-        ['b.html', [{ name: 'my-card', exported: false }]],
+    const reg: PartialRegistry = new Map([
+        ['a.html', [{ name: 'my-card', exported: true, customElement: true }]],
+        ['b.html', [{ name: 'my-card', exported: false, customElement: true }]],
     ]);
     const errors = validateCustomElementUniqueness(reg);
     assertEquals(errors.length > 0, true);
@@ -678,9 +678,9 @@ Deno.test("validateCustomElementUniqueness: error when exported name also define
 });
 
 Deno.test("validateCustomElementUniqueness: error when same name exported in two files", () => {
-    const reg: CustomElementRegistry = new Map([
-        ['a.html', [{ name: 'my-card', exported: true }]],
-        ['b.html', [{ name: 'my-card', exported: true }]],
+    const reg: PartialRegistry = new Map([
+        ['a.html', [{ name: 'my-card', exported: true, customElement: true }]],
+        ['b.html', [{ name: 'my-card', exported: true, customElement: true }]],
     ]);
     const errors = validateCustomElementUniqueness(reg);
     assertEquals(errors.length > 0, true);

@@ -105,20 +105,17 @@ export interface CompiledFile {
 	partials: Map<string, RootTNode>  // partialName → compiled tree
 }
 
-export type PartialRegistry = Map<string, Set<string>>
-// key: relative file path e.g. "graphics/charts.html"
-// value: set of exported partial names in that file
-
-export interface CustomElementDef {
-	name: string;          // hyphenated tag name e.g. "my-card"
-	exported: boolean;     // has b-export attribute
-	line?: number;         // 1-based start line of the opening tag (best effort, from pre-scan)
-	col?: number;          // 1-based start col of the opening tag (best effort, from pre-scan)
+export interface PartialDef {
+	name: string;            // partial name (b-name value, or hyphenated tag name for custom element partials)
+	exported: boolean;       // has b-export attribute
+	customElement: boolean;  // true when defined as a top-level hyphenated tag (custom element partial)
+	line?: number;           // 1-based start line of the defining tag (best effort, from pre-scan)
+	col?: number;            // 1-based start col of the defining tag (best effort, from pre-scan)
 }
 
-export type CustomElementRegistry = Map<string, CustomElementDef[]>
-// key: relative file path
-// value: list of top-level custom element partial definitions in that file
+export type PartialRegistry = Map<string, PartialDef[]>
+// key: relative file path e.g. "graphics/charts.html"
+// value: list of partials (both b-name and custom-element) defined in that file
 
 /**
  * True when `name` is a hyphenated tag that should be treated as a custom element
