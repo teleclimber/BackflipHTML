@@ -1,7 +1,11 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import stream from 'node:stream';
+import { RewritingStream } from 'parse5-html-rewriting-stream';
 import { compileFile, collectSlots, isCustomElementTagName, type CompiledFile, type CompileOptions, type PartialRegistry, type PartialRefTNode, type RootTNode, type PartialDef, type PartialBinding, type AttrBindTNode, BackflipError } from './compiler.js';
 import { validateBAttrUsage, inferDataShape } from './data-shape.js';
+
+const VOID_ELEMENTS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
 
 export interface CompiledDirectory {
     files: Map<string, CompiledFile>  // key: relative file path e.g. "blog/general.html"
@@ -29,109 +33,70 @@ async function collectHtmlFiles(dir: string, base: string = dir): Promise<string
 }
 
 /**
- * Scan HTML source for elements with b-name="..." attributes, returning a PartialDef
- * entry for each (regardless of whether b-export is also present).
+ * Scan HTML source for top-level partial definitions, returning a PartialDef per definition.
  *
- * Best-effort regex pre-scan: matches any opening tag containing b-name="value", then
- * inspects the tag's attribute span for a b-export flag.
- */
-function scanBNamePartials(html: string): PartialDef[] {
-    const defs: PartialDef[] = [];
-    const tagRegex = /<[a-zA-Z][^>]*\bb-name="([^"]*)"[^>]*>/g;
-    let m: RegExpExecArray | null;
-    while ((m = tagRegex.exec(html)) !== null) {
-        const name = m[1];
-        if (!name) continue;
-        const exported = /\bb-export\b/.test(m[0]);
-        defs.push({ name, exported, customElement: false });
-    }
-    return defs;
-}
-
-/**
- * Scan HTML source for top-level custom element partial definitions.
+ * A top-level element qualifies as a partial when either:
+ * - it carries a b-name="..." attribute (then customElement is false), OR
+ * - its tag name is a hyphenated custom-element name (per `isCustomElementTagName`), in
+ *   which case customElement is true.
  *
- * A "custom element" here is a hyphenated tag name following the HTML custom element
- * convention (lowercase letter start, contains '-'), excluding b-* directive tags.
- * "Top-level" means the tag appears at depth 0 of the document — not nested inside
- * any other element. The scan is best-effort and uses a small state machine that
- * tracks tag depth, skips comments/CDATA/doctype, and respects quoted attribute values.
+ * Precedence matches compileFile's dispatcher: b-name wins over the custom-element tag-
+ * name check, so a `<my-card b-name="foo">` is recorded as a b-name partial.
+ *
+ * Uses parse5's streaming SAX rewriter so comments, doctype, quoted attribute values,
+ * and self-closing/void tags are handled correctly. `sourceCodeLocationInfo` is always
+ * enabled on RewritingStream, so the line/col are taken from the parser.
  */
-export function scanCustomElementPartials(html: string): PartialDef[] {
-    const results: PartialDef[] = [];
-    let depth = 0;
-    let i = 0;
-    let line = 1, col = 1;
+export function scanPartials(html: string): Promise<PartialDef[]> {
+    return new Promise((resolve, reject) => {
+        const defs: PartialDef[] = [];
+        let depth = 0;
 
-    function advanceTo(target: number) {
-        while (i < target && i < html.length) {
-            if (html.charCodeAt(i) === 10) { line++; col = 1; }
-            else col++;
-            i++;
-        }
-    }
+        const rewriteStream = new RewritingStream();
 
-    while (i < html.length) {
-        const c = html.charCodeAt(i);
-        if (c !== 60 /* '<' */) { advanceTo(i + 1); continue; }
+        rewriteStream.on('startTag', (tag) => {
+            if (depth === 0) {
+                const bNameAttr = tag.attrs.find(a => a.name === 'b-name');
+                const exported = tag.attrs.some(a => a.name === 'b-export');
+                const loc = tag.sourceCodeLocation as { startLine?: number; startCol?: number } | null | undefined;
 
-        // Comment
-        if (html.startsWith('<!--', i)) {
-            const end = html.indexOf('-->', i + 4);
-            advanceTo(end < 0 ? html.length : end + 3);
-            continue;
-        }
-        // Doctype / CDATA-like '<!...>'
-        if (html.startsWith('<!', i)) {
-            const end = html.indexOf('>', i);
-            advanceTo(end < 0 ? html.length : end + 1);
-            continue;
-        }
-        // Closing tag
-        if (html.startsWith('</', i)) {
-            const end = html.indexOf('>', i);
-            if (end < 0) break;
-            depth = Math.max(0, depth - 1);
-            advanceTo(end + 1);
-            continue;
-        }
-        // Opening tag (must be followed by a letter)
-        const next = html.charCodeAt(i + 1);
-        const isLetter = (next >= 65 && next <= 90) || (next >= 97 && next <= 122);
-        if (!isLetter) { advanceTo(i + 1); continue; }
-
-        const tagStart = i;
-        const tagStartLine = line, tagStartCol = col;
-
-        // Find end of tag, skipping over quoted attribute values
-        let j = i + 1;
-        let inQuote: number = 0;
-        while (j < html.length) {
-            const cc = html.charCodeAt(j);
-            if (inQuote) {
-                if (cc === inQuote) inQuote = 0;
-            } else {
-                if (cc === 34 /* " */ || cc === 39 /* ' */) inQuote = cc;
-                else if (cc === 62 /* > */) break;
+                if (bNameAttr) {
+                    defs.push({
+                        name: bNameAttr.value,
+                        exported,
+                        customElement: false,
+                        line: loc?.startLine,
+                        col: loc?.startCol,
+                    });
+                } else if (isCustomElementTagName(tag.tagName)) {
+                    defs.push({
+                        name: tag.tagName,
+                        exported,
+                        customElement: true,
+                        line: loc?.startLine,
+                        col: loc?.startCol,
+                    });
+                }
             }
-            j++;
-        }
-        if (j >= html.length) break;
 
-        const tagText = html.slice(tagStart + 1, j); // excludes '<' and '>'
-        const selfClosing = tagText.trimEnd().endsWith('/');
-        const nameMatch = tagText.match(/^([a-zA-Z][a-zA-Z0-9-]*)/);
-        const tagName = nameMatch ? nameMatch[1].toLowerCase() : '';
+            if (!tag.selfClosing && !VOID_ELEMENTS.has(tag.tagName)) {
+                depth++;
+            }
+        });
 
-        if (depth === 0 && isCustomElementTagName(tagName)) {
-            const exported = /\bb-export(?:\s|=|\/?>|$)/.test(tagText);
-            results.push({ name: tagName, exported, customElement: true, line: tagStartLine, col: tagStartCol });
-        }
+        rewriteStream.on('endTag', () => {
+            if (depth > 0) depth--;
+        });
 
-        advanceTo(j + 1);
-        if (!selfClosing) depth++;
-    }
-    return results;
+        const s = new stream.Readable({ encoding: 'utf8' });
+        s.push(html);
+        s.push(null);
+        s.pipe(rewriteStream);
+
+        s.on('error', reject);
+        rewriteStream.on('error', reject);
+        rewriteStream.on('end', () => resolve(defs));
+    });
 }
 
 /**
@@ -648,7 +613,7 @@ export async function compileDirectory(dir: string, options?: CompileOptions): P
         const absPath = path.join(dir, relPath);
         const html = await fs.readFile(absPath, 'utf-8');
         fileContents.set(relPath, html);
-        const defs = [...scanBNamePartials(html), ...scanCustomElementPartials(html)];
+        const defs = await scanPartials(html);
         registry.set(relPath, defs);
     }));
 

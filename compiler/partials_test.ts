@@ -5,7 +5,7 @@
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
-import { compileDirectory, scanCustomElementPartials, validateCustomElementUniqueness } from './partials.ts';
+import { compileDirectory, scanPartials, validateCustomElementUniqueness } from './partials.ts';
 import type { PartialRegistry, PartialRefTNode, AttrBindTNode, TNode } from './compiler.ts';
 
 // Use /tmp/claude-1000/ as the writable temp dir in this sandbox environment.
@@ -588,62 +588,104 @@ Deno.test("compileDirectory - no error for empty b-part (no slot content provide
     assertEquals(errors.length, 0);
 });
 
-// --- scanCustomElementPartials ---
+// --- scanPartials ---
 
-Deno.test("scanCustomElementPartials: detects top-level custom element tags", () => {
-    const found = scanCustomElementPartials('<my-card>content</my-card>');
+Deno.test("scanPartials: detects top-level custom element tags", async () => {
+    const found = await scanPartials('<my-card>content</my-card>');
     assertEquals(found.length, 1);
     assertEquals(found[0].name, 'my-card');
     assertEquals(found[0].exported, false);
+    assertEquals(found[0].customElement, true);
 });
 
-Deno.test("scanCustomElementPartials: detects b-export attribute", () => {
-    const found = scanCustomElementPartials('<my-card b-export>content</my-card>');
+Deno.test("scanPartials: detects b-export on custom element", async () => {
+    const found = await scanPartials('<my-card b-export>content</my-card>');
     assertEquals(found.length, 1);
     assertEquals(found[0].name, 'my-card');
     assertEquals(found[0].exported, true);
+    assertEquals(found[0].customElement, true);
 });
 
-Deno.test("scanCustomElementPartials: ignores nested custom elements", () => {
-    const found = scanCustomElementPartials('<my-outer><my-inner>x</my-inner></my-outer>');
+Deno.test("scanPartials: detects top-level b-name partial", async () => {
+    const found = await scanPartials('<div b-name="hero">x</div>');
+    assertEquals(found.length, 1);
+    assertEquals(found[0].name, 'hero');
+    assertEquals(found[0].exported, false);
+    assertEquals(found[0].customElement, false);
+});
+
+Deno.test("scanPartials: detects b-export on b-name partial", async () => {
+    const found = await scanPartials('<div b-name="hero" b-export>x</div>');
+    assertEquals(found.length, 1);
+    assertEquals(found[0].name, 'hero');
+    assertEquals(found[0].exported, true);
+    assertEquals(found[0].customElement, false);
+});
+
+Deno.test("scanPartials: b-name on a hyphenated tag is a b-name partial, not a custom element", async () => {
+    const found = await scanPartials('<my-card b-name="foo">x</my-card>');
+    assertEquals(found.length, 1);
+    assertEquals(found[0].name, 'foo');
+    assertEquals(found[0].customElement, false);
+});
+
+Deno.test("scanPartials: ignores nested custom elements", async () => {
+    const found = await scanPartials('<my-outer><my-inner>x</my-inner></my-outer>');
     assertEquals(found.length, 1);
     assertEquals(found[0].name, 'my-outer');
 });
 
-Deno.test("scanCustomElementPartials: handles multiple top-level definitions", () => {
-    const found = scanCustomElementPartials('<my-a>a</my-a><my-b>b</my-b>');
-    assertEquals(found.length, 2);
+Deno.test("scanPartials: ignores nested b-name partials", async () => {
+    const found = await scanPartials('<div b-name="outer"><span b-name="inner">x</span></div>');
+    assertEquals(found.length, 1);
+    assertEquals(found[0].name, 'outer');
+});
+
+Deno.test("scanPartials: handles multiple top-level definitions of mixed kinds", async () => {
+    const found = await scanPartials('<my-a>a</my-a><div b-name="b">B</div><my-c>c</my-c>');
+    assertEquals(found.length, 3);
     assertEquals(found[0].name, 'my-a');
-    assertEquals(found[1].name, 'my-b');
+    assertEquals(found[0].customElement, true);
+    assertEquals(found[1].name, 'b');
+    assertEquals(found[1].customElement, false);
+    assertEquals(found[2].name, 'my-c');
+    assertEquals(found[2].customElement, true);
 });
 
-Deno.test("scanCustomElementPartials: ignores b-* directive tags", () => {
-    const found = scanCustomElementPartials('<b-unwrap b-name="x">y</b-unwrap>');
+Deno.test("scanPartials: ignores b-* directive tags without b-name", async () => {
+    const found = await scanPartials('<b-unwrap>y</b-unwrap>');
     assertEquals(found.length, 0);
 });
 
-Deno.test("scanCustomElementPartials: ignores plain (non-hyphenated) tags", () => {
-    const found = scanCustomElementPartials('<div b-name="x">y</div>');
+Deno.test("scanPartials: ignores plain (non-hyphenated) tags without b-name", async () => {
+    const found = await scanPartials('<div>y</div>');
     assertEquals(found.length, 0);
 });
 
-Deno.test("scanCustomElementPartials: ignores tags inside HTML comments", () => {
-    const found = scanCustomElementPartials('<!-- <my-card>x</my-card> --><my-real>y</my-real>');
+Deno.test("scanPartials: ignores tags inside HTML comments", async () => {
+    const found = await scanPartials('<!-- <my-card>x</my-card> --><my-real>y</my-real>');
     assertEquals(found.length, 1);
     assertEquals(found[0].name, 'my-real');
 });
 
-Deno.test("scanCustomElementPartials: ignores '>' inside attribute values", () => {
-    const found = scanCustomElementPartials('<my-card data-x="a > b">content</my-card>');
+Deno.test("scanPartials: ignores '>' inside attribute values", async () => {
+    const found = await scanPartials('<my-card data-x="a > b">content</my-card>');
     assertEquals(found.length, 1);
     assertEquals(found[0].name, 'my-card');
 });
 
-Deno.test("scanCustomElementPartials: handles self-closing tags", () => {
-    const found = scanCustomElementPartials('<my-card /><my-other>x</my-other>');
+Deno.test("scanPartials: handles self-closing tags", async () => {
+    const found = await scanPartials('<my-card /><my-other>x</my-other>');
     assertEquals(found.length, 2);
     assertEquals(found[0].name, 'my-card');
     assertEquals(found[1].name, 'my-other');
+});
+
+Deno.test("scanPartials: captures line/col from sourceCodeLocation", async () => {
+    const found = await scanPartials('\n  <my-card>x</my-card>');
+    assertEquals(found.length, 1);
+    assertEquals(found[0].line, 2);
+    assertEquals(found[0].col, 3);
 });
 
 // --- validateCustomElementUniqueness ---
