@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import stream from 'node:stream';
 import { RewritingStream } from 'parse5-html-rewriting-stream';
-import { compileFile, collectSlots, isCustomElementTagName, type CompiledFile, type CompileOptions, type PartialRegistry, type PartialRefTNode, type RootTNode, type PartialDef, type PartialBinding, type AttrBindTNode, BackflipError } from './compiler.js';
+import { compilePartial, collectSlots, isCustomElementTagName, type CompiledFile, type CompileOptions, type PartialRegistry, type PartialRefTNode, type RootTNode, type PartialDef, type PartialBinding, type AttrBindTNode, BackflipError } from './compiler.js';
 import { validateBAttrUsage, inferDataShape } from './data-shape.js';
 
 const VOID_ELEMENTS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
@@ -40,16 +40,20 @@ async function collectHtmlFiles(dir: string, base: string = dir): Promise<string
  * - its tag name is a hyphenated custom-element name (per `isCustomElementTagName`), in
  *   which case customElement is true.
  *
- * Precedence matches compileFile's dispatcher: b-name wins over the custom-element tag-
+ * Precedence matches compilePartial's dispatcher: b-name wins over the custom-element tag-
  * name check, so a `<my-card b-name="foo">` is recorded as a b-name partial.
  *
  * Uses parse5's streaming SAX rewriter so comments, doctype, quoted attribute values,
  * and self-closing/void tags are handled correctly. `sourceCodeLocationInfo` is always
  * enabled on RewritingStream, so the line/col are taken from the parser.
  */
-export function scanPartials(html: string, filename: string): Promise<PartialDef[]> {
+export function scanPartials(html: string, filename: string): Promise<{ defs: PartialDef[], errors: BackflipError[] }> {
     return new Promise((resolve, reject) => {
         const defs: PartialDef[] = [];
+        const errors: BackflipError[] = [];
+        // Top-level elements that are neither b-name nor a custom-element tag — every
+        // top-level element in a partial file must be a partial definition.
+        const unnamedTopLevel: { tagName: string, line?: number, col?: number, endLine?: number, endCol?: number }[] = [];
         let depth = 0;
         let currentDef: PartialDef | null = null;  // the top-level partial currently being scanned, if any
 
@@ -61,7 +65,7 @@ export function scanPartials(html: string, filename: string): Promise<PartialDef
             if (depth === 0) {
                 const bNameAttr = tag.attrs.find(a => a.name === 'b-name');
                 const exported = tag.attrs.some(a => a.name === 'b-export');
-                const loc = tag.sourceCodeLocation as { startLine?: number; endLine?: number } | null | undefined;
+                const loc = tag.sourceCodeLocation as { startLine?: number; startCol?: number; endLine?: number; endCol?: number } | null | undefined;
                 const startLine = loc?.startLine ?? 1;
                 const endLine = loc?.endLine ?? startLine;
 
@@ -85,6 +89,14 @@ export function scanPartials(html: string, filename: string): Promise<PartialDef
                 if (def) {
                     defs.push(def);
                     if (isContainer) currentDef = def;
+                } else {
+                    unnamedTopLevel.push({
+                        tagName: tag.tagName,
+                        line: loc?.startLine,
+                        col: loc?.startCol,
+                        endLine: loc?.endLine,
+                        endCol: loc?.endCol,
+                    });
                 }
             }
 
@@ -108,7 +120,34 @@ export function scanPartials(html: string, filename: string): Promise<PartialDef
 
         s.on('error', reject);
         rewriteStream.on('error', reject);
-        rewriteStream.on('end', () => resolve(defs));
+        rewriteStream.on('end', () => {
+            // Flag unnamed top-level elements only when the file actually defines partials —
+            // a stray non-partial file isn't an error on its own.
+            if (defs.length > 0 && unnamedTopLevel.length > 0) {
+                for (const entry of unnamedTopLevel) {
+                    errors.push(new BackflipError(
+                        `top-level <${entry.tagName}> is missing b-name; in a partial file every top-level element must be a named partial`,
+                        { filename, line: entry.line, col: entry.col, endLine: entry.endLine, endCol: entry.endCol }
+                    ));
+                }
+            }
+            // Detect duplicate partial names within the file.
+            const seen = new Map<string, PartialDef>();
+            for (const def of defs) {
+                const prior = seen.get(def.name);
+                if (prior) {
+                    errors.push(new BackflipError(
+                        def.customElement
+                            ? `custom element partial <${def.name}> conflicts with another partial of the same name in this file`
+                            : `partial "${def.name}" is already defined in this file`,
+                        { filename, line: def.loc.from }
+                    ));
+                } else {
+                    seen.set(def.name, def);
+                }
+            }
+            resolve({ defs, errors });
+        });
     });
 }
 
@@ -607,11 +646,28 @@ export function validateCustomElementUniqueness(
 }
 
 /**
+ * Slice complete lines [from..to] (1-based, inclusive) from `html`. Used to
+ * extract a single partial's source for compilePartial. The returned slice
+ * preserves trailing newlines so parse5's line tracking inside the slice lines
+ * up cleanly.
+ */
+function sliceLines(html: string, from: number, to: number): string {
+    const lines = html.split('\n');
+    // Clamp to valid range (defensive — scanPartials should produce in-range loc).
+    const lo = Math.max(1, from) - 1;
+    const hi = Math.min(lines.length, to);
+    return lines.slice(lo, hi).join('\n');
+}
+
+/**
  * Compile all HTML template files in a directory.
  *
  * Pass 1: Build the PartialRegistry by scanning all .html files for b-export attributes.
  * Cycle check: Build dependency graph and detect circular cross-file references.
- * Pass 2: Compile each file in parallel with the full registry, then validate cross-file refs.
+ * Pass 2: For each file, slice each partial out by line range and compile it
+ *         independently via compilePartial. Locs in the resulting trees and
+ *         errors stay slice-relative; consumers translate via PartialDef when
+ *         they need file-relative coordinates.
  */
 export async function compileDirectory(dir: string, options?: CompileOptions): Promise<{ directory: CompiledDirectory, errors: BackflipError[] }> {
     const allErrors: BackflipError[] = [];
@@ -626,8 +682,9 @@ export async function compileDirectory(dir: string, options?: CompileOptions): P
         const absPath = path.join(dir, relPath);
         const html = await fs.readFile(absPath, 'utf-8');
         fileContents.set(relPath, html);
-        const defs = await scanPartials(html, relPath);
+        const { defs, errors } = await scanPartials(html, relPath);
         registry.set(relPath, defs);
+        allErrors.push(...errors);
     }));
 
     // Validate custom element partial uniqueness across the project
@@ -648,13 +705,35 @@ export async function compileDirectory(dir: string, options?: CompileOptions): P
         ));
     }
 
-    // Pass 2: compile all files in parallel
+    // Pass 2: compile every partial independently. For each file, compile its
+    // PartialDefs in parallel and assemble into a CompiledFile.
     const compiledPairs = await Promise.all(
         relPaths.map(async (relPath): Promise<[string, CompiledFile]> => {
             const html = fileContents.get(relPath)!;
-            const { compiled, errors } = await compileFile(html, registry, relPath, options);
-            allErrors.push(...errors);
-            return [relPath, compiled];
+            const defs = registry.get(relPath) ?? [];
+            const compiledFile: CompiledFile = { partials: new Map() };
+
+            // Compile all partials in this file in parallel.
+            const results = await Promise.all(defs.map(async (def) => {
+                const slice = sliceLines(html, def.loc.from, def.loc.to);
+                try {
+                    return { def, ...(await compilePartial(slice, def, options)) };
+                } catch (e) {
+                    // compilePartial only rejects on internal precondition violations
+                    // (slice/PartialDef mismatch). Surface as an error and skip the partial.
+                    const msg = e instanceof Error ? e.message : String(e);
+                    allErrors.push(new BackflipError(msg, { filename: relPath }));
+                    return null;
+                }
+            }));
+
+            for (const r of results) {
+                if (!r) continue;
+                allErrors.push(...r.errors);
+                // Last-write-wins on duplicate names — scanPartials already reported the dup error.
+                compiledFile.partials.set(r.def.name, r.compiled);
+            }
+            return [relPath, compiledFile];
         })
     );
 

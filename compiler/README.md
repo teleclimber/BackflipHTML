@@ -10,7 +10,7 @@ The main compilation entry point. Uses `parse5`'s streaming HTML parser to handl
 
 Key function:
 
-- `compileFile()` — compiles a single HTML string into a `CompiledFile` containing a map of partial names to AST nodes
+- `compilePartial()` — compiles a single partial's HTML slice (paired with its `PartialDef`) into a `RootTNode`. The file-level pipeline lives in `partials.ts` (`scanPartials` → slice per def → `compilePartial`).
 
 ### Expression language (`backcode.ts`)
 

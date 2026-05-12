@@ -1,8 +1,31 @@
 import { assertEquals, assertNotEquals } from "jsr:@std/assert";
 import { generateMockData, type PartialLookup } from './mock-data.ts';
 import type { DataShape } from '../compiler/data-shape.ts';
-import type { RootTNode, CompiledFile } from '../compiler/compiler.ts';
-import { compileFile } from '../compiler/compiler.ts';
+import type { RootTNode, CompiledFile, PartialDef, CompileOptions } from '../compiler/compiler.ts';
+import { compilePartial } from '../compiler/compiler.ts';
+import type { BackflipError } from '../compiler/errors.ts';
+
+// Test helper: compile a single-partial HTML snippet by inferring the partial's name from the
+// source. Mirrors the old `compileFile` signature and drives `compilePartial` under the hood.
+async function compileFile(
+	html: string,
+	_registry?: unknown,
+	filename?: string,
+	options?: CompileOptions,
+): Promise<{ compiled: CompiledFile, errors: BackflipError[] }> {
+	const m = html.match(/<([a-zA-Z][a-zA-Z0-9-]*)([^>]*)>/);
+	if (!m) throw new Error(`compileFile (test helper): no opening tag in: ${html.slice(0, 80)}`);
+	const tagName = m[1];
+	const attrText = m[2];
+	const bNameMatch = attrText.match(/\bb-name\s*=\s*"([^"]*)"/);
+	const exported = /\bb-export(?:\b|=)/.test(attrText);
+	const customElement = !bNameMatch && /^[a-z][a-z0-9]*-[a-z0-9-]*$/.test(tagName);
+	const name = bNameMatch ? bNameMatch[1] : tagName;
+	const lines = html.split('\n').length;
+	const def: PartialDef = { name, exported, customElement, loc: { filename: filename ?? '', from: 1, to: lines } };
+	const { compiled: root, errors } = await compilePartial(html, def, options);
+	return { compiled: { partials: new Map([[def.name, root]]) }, errors };
+}
 
 function shape(usages: string[], extra?: Partial<DataShape>): DataShape {
 	return { usages: new Set(usages as any[]), ...extra };
@@ -178,11 +201,14 @@ Deno.test("passed variable merges caller properties with called partial shape", 
 });
 
 Deno.test("passed to multiple partials merges shapes", async () => {
-	const html = `
-	  <div b-name="card">{{ data.title }}</div>
-	  <div b-name="badge" :class="data.color"></div>
-	`;
-	const { compiled: compiledFile } = await compileFile(html);
+	const { compiled: cardFile } = await compileFile(`<div b-name="card">{{ data.title }}</div>`);
+	const { compiled: badgeFile } = await compileFile(`<div b-name="badge" :class="data.color"></div>`);
+	const compiledFile: CompiledFile = {
+		partials: new Map([
+			['card', cardFile.partials.get('card')!],
+			['badge', badgeFile.partials.get('badge')!],
+		]),
+	};
 	const lookup: PartialLookup = { compiledFile };
 
 	const callerShapes = new Map([

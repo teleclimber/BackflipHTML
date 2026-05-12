@@ -1,13 +1,52 @@
 import { assert, assertEquals, assertExists, assertStringIncludes } from "jsr:@std/assert";
 
-import type { RootTNode, RawTNode, PrintTNode, ForTNode, IfTNode, SlotTNode, PartialRefTNode, AttrBindTNode, AssetRefTNode, SourceLoc, CompileOptions } from "./compiler.ts";
-import { compileFile, effectiveAttrNames, isCustomElementTagName, onText, pushRaw, resolveAssetRefs } from "./compiler.ts";
+import type { RootTNode, RawTNode, PrintTNode, ForTNode, IfTNode, SlotTNode, PartialRefTNode, AttrBindTNode, AssetRefTNode, SourceLoc, CompileOptions, CompiledFile, PartialDef } from "./compiler.ts";
+import { compilePartial, effectiveAttrNames, isCustomElementTagName, onText, pushRaw, resolveAssetRefs } from "./compiler.ts";
 import { interpretBackcode } from "./backcode.ts";
+import type { BackflipError } from "./errors.ts";
 
 // ---- helpers ----
 
+/**
+ * Test helper: compile a single-partial HTML snippet by inferring the partial's
+ * name and customElement flag from the source. Mirrors the old `compileFile`
+ * signature so test bodies stay terse, but internally drives the new
+ * `compilePartial` primitive — i.e. tests in this file exercise compilePartial,
+ * not scanPartials. Tests that need multi-partial behavior live in
+ * partials_test.ts (where compileDirectory / scanPartials live).
+ */
+async function compileFile(
+	html: string,
+	_registry?: unknown,
+	filename?: string,
+	options?: CompileOptions,
+): Promise<{ compiled: CompiledFile, errors: BackflipError[] }> {
+	const def = inferPartialDef(html, filename ?? '');
+	const { compiled: root, errors } = await compilePartial(html, def, options);
+	return { compiled: { partials: new Map([[def.name, root]]) }, errors };
+}
+
+function inferPartialDef(html: string, filename: string): PartialDef {
+	// Find the first opening tag in the snippet.
+	const m = html.match(/<([a-zA-Z][a-zA-Z0-9-]*)([^>]*)>/);
+	if (!m) throw new Error(`compileFile (test helper): no opening tag in: ${html.slice(0, 80)}`);
+	const tagName = m[1];
+	const attrText = m[2];
+	const bNameMatch = attrText.match(/\bb-name\s*=\s*"([^"]*)"/);
+	const exported = /\bb-export(?:\b|=)/.test(attrText);
+	const customElement = !bNameMatch && /^[a-z][a-z0-9]*-[a-z0-9-]*$/.test(tagName);
+	const name = bNameMatch ? bNameMatch[1] : tagName;
+	const lines = html.split('\n').length;
+	return {
+		name,
+		exported,
+		customElement,
+		loc: { filename, from: 1, to: lines },
+	};
+}
+
 /** Helper: compile a snippet of HTML as a single partial via b-unwrap, returning the root and errors. */
-async function compileSnippet(html: string): Promise<{ root: RootTNode, errors: import("./errors.ts").BackflipError[] }> {
+async function compileSnippet(html: string): Promise<{ root: RootTNode, errors: BackflipError[] }> {
 	const { compiled, errors } = await compileFile(`<b-unwrap b-name="test">${html}</b-unwrap>`);
 	const root = compiled.partials.get('test')!;
 	return { root, errors };
@@ -563,27 +602,7 @@ Deno.test("compileFile: top-level custom element with b-for reports error", asyn
 	assertStringIncludes(errors[0].message, "b-for is not allowed on a partial definition");
 });
 
-Deno.test("compileFile: mixing b-name partials and custom element partials in one file", async () => {
-	const { compiled, errors } = await compileFile('<div b-name="page">A</div><my-card>B</my-card>');
-	assertEquals(errors.length, 0);
-	assertEquals(compiled.partials.size, 2);
-	assertEquals(compiled.partials.get('page')?.customElement, undefined);
-	assertEquals(compiled.partials.get('my-card')?.customElement, true);
-});
-
-Deno.test("compileFile: cross-style same-file collision reports error", async () => {
-	const { errors } = await compileFile('<my-card>A</my-card><div b-name="my-card">B</div>');
-	assertEquals(errors.length > 0, true);
-	assertStringIncludes(errors[0].message, 'my-card');
-	assertStringIncludes(errors[0].message, 'already defined');
-});
-
-Deno.test("compileFile: duplicate b-name in same file reports error", async () => {
-	const { errors } = await compileFile('<div b-name="card">A</div><div b-name="card">B</div>');
-	assertEquals(errors.length > 0, true);
-	assertStringIncludes(errors[0].message, 'card');
-	assertStringIncludes(errors[0].message, 'already defined');
-});
+// Multi-partial-per-file tests live in partials_test.ts (compileDirectory / scanPartials).
 
 Deno.test("compileFile: nested custom element is not treated as a partial definition", async () => {
 	const { compiled, errors } = await compileFile('<div b-name="page"><my-card>x</my-card></div>');
@@ -881,13 +900,6 @@ Deno.test("compileFile: b-attr declarations are not rendered on call-site open t
 	assertEquals(rendered.includes('b-attr'), false);
 });
 
-Deno.test("compileFile: multiple partials in one file", async () => {
-	const { compiled: result } = await compileFile('<div b-name="first">A</div><div b-name="second">B</div>');
-	assertEquals(result.partials.size, 2);
-	assertEquals(result.partials.has("first"), true);
-	assertEquals(result.partials.has("second"), true);
-});
-
 // ---- compileFile: b-part ----
 
 Deno.test("compileFile: b-part same-file reference creates PartialRefTNode with correct file=null and partialName", async () => {
@@ -1171,15 +1183,19 @@ Deno.test("meta: document-level partial (contains body as descendant)", async ()
 	assertEquals(root.meta!.isDocumentLevel, true);
 });
 
-Deno.test("meta: multiple partials in one file have separate meta", async () => {
-	const src = '<div b-name="header"><h1>hi</h1></div>\n<div b-name="footer"><p>bye</p></div>';
-	const { compiled: result } = await compileFile(src);
-	const header = result.partials.get("header")!;
-	const footer = result.partials.get("footer")!;
+Deno.test("meta: each partial is compiled in isolation, so meta is slice-relative", async () => {
+	// compilePartial sees only one partial's slice, so meta offsets/lines are local
+	// to the slice. Each of these starts at offset 0 within its own slice.
+	const headerSlice = '<div b-name="header"><h1>hi</h1></div>';
+	const footerSlice = '<div b-name="footer"><p>bye</p></div>';
+	const headerDef: PartialDef = { name: 'header', exported: false, customElement: false, loc: { filename: '', from: 1, to: 1 } };
+	const footerDef: PartialDef = { name: 'footer', exported: false, customElement: false, loc: { filename: '', from: 2, to: 2 } };
+	const { compiled: header } = await compilePartial(headerSlice, headerDef);
+	const { compiled: footer } = await compilePartial(footerSlice, footerDef);
 	assertEquals(header.meta!.startOffset, 0);
-	assertEquals(header.meta!.endOffset, src.indexOf('</div>') + '</div>'.length);
-	assertEquals(footer.meta!.startOffset, src.indexOf('<div b-name="footer">'));
-	assertEquals(footer.meta!.endOffset, src.length);
+	assertEquals(header.meta!.endOffset, headerSlice.length);
+	assertEquals(footer.meta!.startOffset, 0);
+	assertEquals(footer.meta!.endOffset, footerSlice.length);
 	assertEquals(header.meta!.isDocumentLevel, false);
 	assertEquals(footer.meta!.isDocumentLevel, false);
 });
@@ -1682,53 +1698,5 @@ Deno.test("asset: resolveAssetRefs does not mutate original", async () => {
 	assertEquals(assetRefsAfter, 1);
 });
 
-// --- top-level element without b-name in a partial file ---
-
-Deno.test("compileFile - error when top-level element lacks b-name in a file with partials", async () => {
-	const html = `
-		<div b-name="card"><p>Card</p></div>
-		<footer>Site Footer</footer>
-	`;
-	const { errors } = await compileFile(html);
-	assertEquals(errors.length, 1);
-	assertStringIncludes(errors[0].message, 'b-name');
-});
-
-Deno.test("compileFile - error for multiple top-level elements without b-name", async () => {
-	const html = `
-		<header>Header</header>
-		<div b-name="card"><p>Card</p></div>
-		<footer>Footer</footer>
-	`;
-	const { errors } = await compileFile(html);
-	assertEquals(errors.length, 2);
-});
-
-Deno.test("compileFile - no error when all top-level elements have b-name", async () => {
-	const html = `
-		<div b-name="header"><h1>Header</h1></div>
-		<div b-name="footer"><p>Footer</p></div>
-	`;
-	const { errors } = await compileFile(html);
-	assertEquals(errors.length, 0);
-});
-
-Deno.test("compileFile - error when file has top-level elements but no partials", async () => {
-	const html = `
-		<header>Header</header>
-		<footer>Footer</footer>
-	`;
-	const { errors } = await compileFile(html);
-	assertEquals(errors.length, 2);
-	assertStringIncludes(errors[0].message, 'b-name');
-	assertStringIncludes(errors[1].message, 'b-name');
-});
-
-Deno.test("compileFile - error includes source location for unnamed top-level element", async () => {
-	const html = '<div b-name="card"><p>Card</p></div><span>oops</span>';
-	const { errors } = await compileFile(html, undefined, 'test.html');
-	assertEquals(errors.length, 1);
-	assertStringIncludes(errors[0].message, 'test.html');
-	assertEquals(typeof errors[0].line, 'number');
-});
+// Top-level-element-without-b-name error tests live in partials_test.ts (scanPartials owns this check).
 

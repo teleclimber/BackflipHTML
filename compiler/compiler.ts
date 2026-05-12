@@ -360,10 +360,25 @@ export interface CompileOptions {
 	assetDirs?: Map<string, string>;   // @name -> absolute dir path (for file existence checks)
 }
 
-export function compileFile(html: string, _registry?: PartialRegistry, filename?: string, options?: CompileOptions): Promise<{ compiled: CompiledFile, errors: BackflipError[] }> {
+/**
+ * Compile a single partial.
+ *
+ * `htmlSlice` is the source for exactly one top-level partial (matching
+ * `partialDef`), typically obtained by slicing complete lines `[from..to]` of
+ * the source file. The very first start tag in the slice must match
+ * `partialDef` (name + customElement flag); a mismatch rejects the promise.
+ *
+ * All `SourceLoc` values in the returned tree, all error locations, and any
+ * `data-loc` strings baked into raw HTML are SLICE-RELATIVE. Callers translate
+ * to file coordinates by adding `partialDef.loc.from - 1` to line numbers when
+ * needed.
+ */
+export function compilePartial(htmlSlice: string, partialDef: PartialDef, options?: CompileOptions): Promise<{ compiled: RootTNode, errors: BackflipError[] }> {
 
 	return new Promise((resolve, reject) => {
 
+		const html = htmlSlice;
+		const filename = partialDef.loc.filename;
 		const lineMap = new LineMap(html);
 		const errors: BackflipError[] = [];
 
@@ -373,15 +388,14 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 
 		const tag_stack: TagMatcher[] = [];
 
+		// Single-partial output. handleBName / handleCustomElementDefinition will
+		// populate this; we validate at end against partialDef.
 		const compiledFile: CompiledFile = { partials: new Map() };
 
 		// current partial being compiled (null = top-level, outside any b-name partial)
 		let currentPartialRoot: RootTNode | null = null;
 		let currentPartialName: string | null = null;
 		let cur_tnode: TNode | null = null;
-
-		// Track top-level elements that lack b-name (error if file also has partials)
-		const unnamedTopLevel: { tagName: string, loc?: { filename?: string, line?: number, col?: number, endLine?: number, endCol?: number } }[] = [];
 
 		const includeLocs = options?.includeLocs ?? false;
 
@@ -773,12 +787,6 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			}
 
 			const partialName = bNameAttr.value;
-			if (compiledFile.partials.has(partialName)) {
-				errors.push(new BackflipError(
-					`partial "${partialName}" is already defined in this file`,
-					attrErrorLoc(tag, 'b-name', filename)
-				));
-			}
 			const tagSrcLoc = tag.sourceCodeLocation as { startOffset?: number; startLine?: number; startCol?: number } | null | undefined;
 			const partialRoot: RootTNode = { type: 'root', tnodes: [], meta: {
 				startOffset: tagSrcLoc?.startOffset ?? 0,
@@ -828,13 +836,6 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 			}
 
 			const partialName = tag.tagName;
-			if (compiledFile.partials.has(partialName)) {
-				errors.push(new BackflipError(
-					`custom element partial <${partialName}> conflicts with another partial of the same name in this file`,
-					errorLoc(filename, tagLoc(tag))
-				));
-			}
-
 			const tagSrcLoc = tag.sourceCodeLocation as { startOffset?: number; endOffset?: number; startLine?: number; startCol?: number; endLine?: number; endCol?: number } | null | undefined;
 			const partialRoot: RootTNode = { type: 'root', tnodes: [], meta: {
 				startOffset: tagSrcLoc?.startOffset ?? 0,
@@ -1353,11 +1354,6 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 				}
 			}
 
-			// Track top-level elements that lack b-name
-			if (tag_stack.length === 0 && currentPartialRoot === null) {
-				unnamedTopLevel.push({ tagName: tag.tagName, loc: errorLoc(filename, tagLoc(tag)) });
-			}
-
 			const bPartAttr = tag.attrs.find(a => a.name === 'b-part');
 			if (bPartAttr) return handleBPart(tag, raw, bPartAttr);
 
@@ -1552,16 +1548,27 @@ export function compileFile(html: string, _registry?: PartialRegistry, filename?
 		s.on('error', (err) => { reject(err); });
 		rewriteStream.on('error', (err) => { reject(err); });
 		rewriteStream.on('end', () => {
-			// Every top-level element must have b-name
-			if (unnamedTopLevel.length > 0) {
-				for (const entry of unnamedTopLevel) {
-					errors.push(new BackflipError(
-						`top-level <${entry.tagName}> is missing b-name; in a partial file every top-level element must be a named partial`,
-						entry.loc
-					));
-				}
+			// Validate that the slice produced exactly one partial matching partialDef.
+			// A mismatch here means the caller sliced incorrectly or fed the wrong def —
+			// reject so the bug surfaces loudly rather than producing garbage.
+			const found = compiledFile.partials.get(partialDef.name);
+			if (!found) {
+				const names = Array.from(compiledFile.partials.keys());
+				reject(new Error(
+					`compilePartial: slice did not contain expected partial "${partialDef.name}" `
+					+ `(found: ${names.length === 0 ? 'none' : names.join(', ')}) in ${filename}`
+				));
+				return;
 			}
-			resolve({ compiled: compiledFile, errors });
+			const isCustom = found.customElement === true;
+			if (isCustom !== partialDef.customElement) {
+				reject(new Error(
+					`compilePartial: partial "${partialDef.name}" customElement flag mismatch `
+					+ `(slice: ${isCustom}, partialDef: ${partialDef.customElement}) in ${filename}`
+				));
+				return;
+			}
+			resolve({ compiled: found, errors });
 		});
 	});
 }

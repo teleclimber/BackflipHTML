@@ -1,6 +1,30 @@
 import { assertEquals } from "jsr:@std/assert";
-import { compileFile } from './compiler.ts';
+import { compilePartial, type CompiledFile, type PartialDef, type CompileOptions } from './compiler.ts';
+import type { BackflipError } from './errors.ts';
 import { inferDataShape, inferFreeVars, type DataShape } from './data-shape.ts';
+
+// Test helper: compile a single-partial HTML snippet by inferring the partial's name from the source.
+// Mirrors the old `compileFile` signature so the existing test bodies stay terse, but drives the
+// new `compilePartial` primitive under the hood. Multi-partial behavior lives in partials_test.ts.
+async function compileFile(
+	html: string,
+	_registry?: unknown,
+	filename?: string,
+	options?: CompileOptions,
+): Promise<{ compiled: CompiledFile, errors: BackflipError[] }> {
+	const m = html.match(/<([a-zA-Z][a-zA-Z0-9-]*)([^>]*)>/);
+	if (!m) throw new Error(`compileFile (test helper): no opening tag in: ${html.slice(0, 80)}`);
+	const tagName = m[1];
+	const attrText = m[2];
+	const bNameMatch = attrText.match(/\bb-name\s*=\s*"([^"]*)"/);
+	const exported = /\bb-export(?:\b|=)/.test(attrText);
+	const customElement = !bNameMatch && /^[a-z][a-z0-9]*-[a-z0-9-]*$/.test(tagName);
+	const name = bNameMatch ? bNameMatch[1] : tagName;
+	const lines = html.split('\n').length;
+	const def: PartialDef = { name, exported, customElement, loc: { filename: filename ?? '', from: 1, to: lines } };
+	const { compiled: root, errors } = await compilePartial(html, def, options);
+	return { compiled: { partials: new Map([[def.name, root]]) }, errors };
+}
 
 Deno.test("compileFile sets freeVars on compiled partial", async () => {
 	const html = `

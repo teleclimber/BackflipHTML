@@ -591,7 +591,7 @@ Deno.test("compileDirectory - no error for empty b-part (no slot content provide
 // --- scanPartials ---
 
 Deno.test("scanPartials: detects top-level custom element tags", async () => {
-    const found = await scanPartials('<my-card>content</my-card>', 'page.html');
+    const { defs: found } = await scanPartials('<my-card>content</my-card>', 'page.html');
     assertEquals(found.length, 1);
     assertEquals(found[0].name, 'my-card');
     assertEquals(found[0].exported, false);
@@ -600,7 +600,7 @@ Deno.test("scanPartials: detects top-level custom element tags", async () => {
 });
 
 Deno.test("scanPartials: detects b-export on custom element", async () => {
-    const found = await scanPartials('<my-card b-export>content</my-card>', 'page.html');
+    const { defs: found } = await scanPartials('<my-card b-export>content</my-card>', 'page.html');
     assertEquals(found.length, 1);
     assertEquals(found[0].name, 'my-card');
     assertEquals(found[0].exported, true);
@@ -608,7 +608,7 @@ Deno.test("scanPartials: detects b-export on custom element", async () => {
 });
 
 Deno.test("scanPartials: detects top-level b-name partial", async () => {
-    const found = await scanPartials('<div b-name="hero">x</div>', 'page.html');
+    const { defs: found } = await scanPartials('<div b-name="hero">x</div>', 'page.html');
     assertEquals(found.length, 1);
     assertEquals(found[0].name, 'hero');
     assertEquals(found[0].exported, false);
@@ -616,7 +616,7 @@ Deno.test("scanPartials: detects top-level b-name partial", async () => {
 });
 
 Deno.test("scanPartials: detects b-export on b-name partial", async () => {
-    const found = await scanPartials('<div b-name="hero" b-export>x</div>', 'page.html');
+    const { defs: found } = await scanPartials('<div b-name="hero" b-export>x</div>', 'page.html');
     assertEquals(found.length, 1);
     assertEquals(found[0].name, 'hero');
     assertEquals(found[0].exported, true);
@@ -624,26 +624,26 @@ Deno.test("scanPartials: detects b-export on b-name partial", async () => {
 });
 
 Deno.test("scanPartials: b-name on a hyphenated tag is a b-name partial, not a custom element", async () => {
-    const found = await scanPartials('<my-card b-name="foo">x</my-card>', 'page.html');
+    const { defs: found } = await scanPartials('<my-card b-name="foo">x</my-card>', 'page.html');
     assertEquals(found.length, 1);
     assertEquals(found[0].name, 'foo');
     assertEquals(found[0].customElement, false);
 });
 
 Deno.test("scanPartials: ignores nested custom elements", async () => {
-    const found = await scanPartials('<my-outer><my-inner>x</my-inner></my-outer>', 'page.html');
+    const { defs: found } = await scanPartials('<my-outer><my-inner>x</my-inner></my-outer>', 'page.html');
     assertEquals(found.length, 1);
     assertEquals(found[0].name, 'my-outer');
 });
 
 Deno.test("scanPartials: ignores nested b-name partials", async () => {
-    const found = await scanPartials('<div b-name="outer"><span b-name="inner">x</span></div>', 'page.html');
+    const { defs: found } = await scanPartials('<div b-name="outer"><span b-name="inner">x</span></div>', 'page.html');
     assertEquals(found.length, 1);
     assertEquals(found[0].name, 'outer');
 });
 
 Deno.test("scanPartials: handles multiple top-level definitions of mixed kinds", async () => {
-    const found = await scanPartials('<my-a>a</my-a><div b-name="b">B</div><my-c>c</my-c>', 'page.html');
+    const { defs: found } = await scanPartials('<my-a>a</my-a><div b-name="b">B</div><my-c>c</my-c>', 'page.html');
     assertEquals(found.length, 3);
     assertEquals(found[0].name, 'my-a');
     assertEquals(found[0].customElement, true);
@@ -654,29 +654,29 @@ Deno.test("scanPartials: handles multiple top-level definitions of mixed kinds",
 });
 
 Deno.test("scanPartials: ignores b-* directive tags without b-name", async () => {
-    const found = await scanPartials('<b-unwrap>y</b-unwrap>', 'page.html');
+    const { defs: found } = await scanPartials('<b-unwrap>y</b-unwrap>', 'page.html');
     assertEquals(found.length, 0);
 });
 
 Deno.test("scanPartials: ignores plain (non-hyphenated) tags without b-name", async () => {
-    const found = await scanPartials('<div>y</div>', 'page.html');
+    const { defs: found } = await scanPartials('<div>y</div>', 'page.html');
     assertEquals(found.length, 0);
 });
 
 Deno.test("scanPartials: ignores tags inside HTML comments", async () => {
-    const found = await scanPartials('<!-- <my-card>x</my-card> --><my-real>y</my-real>', 'page.html');
+    const { defs: found } = await scanPartials('<!-- <my-card>x</my-card> --><my-real>y</my-real>', 'page.html');
     assertEquals(found.length, 1);
     assertEquals(found[0].name, 'my-real');
 });
 
 Deno.test("scanPartials: ignores '>' inside attribute values", async () => {
-    const found = await scanPartials('<my-card data-x="a > b">content</my-card>', 'page.html');
+    const { defs: found } = await scanPartials('<my-card data-x="a > b">content</my-card>', 'page.html');
     assertEquals(found.length, 1);
     assertEquals(found[0].name, 'my-card');
 });
 
 Deno.test("scanPartials: handles self-closing tags", async () => {
-    const found = await scanPartials('<my-card /><my-other>x</my-other>', 'page.html');
+    const { defs: found } = await scanPartials('<my-card /><my-other>x</my-other>', 'page.html');
     assertEquals(found.length, 2);
     assertEquals(found[0].name, 'my-card');
     assertEquals(found[1].name, 'my-other');
@@ -684,24 +684,98 @@ Deno.test("scanPartials: handles self-closing tags", async () => {
 
 Deno.test("scanPartials: loc.from is opening tag line, loc.to is closing tag line", async () => {
     const html = '\n  <my-card>\n    x\n  </my-card>';
-    const found = await scanPartials(html, 'page.html');
+    const { defs: found } = await scanPartials(html, 'page.html');
     assertEquals(found.length, 1);
     assertEquals(found[0].loc.from, 2);
     assertEquals(found[0].loc.to, 4);
 });
 
 Deno.test("scanPartials: loc.from === loc.to for self-closing tags", async () => {
-    const found = await scanPartials('<my-card />', 'page.html');
+    const { defs: found } = await scanPartials('<my-card />', 'page.html');
     assertEquals(found.length, 1);
     assertEquals(found[0].loc.from, 1);
     assertEquals(found[0].loc.to, 1);
 });
 
 Deno.test("scanPartials: filename propagates to every def", async () => {
-    const found = await scanPartials('<my-a></my-a><my-b></my-b>', 'dir/sub.html');
+    const { defs: found } = await scanPartials('<my-a></my-a><my-b></my-b>', 'dir/sub.html');
     assertEquals(found.length, 2);
     assertEquals(found[0].loc.filename, 'dir/sub.html');
     assertEquals(found[1].loc.filename, 'dir/sub.html');
+});
+
+// --- scanPartials: unnamed top-level element diagnostics ---
+
+Deno.test("scanPartials: error when top-level element lacks b-name in a file with partials", async () => {
+    const html = `
+		<div b-name="card"><p>Card</p></div>
+		<footer>Site Footer</footer>
+	`;
+    const { errors } = await scanPartials(html, 'page.html');
+    assertEquals(errors.length, 1);
+    assertStringIncludes(errors[0].message, 'b-name');
+});
+
+Deno.test("scanPartials: error for multiple top-level elements without b-name", async () => {
+    const html = `
+		<header>Header</header>
+		<div b-name="card"><p>Card</p></div>
+		<footer>Footer</footer>
+	`;
+    const { errors } = await scanPartials(html, 'page.html');
+    assertEquals(errors.length, 2);
+});
+
+Deno.test("scanPartials: no error when all top-level elements have b-name", async () => {
+    const html = `
+		<div b-name="header"><h1>Header</h1></div>
+		<div b-name="footer"><p>Footer</p></div>
+	`;
+    const { errors } = await scanPartials(html, 'page.html');
+    assertEquals(errors.length, 0);
+});
+
+Deno.test("scanPartials: no error when file has top-level elements but no partials", async () => {
+    // No partials in the file at all → not a partial file, leave it alone.
+    const html = `
+		<header>Header</header>
+		<footer>Footer</footer>
+	`;
+    const { errors } = await scanPartials(html, 'page.html');
+    assertEquals(errors.length, 0);
+});
+
+Deno.test("scanPartials: error includes source location for unnamed top-level element", async () => {
+    const html = '<div b-name="card"><p>Card</p></div><span>oops</span>';
+    const { errors } = await scanPartials(html, 'test.html');
+    assertEquals(errors.length, 1);
+    assertEquals(errors[0].filename, 'test.html');
+    assertEquals(typeof errors[0].line, 'number');
+});
+
+// --- scanPartials: duplicate-name diagnostics ---
+
+Deno.test("scanPartials: duplicate b-name in same file reports error", async () => {
+    const { errors } = await scanPartials('<div b-name="card">A</div><div b-name="card">B</div>', 'page.html');
+    assertEquals(errors.length, 1);
+    assertStringIncludes(errors[0].message, 'card');
+    assertStringIncludes(errors[0].message, 'already defined');
+});
+
+Deno.test("scanPartials: cross-style same-file collision reports error", async () => {
+    const { errors } = await scanPartials('<my-card>A</my-card><div b-name="my-card">B</div>', 'page.html');
+    assertEquals(errors.length, 1);
+    assertStringIncludes(errors[0].message, 'my-card');
+});
+
+Deno.test("scanPartials: mixing b-name partials and custom element partials in one file", async () => {
+    const { defs, errors } = await scanPartials('<div b-name="page">A</div><my-card>B</my-card>', 'page.html');
+    assertEquals(errors.length, 0);
+    assertEquals(defs.length, 2);
+    assertEquals(defs[0].name, 'page');
+    assertEquals(defs[0].customElement, false);
+    assertEquals(defs[1].name, 'my-card');
+    assertEquals(defs[1].customElement, true);
 });
 
 // --- validateCustomElementUniqueness ---
@@ -1294,9 +1368,10 @@ Deno.test("compileDirectory - b-data:NAME unknown to same-file b-name partial is
     assertStringIncludes(fatal[0].message, 'variable bogus is unused');
     assertStringIncludes(fatal[0].message, '<card>');
     // The error span should cover only the NAME portion of `b-data:bogus`, not the whole tag.
+    // Locs are slice-relative: the `page` partial starts on file line 2, so within its slice
+    // the b-data attr is on line 1 of the slice. Columns are unchanged by slicing.
     const err = fatal[0];
-    assertEquals(err.line, 2);
-    // Find the position of "bogus" in the source line
+    assertEquals(err.line, 1);
     const lines = content.split('\n');
     const bogusCol = lines[1].indexOf('b-data:bogus') + 'b-data:'.length + 1; // 1-based
     assertEquals(err.col, bogusCol);
