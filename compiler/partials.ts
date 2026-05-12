@@ -4,7 +4,7 @@ import stream from 'node:stream';
 import { RewritingStream } from 'parse5-html-rewriting-stream';
 import { compilePartial } from './compiler.js';
 import { collectSlots, isCustomElementTagName } from './helpers.js';
-import type { CompiledFile, CompileOptions, PartialRegistry, PartialRefTNode, RootTNode, PartialDef, PartialBinding, AttrBindTNode } from './types.js';
+import type { CompiledFile, CompileOptions, PartialRegistry, PartialRefTNode, RootTNode, PartialDef, PartialBinding, AttrBindTNode, TNode, RawTNode, SourceLoc, ForTNode, IfTNode } from './types.js';
 import { BackflipError } from './errors.js';
 import { validateBAttrUsage, inferDataShape } from './data-shape.js';
 
@@ -251,7 +251,7 @@ function validateRefs(
 }
 
 function validateRootTNode(
-    node: { tnodes: import('./types.ts').TNode[] },
+    node: { tnodes: TNode[] },
     ctx: ValidationContext
 ): void {
     for (const tnode of node.tnodes) {
@@ -259,7 +259,7 @@ function validateRootTNode(
     }
 }
 
-function errorLoc(filename: string, loc?: import('./types.ts').SourceLoc): { filename: string, line?: number, col?: number, endLine?: number, endCol?: number } | undefined {
+function errorLoc(filename: string, loc?: SourceLoc): { filename: string, line?: number, col?: number, endLine?: number, endCol?: number } | undefined {
     if (!loc) return { filename };
     return { filename, line: loc.startLine, col: loc.startCol, endLine: loc.endLine, endCol: loc.endCol };
 }
@@ -277,10 +277,10 @@ function resolvePartial(ref: PartialRefTNode, ctx: ValidationContext): RootTNode
     }
 }
 
-function hasSlotContent(nodes: import('./types.ts').TNode[]): boolean {
+function hasSlotContent(nodes: TNode[]): boolean {
     for (const n of nodes) {
         if (n.type === 'raw') {
-            if ((n as import('./types.ts').RawTNode).raw.trim() !== '') return true;
+            if ((n as RawTNode).raw.trim() !== '') return true;
         } else {
             return true;
         }
@@ -289,7 +289,7 @@ function hasSlotContent(nodes: import('./types.ts').TNode[]): boolean {
 }
 
 function validateTNode(
-    tnode: import('./types.ts').TNode,
+    tnode: TNode,
     ctx: ValidationContext
 ): void {
     if (tnode.type === 'partial-ref') {
@@ -386,7 +386,7 @@ function validateTNode(
                 // or with a value (`name="..."`, including empty `name=""`). parse5 reports
                 // `attr.value === ''` for both, but the source-location range distinguishes
                 // them: bare attrs have a location range equal to the name length.
-                const isBareAttr = (caller: { name: string; value: string; loc?: import('./types.ts').SourceLoc }): boolean => {
+                const isBareAttr = (caller: { name: string; value: string; loc?: SourceLoc }): boolean => {
                     if (caller.value !== '') return false;
                     if (!caller.loc) return true; // best effort: no loc → assume bare since value is empty
                     const span = caller.loc.endOffset - caller.loc.startOffset;
@@ -539,7 +539,7 @@ function findExportedCustomElement(
  * Walk a TNode tree and call the visitor on every partial-ref node.
  */
 function visitPartialRefs(
-    nodes: import('./types.ts').TNode[],
+    nodes: TNode[],
     visit: (ref: PartialRefTNode) => void
 ): void {
     for (const n of nodes) {
@@ -549,9 +549,9 @@ function visitPartialRefs(
                 visitPartialRefs(slotNodes, visit);
             }
         } else if (n.type === 'for') {
-            visitPartialRefs((n as import('./types.ts').ForTNode).tnodes, visit);
+            visitPartialRefs((n as ForTNode).tnodes, visit);
         } else if (n.type === 'if') {
-            for (const branch of (n as import('./types.ts').IfTNode).branches) {
+            for (const branch of (n as IfTNode).branches) {
                 visitPartialRefs(branch.tnodes, visit);
             }
         }
