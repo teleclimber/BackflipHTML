@@ -1,6 +1,6 @@
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
 import { generateSlotPlaceholders } from './slot-placeholders.ts';
-import type { TNode, RootTNode } from '../compiler/compiler.ts';
+import type { TNode, RootTNode } from '../compiler/types.ts';
 
 /** Helper: create a minimal parent for ChildTNodes. */
 function dummyRoot(): RootTNode {

@@ -1,6 +1,6 @@
 import type { DataShape } from '../compiler/data-shape.js';
 import { inferDataShape } from '../compiler/data-shape.js';
-import type { CompiledFile } from '../compiler/compiler.js';
+import type { CompiledFile } from '../compiler/types.js';
 
 export interface PartialLookup {
 	compiledFile: CompiledFile;

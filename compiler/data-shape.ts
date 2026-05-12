@@ -1,5 +1,5 @@
 import * as acorn from 'acorn';
-import type { RootTNode, TNode, ForTNode, IfTNode, PrintTNode, AttrBindTNode, PartialRefTNode } from './compiler.js';
+import type { RootTNode, TNode, ForTNode, IfTNode, PrintTNode, AttrBindTNode, PartialRefTNode } from './types.js';
 import type { Parsed } from './backcode.js';
 import { BackflipError } from './errors.js';
 

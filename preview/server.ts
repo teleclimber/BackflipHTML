@@ -5,7 +5,7 @@ import * as fs from 'node:fs/promises';
 import { loadConfig, resolveConfigRoot, resolveAssetDirs } from '../compiler/config.js';
 import { compileDirectory, type CompiledDirectory } from '../compiler/partials.js';
 import { previewPartial } from './preview.js';
-import type { CompiledFile } from '../compiler/compiler.js';
+import type { CompiledFile } from '../compiler/types.js';
 import { createWatcher, type WatchCallback, type WatchOptions } from '../lib/watch.js';
 import { discoverCssFiles } from '../css/src/discover.js';
 import { discoverAssetFileInfos, collectAllAssetReferences, validateAssetFiles, buildAssetUsageReport, renderAssetReportHtml } from '../assets/src/index.js';

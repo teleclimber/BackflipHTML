@@ -13,7 +13,7 @@ import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { compileDirectory } from "../compiler/partials.ts";
 import { fileToJsModule } from "../compiler/generate/js/nodes2js.ts";
-import { resolveAssetRefs } from "../compiler/compiler.ts";
+import { resolveAssetRefs } from "../compiler/helpers.ts";
 import { renderRoot } from "../runtime/js/render.ts";
 import type { RootRNode } from "../runtime/js/render.ts";
 

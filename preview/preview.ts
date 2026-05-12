@@ -1,7 +1,7 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
-import type { CompiledFile } from '../compiler/compiler.js';
-import { resolveAssetRefs } from '../compiler/compiler.js';
+import type { CompiledFile } from '../compiler/types.js';
+import { resolveAssetRefs } from '../compiler/helpers.js';
 import { fileToJsModule } from '../compiler/generate/js/nodes2js.js';
 import { renderRoot } from '../runtime/js/render.js';
 import type { RootRNode } from '../runtime/js/render.js';

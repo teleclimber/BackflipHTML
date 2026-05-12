@@ -1,5 +1,6 @@
 import { assertEquals } from "jsr:@std/assert";
-import { compilePartial, type CompiledFile, type PartialDef, type CompileOptions } from './compiler.ts';
+import { compilePartial } from './compiler.ts';
+import type { CompiledFile, PartialDef, CompileOptions } from './types.ts';
 import type { BackflipError } from './errors.ts';
 import { inferDataShape, inferFreeVars, type DataShape } from './data-shape.ts';
 

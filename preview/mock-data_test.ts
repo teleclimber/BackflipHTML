@@ -1,7 +1,7 @@
 import { assertEquals, assertNotEquals } from "jsr:@std/assert";
 import { generateMockData, type PartialLookup } from './mock-data.ts';
 import type { DataShape } from '../compiler/data-shape.ts';
-import type { RootTNode, CompiledFile, PartialDef, CompileOptions } from '../compiler/compiler.ts';
+import type { RootTNode, CompiledFile, PartialDef, CompileOptions } from '../compiler/types.ts';
 import { compilePartial } from '../compiler/compiler.ts';
 import type { BackflipError } from '../compiler/errors.ts';
 

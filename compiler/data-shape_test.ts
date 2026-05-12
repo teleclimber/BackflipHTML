@@ -1,7 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import { inferFreeVars, inferDataShape, validateBAttrUsage, type DataShape } from './data-shape.ts';
 import { interpretBackcode } from './backcode.ts';
-import type { RootTNode, TNode, ForTNode, IfTNode, PrintTNode, AttrBindTNode, PartialRefTNode, SlotTNode, RawTNode, ParentTNode } from './compiler.ts';
+import type { RootTNode, TNode, ForTNode, IfTNode, PrintTNode, AttrBindTNode, PartialRefTNode, SlotTNode, RawTNode, ParentTNode } from './types.ts';
 import type { Parsed } from './backcode.ts';
 
 // Helper to create a Parsed object with given vars (no AST — for inferFreeVars tests)

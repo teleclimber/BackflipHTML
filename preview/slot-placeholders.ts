@@ -1,5 +1,5 @@
 import type { SlotMap, RawRNode } from '../runtime/js/render.js';
-import type { TNode, RawTNode, SlotTNode, ForTNode, IfTNode, AttrBindTNode } from '../compiler/compiler.js';
+import type { TNode, RawTNode, SlotTNode, ForTNode, IfTNode, AttrBindTNode } from '../compiler/types.js';
 
 const PLACEHOLDER_STYLE = 'background:#e0e0e0;padding:16px;border:1px dashed #999;border-radius:4px;text-align:center;color:#666;font-style:italic;';
 
