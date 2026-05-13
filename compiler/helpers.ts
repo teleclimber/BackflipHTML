@@ -1,4 +1,5 @@
 import { interpretBackcode } from './backcode.js';
+import type { Parsed } from './backcode.js';
 import { BackflipError } from './errors.js';
 import type {
 	SourceLoc,
@@ -363,66 +364,138 @@ export function dataLocAttr(
 	return ` data-loc="${file}#${ctx.currentPartialName}:${loc.startLine}:${loc.startCol}"`;
 }
 
+// --- open-tag attr classification & assembly ---
+
 /**
- * Take the result of makeOpenTagNode and produce nodes that render only the
- * attribute portion of the tag — i.e. drop the leading `<tagName` and the
- * trailing `>` or ` />`. Used to assemble merged open tags for custom element
- * partials, where caller-side and definition-side attrs share one HTML element.
- *
- * The input may be:
- *   - a single RawTNode containing the full open tag string
- *   - a sequence of RawTNode + AssetRefTNode + RawTNode (case B in makeOpenTagNode)
- *   - a single AttrBindTNode (case C/D) — we set tagOpen='' and attrsOnly=true
- *   - a single empty RawTNode (b-unwrap case — shouldn't occur for custom elements)
- *
- * The returned nodes are new objects with `parent` set to `parent`. Original
- * TNodes are not mutated.
+ * Normalized stream produced by classifyOpenTagAttrs. The same segment list
+ * feeds both full-open-tag and attrs-only emitters, so we never build the
+ * brackets up just to slice them off later.
  */
-export function convertToAttrsOnly(openNodes: TNode[], tagName: string, parent: ParentTNode): TNode[] {
-	if (openNodes.length === 0) return [];
+export type AttrSegment =
+	| { kind: 'static', text: string }
+	| { kind: 'asset', attrName: string, originalValue: string, refs: AssetRef[], loc: SourceLoc | undefined }
+	| { kind: 'bind', name: string, expr: Parsed, isBoolean: boolean, isAsset: boolean, loc: SourceLoc | undefined };
 
-	// Single AttrBindTNode case
-	if (openNodes.length === 1 && openNodes[0].type === 'attr-bind') {
-		const orig = openNodes[0] as AttrBindTNode;
-		const cloned: AttrBindTNode = {
-			type: 'attr-bind',
-			tagOpen: '',
-			parts: orig.parts,
-			parent,
-			attrsOnly: true,
-		};
-		return [cloned];
-	}
-
-	// Raw / asset-ref interleaved cases: strip `<tagName` from the very first raw
-	// chunk and `>` (or ` />`) from the very last raw chunk.
-	const result: TNode[] = openNodes.map(n => {
-		if (n.type === 'raw') return { type: 'raw', raw: (n as RawTNode).raw, parent } as RawTNode;
-		if (n.type === 'asset-ref') {
-			const a = n as AssetRefTNode;
-			const cloned: AssetRefTNode = { type: 'asset-ref', attrName: a.attrName, originalValue: a.originalValue, refs: a.refs, parent };
-			if (a.loc) cloned.loc = a.loc;
-			return cloned;
+/**
+ * Walk a tag's attrs once, filtering b-name/b-export/etc. (`excludeAttrs`),
+ * b-data:*, and b-attr:*, validating any static asset attrs, and emitting a
+ * normalized AttrSegment stream. `hasBind` tells the caller whether the
+ * output should be a Raw + AssetRef sequence (no binds) or a single
+ * AttrBindTNode (binds present). Validation errors are returned as data
+ * rather than thrown or mutated into a shared array.
+ */
+export function classifyOpenTagAttrs(
+	tag: { attrs: { name: string, value: string }[], sourceCodeLocation?: unknown },
+	excludeAttrs: string[],
+	ctx: AssetAttrCtx,
+): { segments: AttrSegment[], hasBind: boolean, errors: BackflipError[] } {
+	const segments: AttrSegment[] = [];
+	const errors: BackflipError[] = [];
+	let hasBind = false;
+	for (const attr of tag.attrs) {
+		if (excludeAttrs.includes(attr.name) || attr.name.startsWith('b-data:') || attr.name.startsWith('b-attr:')) continue;
+		if (isBindAttr(attr.name)) {
+			let bindName = getBindAttrName(attr.name);
+			let isAsset = false;
+			if (isAssetAttr(bindName)) {
+				bindName = stripAssetSuffix(bindName);
+				if (!ctx.assetMap) {
+					errors.push(new BackflipError(`${bindName}~ used but no asset directories are configured`, attrErrorLoc(tag, attr.name, ctx.filename)));
+					continue;
+				}
+				if (bindName === 'style') {
+					errors.push(new BackflipError(`style~ is not supported`, attrErrorLoc(tag, attr.name, ctx.filename)));
+					continue;
+				}
+				isAsset = true;
+			}
+			hasBind = true;
+			segments.push({
+				kind: 'bind',
+				name: bindName,
+				expr: interpretBackcode(attr.value),
+				isBoolean: BOOLEAN_ATTRS.has(bindName),
+				isAsset,
+				loc: attrLoc(tag, attr.name),
+			});
+		} else if (isAssetAttr(attr.name)) {
+			const realName = stripAssetSuffix(attr.name);
+			const { refs, originalValue, error } = validateStaticAssetAttr(realName, attr.value, tag, attr.name, ctx);
+			if (error) { errors.push(error); continue; }
+			segments.push({
+				kind: 'asset',
+				attrName: realName,
+				originalValue,
+				refs,
+				loc: attrLoc(tag, attr.name),
+			});
+		} else {
+			segments.push({ kind: 'static', text: ` ${attr.name}="${attr.value}"` });
 		}
-		return n; // shouldn't happen for open-tag nodes
-	});
+	}
+	return { segments, hasBind, errors };
+}
 
-	const first = result[0];
-	if (first && first.type === 'raw') {
-		const r = first as RawTNode;
-		const prefix = `<${tagName}`;
-		if (r.raw.startsWith(prefix)) r.raw = r.raw.slice(prefix.length);
+/**
+ * Assemble a Raw + AssetRefTNode interleaved sequence. Used when there are
+ * no bind attrs. `prefix` is prepended to the first raw chunk and `suffix`
+ * appended to the final one (callers pass `<tagName` / `>` for full open
+ * tags, and empty strings for attrs-only).
+ */
+export function buildRawAttrSequence(segments: AttrSegment[], prefix: string, suffix: string, parent: ParentTNode): TNode[] {
+	const nodes: TNode[] = [];
+	let buf = prefix;
+	for (const seg of segments) {
+		if (seg.kind === 'static') {
+			buf += seg.text;
+		} else if (seg.kind === 'asset') {
+			if (buf) { nodes.push({ type: 'raw', raw: buf, parent } as RawTNode); buf = ''; }
+			nodes.push({ type: 'asset-ref', attrName: seg.attrName, originalValue: seg.originalValue, refs: seg.refs, parent, loc: seg.loc } as AssetRefTNode);
+		}
+		// 'bind' segments don't appear when hasBind is false
 	}
-	const last = result[result.length - 1];
-	if (last && last.type === 'raw') {
-		const r = last as RawTNode;
-		if (r.raw.endsWith(' />')) r.raw = r.raw.slice(0, -3);
-		else if (r.raw.endsWith('/>')) r.raw = r.raw.slice(0, -2);
-		else if (r.raw.endsWith('>')) r.raw = r.raw.slice(0, -1);
+	buf += suffix;
+	if (buf) nodes.push({ type: 'raw', raw: buf, parent } as RawTNode);
+	if (nodes.length === 0) nodes.push({ type: 'raw', raw: '', parent } as RawTNode);
+	return nodes;
+}
+
+/**
+ * Assemble a single AttrBindTNode from a segment stream that includes at
+ * least one bind. `trailingStatic` (typically the data-loc attr) is appended
+ * into the final static AttrPart. `attrsOnly` sets the flag so the renderer
+ * suppresses `tagOpen` and the trailing `>`.
+ */
+export function buildAttrBindNode(
+	segments: AttrSegment[],
+	tagOpen: string,
+	trailingStatic: string,
+	selfClosing: boolean,
+	attrsOnly: boolean,
+	parent: ParentTNode,
+): AttrBindTNode {
+	const parts: AttrPart[] = [];
+	let staticBuf = '';
+	for (const seg of segments) {
+		if (seg.kind === 'static') {
+			staticBuf += seg.text;
+		} else {
+			if (staticBuf) { parts.push({ type: 'static', raw: staticBuf }); staticBuf = ''; }
+			if (seg.kind === 'asset') {
+				parts.push({ type: 'asset', attrName: seg.attrName, originalValue: seg.originalValue, refs: seg.refs, loc: seg.loc });
+			} else {
+				const part: AttrPart = { type: 'dynamic', name: seg.name, expr: seg.expr, isBoolean: seg.isBoolean, loc: seg.loc };
+				if (seg.isAsset) part.isAsset = true;
+				parts.push(part);
+			}
+		}
 	}
-	// Drop the leading raw if it became empty (keeps node count tight)
-	const cleaned = result.filter((n, i) => !(n.type === 'raw' && (n as RawTNode).raw === '' && (i === 0 || i === result.length - 1)));
-	return cleaned.length > 0 ? cleaned : [{ type: 'raw', raw: '', parent } as RawTNode];
+	staticBuf += trailingStatic;
+	if (staticBuf) parts.push({ type: 'static', raw: staticBuf });
+	const node: AttrBindTNode = { type: 'attr-bind', tagOpen, parts, parent };
+	if (selfClosing) node.selfClosing = true;
+	if (attrsOnly) node.attrsOnly = true;
+	return node;
 }
 
 // --- if-branch lookup ---

@@ -6,21 +6,21 @@ import type { Parsed } from './backcode.js';
 import { BackflipError } from './errors.js';
 import type {
 	SourceLoc, TNode, RawTNode, PrintTNode, ForTNode, IfTNode, IfBranch,
-	SlotTNode, PartialRefTNode, AttrBindTNode, AssetRefTNode, AttrPart, ParentTNode,
+	SlotTNode, PartialRefTNode, ParentTNode,
 	RootTNode, CompiledFile, CompileOptions, PartialDef, PartialBinding,
 } from './types.js';
 import {
 	attrLoc, tagLoc, errorLoc, attrErrorLoc, bDataNameLoc, interpolationLoc,
-	isBindAttr, getBindAttrName, isAssetAttr, stripAssetSuffix,
-	buildTagPrefix, convertToAttrsOnly, LineMap,
+	isBindAttr, isAssetAttr,
+	buildTagPrefix, LineMap,
 	isCustomElementTagName, effectiveAttrNames,
 	dataLocAttr as dataLocAttrPure,
 	getSlotCollection as getSlotCollectionPure,
-	validateStaticAssetAttr as validateStaticAssetAttrPure,
+	classifyOpenTagAttrs, buildRawAttrSequence, buildAttrBindNode,
 	findPrecedingIfInFile, findPrecedingIfInSlot,
 	pushRaw, onText,
-	DOCUMENT_LEVEL_TAGS, BOOLEAN_ATTRS,
-	type TagMatcher,
+	DOCUMENT_LEVEL_TAGS,
+	type TagMatcher, type AssetAttrCtx,
 } from './helpers.js';
 export { BackflipError };
 
@@ -116,11 +116,18 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			}
 		}
 
-		const assetMap = options?.assetMap;
-		const assetDirs = options?.assetDirs;
+		const assetCtx: AssetAttrCtx = { html, lineMap, assetMap: options?.assetMap, assetDirs: options?.assetDirs, filename };
 
-		const validateStaticAssetAttr = (attrName: string, value: string, tag: { sourceCodeLocation?: unknown }, origAttrName: string) =>
-			validateStaticAssetAttrPure(attrName, value, tag, origAttrName, { html, lineMap, assetMap, assetDirs, filename });
+		// Walk a tag's attrs through the shared classifier and forward any
+		// validation errors into this run's accumulator.
+		function classifyAttrs(
+			tag: {attrs:{name:string,value:string}[], sourceCodeLocation?: unknown},
+			excludeAttrs: string[],
+		) {
+			const { segments, hasBind, errors: errs } = classifyOpenTagAttrs(tag, excludeAttrs, assetCtx);
+			if (errs.length) errors.push(...errs);
+			return { segments, hasBind };
+		}
 
 		// Helper: make TNode(s) for a tag's open element.
 		// Returns an array because tags with static asset attrs produce interleaved RawTNode + AssetRefTNode nodes.
@@ -129,83 +136,28 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				return [{ type: 'raw', raw: '', parent } as RawTNode];
 			}
 			const closeBracket = tag.selfClosing ? ' />' : '>';
-			const hasBind = tag.attrs.some(attr => isBindAttr(attr.name));
-			const hasAsset = tag.attrs.some(attr => !excludeAttrs.includes(attr.name) && isAssetAttr(attr.name));
-
-			// Case A: no binds, no assets — single RawTNode
-			if (!hasBind && !hasAsset) {
-				return [{ type: 'raw', raw: buildTagPrefix(tag, excludeAttrs) + dataLocAttr(tag) + closeBracket, parent } as RawTNode];
-			}
-
-			// Case B: no binds, has static asset attrs — interleaved RawTNode + AssetRefTNode
+			const { segments, hasBind } = classifyAttrs(tag, excludeAttrs);
+			const locStr = dataLocAttr(tag);
 			if (!hasBind) {
-				const nodes: TNode[] = [];
-				let buf = `<${tag.tagName}`;
-				for (const attr of tag.attrs) {
-					if (excludeAttrs.includes(attr.name) || attr.name.startsWith('b-data:') || attr.name.startsWith('b-attr:')) continue;
-					if (isAssetAttr(attr.name)) {
-						const realName = stripAssetSuffix(attr.name);
-						const { refs, originalValue, error } = validateStaticAssetAttr(realName, attr.value, tag, attr.name);
-						if (error) {
-							errors.push(error);
-							continue;
-						}
-						// Flush buffer as RawTNode before the asset ref
-						if (buf) { nodes.push({ type: 'raw', raw: buf, parent } as RawTNode); buf = ''; }
-						nodes.push({ type: 'asset-ref', attrName: realName, originalValue, refs, parent, loc: attrLoc(tag, attr.name) } as AssetRefTNode);
-					} else {
-						buf += ` ${attr.name}="${attr.value}"`;
-					}
-				}
-				buf += dataLocAttr(tag) + closeBracket;
-				nodes.push({ type: 'raw', raw: buf, parent } as RawTNode);
-				return nodes;
+				return buildRawAttrSequence(segments, `<${tag.tagName}`, locStr + closeBracket, parent);
 			}
+			return [buildAttrBindNode(segments, `<${tag.tagName}`, locStr, tag.selfClosing, false, parent)];
+		}
 
-			// Case C/D: has binds (possibly with static asset attrs and/or dynamic asset binds)
-			const tagOpen = `<${tag.tagName}`;
-			const parts: AttrPart[] = [];
-			let staticBuf = '';
-			for (const attr of tag.attrs) {
-				if (excludeAttrs.includes(attr.name) || attr.name.startsWith('b-data:') || attr.name.startsWith('b-attr:')) continue;
-				if (isBindAttr(attr.name)) {
-					if (staticBuf) { parts.push({ type: 'static', raw: staticBuf }); staticBuf = ''; }
-					let bindName = getBindAttrName(attr.name);
-					let isAssetBind = false;
-					if (isAssetAttr(bindName)) {
-						bindName = stripAssetSuffix(bindName);
-						if (!assetMap) {
-							errors.push(new BackflipError(`${bindName}~ used but no asset directories are configured`, attrErrorLoc(tag, attr.name, filename)));
-							continue;
-						}
-						if (bindName === 'style') {
-							errors.push(new BackflipError(`style~ is not supported`, attrErrorLoc(tag, attr.name, filename)));
-							continue;
-						}
-						isAssetBind = true;
-					}
-					const part: AttrPart = { type: 'dynamic', name: bindName, expr: interpretBackcode(attr.value), isBoolean: BOOLEAN_ATTRS.has(bindName), loc: attrLoc(tag, attr.name) };
-					if (isAssetBind) part.isAsset = true;
-					parts.push(part);
-				} else if (isAssetAttr(attr.name)) {
-					const realName = stripAssetSuffix(attr.name);
-					const { refs, originalValue, error } = validateStaticAssetAttr(realName, attr.value, tag, attr.name);
-					if (error) {
-						errors.push(error);
-						continue;
-					}
-					// Flush staticBuf before pushing asset part
-					if (staticBuf) { parts.push({ type: 'static', raw: staticBuf }); staticBuf = ''; }
-					parts.push({ type: 'asset', attrName: realName, originalValue, refs, loc: attrLoc(tag, attr.name) });
-				} else {
-					staticBuf += ` ${attr.name}="${attr.value}"`;
-				}
+		// Like makeOpenTagNode but without the leading `<tagName` and trailing
+		// `>` / ` />`. Used for custom element partials, where the call site
+		// and definition merge into a single rendered tag and neither side
+		// emits the brackets.
+		function makeAttrsOnlyNodes(tag: {tagName:string, attrs:{name:string,value:string}[], selfClosing:boolean, sourceCodeLocation?: unknown}, excludeAttrs: string[], parent: ParentTNode): TNode[] {
+			if (tag.tagName === 'b-unwrap') {
+				return [{ type: 'raw', raw: '', parent } as RawTNode];
 			}
-			staticBuf += dataLocAttr(tag);
-			if (staticBuf) parts.push({ type: 'static', raw: staticBuf });
-			const node: AttrBindTNode = { type: 'attr-bind', tagOpen, parts, parent };
-			if (tag.selfClosing) node.selfClosing = true;
-			return [node];
+			const { segments, hasBind } = classifyAttrs(tag, excludeAttrs);
+			const locStr = dataLocAttr(tag);
+			if (!hasBind) {
+				return buildRawAttrSequence(segments, '', locStr, parent);
+			}
+			return [buildAttrBindNode(segments, '', locStr, false, true, parent)];
 		}
 
 		const void_elements = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
@@ -401,8 +353,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			// with caller-side attrs into one tag), so we keep it OFF of partialRoot.tnodes.
 			// We do still need to compile the open tag's attrs (in attrs-only form) and store
 			// them so the call-site renderer can emit them in childCtx.
-			const openNodes = makeOpenTagNode(tag, ['b-export'], partialRoot);
-			partialRoot.definitionAttrNodes = convertToAttrsOnly(openNodes, tag.tagName, partialRoot);
+			partialRoot.definitionAttrNodes = makeAttrsOnlyNodes(tag, ['b-export'], partialRoot);
 			// Seed the body with an empty raw sentinel so subsequent text/tags get appended here.
 			const sentinel: RawTNode = { type: 'raw', raw: '', parent: partialRoot };
 			partialRoot.tnodes.push(sentinel);
@@ -432,11 +383,10 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 
 			const parent: ParentTNode = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
 
-			// Build call-site open-tag TNodes, then convert to attrs-only form. These will
-			// be evaluated in the caller's context and merged with the definition's attrs
+			// Build call-site attrs-only TNodes. These will be evaluated in
+			// the caller's context and merged with the definition's attrs
 			// inside a single rendered tag at the call site.
-			const fullOpenTag = makeOpenTagNode(tag, ['b-export'], parent);
-			const callerOpenTag = convertToAttrsOnly(fullOpenTag, tag.tagName, parent);
+			const callerOpenTag = makeAttrsOnlyNodes(tag, ['b-export'], parent);
 
 			// Build rich per-attribute info from the call-site tag for downstream
 			// stages (b-attr resolution, conflict checks, codegen). Skip everything
