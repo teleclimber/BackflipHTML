@@ -13,7 +13,7 @@ import {
 	attrLoc, tagLoc, errorLoc, attrErrorLoc, bDataNameLoc, interpolationLoc,
 	isBindAttr, isAssetAttr,
 	buildTagPrefix, LineMap,
-	isCustomElementTagName, effectiveAttrNames, parseBPartValue,
+	isCustomElementTagName, effectiveAttrNames, parseBPartValue, parseBForValue,
 	dataLocAttr as dataLocAttrPure,
 	getSlotCollection as getSlotCollectionPure,
 	classifyOpenTagAttrs, buildRawAttrSequence, buildAttrBindNode,
@@ -161,6 +161,173 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 		}
 
 		const void_elements = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
+
+		// Error-recovery: drop the tag back to a raw string and keep the parser balanced.
+		// Used by flow-directive handlers when they can't construct their structured node.
+		function fallbackToRawTag(tag: StartTag, raw: string): void {
+			const new_cur = pushRawHere(raw);
+			if (cur_tnode !== null) cur_tnode = new_cur;
+			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+				tag_stack.push({ tag: tag.tagName });
+			}
+		}
+
+		// Build the wrapping ForTNode / IfTNode (or just append a new IfBranch for
+		// b-else / b-else-if) for a flow directive. Returns:
+		//   - `container`: where the directive's body content (open tag, partial-ref, etc.)
+		//     should be pushed (the for_node itself, or the new IfBranch).
+		//   - `outer`: the outer structural node, i.e. the ForTNode or IfTNode. Equal to
+		//     `container` for b-for; the enclosing IfTNode for b-if / b-else-if / b-else.
+		// On error (bad b-for syntax, dangling b-else, etc.), pushes the error,
+		// runs `fallbackToRawTag`, and returns null — caller should just return.
+		// Shared between the regular flow handler and the custom-element-call-with-flow handler.
+		function setupFlowContainer(tag: StartTag, raw: string, flowAttr: Attr): { container: ParentTNode, outer: TNode } | null {
+			const sc = getSlotCollection();
+			const flowParent: ParentTNode = sc
+				? sc.partialRef.parent
+				: (cur_tnode ? cur_tnode.parent : currentPartialRoot!);
+
+			if (flowAttr.name === 'b-for') {
+				const parsed = parseBForValue(flowAttr.value);
+				if ('error' in parsed) {
+					errors.push(new BackflipError(parsed.error, attrErrorLoc(tag, 'b-for', filename)));
+					fallbackToRawTag(tag, raw);
+					return null;
+				}
+				const for_node: ForTNode = { type: 'for', iterable: parsed.iterable, valName: parsed.valName, tnodes: [], parent: flowParent };
+				for_node.loc = attrLoc(tag, 'b-for');
+				if (sc) pushNodeHere(for_node);
+				else flowParent.tnodes!.push(for_node);
+				return { container: for_node, outer: for_node };
+			}
+
+			if (flowAttr.name === 'b-if') {
+				const if_node: IfTNode = { type: 'if', branches: [], parent: flowParent };
+				const branch: IfBranch = { condition: interpretBackcode(flowAttr.value), tnodes: [], ifNode: if_node };
+				branch.loc = attrLoc(tag, 'b-if');
+				if_node.branches.push(branch);
+				if (sc) pushNodeHere(if_node);
+				else flowParent.tnodes!.push(if_node);
+				return { container: branch, outer: if_node };
+			}
+
+			// b-else-if / b-else: chain onto a preceding b-if among current siblings.
+			if (!cur_tnode) {
+				errors.push(new BackflipError("b-else-if/b-else must follow a b-if block", attrErrorLoc(tag, flowAttr.name, filename)));
+				fallbackToRawTag(tag, raw);
+				return null;
+			}
+			let if_node: IfTNode;
+			try {
+				if (sc) {
+					const slotName = sc.currentSlot;
+					const arr = sc.partialRef.slots[slotName] || [];
+					if_node = findPrecedingIfInSlot(arr, attrErrorLoc(tag, flowAttr.name, filename));
+				} else {
+					if_node = findPrecedingIfInFile(cur_tnode, attrErrorLoc(tag, flowAttr.name, filename));
+				}
+			} catch (e) {
+				if (e instanceof BackflipError) {
+					errors.push(e);
+					fallbackToRawTag(tag, raw);
+					return null;
+				}
+				throw e;
+			}
+			if (flowAttr.name === 'b-else' && flowAttr.value) {
+				errors.push(new BackflipError("b-else should not have a value", attrErrorLoc(tag, 'b-else', filename)));
+				// fall through — branch is still added so parsing state stays correct
+			}
+			const condition = flowAttr.name === 'b-else-if' ? interpretBackcode(flowAttr.value) : undefined;
+			const branch: IfBranch = { condition, tnodes: [], ifNode: if_node };
+			branch.loc = attrLoc(tag, flowAttr.name);
+			if_node.branches.push(branch);
+			return { container: branch, outer: if_node };
+		}
+
+		// Build the PartialRefTNode for a custom element call site. Does NOT push it
+		// into a parent or onto the tag_stack — the caller decides where it lives
+		// (directly under the current parent for plain calls, inside a flow node's
+		// container for `<my-elem b-for|if|...>` calls).
+		function buildCustomElementPartialRef(tag: StartTag, raw: string, parent: ParentTNode): PartialRefTNode {
+			const bindings: PartialBinding[] = [];
+			for (const attr of tag.attrs) {
+				if (attr.name.startsWith('b-data:')) {
+					const bindingName = attr.name.slice('b-data:'.length);
+					const binding: PartialBinding = { name: bindingName, data: interpretBackcode(attr.value) };
+					const nameLoc = bDataNameLoc(tag, attr.name, bindingName);
+					if (nameLoc) binding.nameLoc = nameLoc;
+					bindings.push(binding);
+				}
+			}
+
+			// Flow directives on the call site are consumed by the wrapping ForTNode /
+			// IfTNode (built in handleCustomElementCallWithFlow) and must never appear in
+			// the rendered tag. They're excluded here so makeAttrsOnlyNodes drops them.
+			// In the non-flow call path they're absent anyway, so the extra excludes are no-ops.
+			const callerOpenTag = makeAttrsOnlyNodes(tag, ['b-export', 'b-if', 'b-for', 'b-else', 'b-else-if'], parent);
+
+			const callerAttrInfos: NonNullable<PartialRefTNode['callerAttrInfos']> = [];
+			for (const attr of tag.attrs) {
+				const n = attr.name;
+				if (n === 'b-name' || n === 'b-export') continue;
+				if (n === 'b-if' || n === 'b-for' || n === 'b-else' || n === 'b-else-if') continue;
+				if (n === 'b-part' || n === 'b-slot' || n === 'b-in') continue;
+				if (n.startsWith('b-data:')) continue;
+				if (n.startsWith('b-attr:')) continue;
+				const aLoc = attrLoc(tag, n);
+				if (n.startsWith('b-bind:') || n.startsWith(':')) {
+					const stripped = n.startsWith('b-bind:') ? n.slice('b-bind:'.length) : n.slice(1);
+					const effName = stripped.replace(/~$/, '');
+					const info: { name: string; kind: 'plain' | 'expr'; value: string; expr?: Parsed; loc?: SourceLoc } = {
+						name: effName,
+						kind: 'expr',
+						value: attr.value,
+						expr: interpretBackcode(attr.value),
+					};
+					if (aLoc) info.loc = aLoc;
+					callerAttrInfos.push(info);
+				} else {
+					const effName = n.endsWith('~') ? n.slice(0, -1) : n;
+					const info: { name: string; kind: 'plain' | 'expr'; value: string; expr?: Parsed; loc?: SourceLoc } = {
+						name: effName,
+						kind: 'plain',
+						value: attr.value,
+					};
+					if (aLoc) info.loc = aLoc;
+					callerAttrInfos.push(info);
+				}
+			}
+
+			const partialRef: PartialRefTNode = {
+				type: 'partial-ref',
+				file: null,                        // resolved post-parse via global registry
+				partialName: tag.tagName,
+				wrapper: null,                     // built at codegen time from callerOpenTag + definition's open tag
+				slots: { 'default': [] },
+				slotLocs: {},
+				bindings,
+				parent,
+				customElement: true,
+				callerOpenTag,
+				callerTagName: tag.tagName,
+				callerAttrNames: effectiveAttrNames(tag.attrs),
+				callerAttrInfos,
+				unresolvedRaw: raw,
+			};
+			const tagSrcLoc = tag.sourceCodeLocation as { startLine?: number; startCol?: number; startOffset?: number; endLine?: number; endCol?: number; endOffset?: number } | null | undefined;
+			if (tagSrcLoc?.startLine != null) {
+				partialRef.loc = {
+					startLine: tagSrcLoc.startLine,
+					startCol: tagSrcLoc.startCol ?? 1,
+					startOffset: tagSrcLoc.startOffset ?? 0,
+					endLine: tagSrcLoc.endLine ?? tagSrcLoc.startLine,
+					endCol: tagSrcLoc.endCol ?? (tagSrcLoc.startCol ?? 1),
+					endOffset: tagSrcLoc.endOffset ?? (tagSrcLoc.startOffset ?? 0) + raw.length,
+				};
+			}
+			return partialRef;
+		}
 
 		const rewriteStream = new RewritingStream();
 
@@ -366,92 +533,12 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 		}
 
 		function handleCustomElementCall(tag: StartTag, raw: string) {
-			// Pre-conditions: not top-level, isCustomElementTagName(tag.tagName), no b-name, no b-part.
+			// Pre-conditions: not top-level, isCustomElementTagName(tag.tagName), no b-name, no b-part,
+			// no flow directive on the same tag (see handleCustomElementCallWithFlow for that case).
 			// Inside a partial (cur_tnode or currentPartialRoot must be set; the dispatcher's "skip
 			// outside partial" path runs before this).
-
-			const bindings: PartialBinding[] = [];
-			for (const attr of tag.attrs) {
-				if (attr.name.startsWith('b-data:')) {
-					const bindingName = attr.name.slice('b-data:'.length);
-					const binding: PartialBinding = { name: bindingName, data: interpretBackcode(attr.value) };
-					const nameLoc = bDataNameLoc(tag, attr.name, bindingName);
-					if (nameLoc) binding.nameLoc = nameLoc;
-					bindings.push(binding);
-				}
-			}
-
 			const parent: ParentTNode = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
-
-			// Build call-site attrs-only TNodes. These will be evaluated in
-			// the caller's context and merged with the definition's attrs
-			// inside a single rendered tag at the call site.
-			const callerOpenTag = makeAttrsOnlyNodes(tag, ['b-export'], parent);
-
-			// Build rich per-attribute info from the call-site tag for downstream
-			// stages (b-attr resolution, conflict checks, codegen). Skip everything
-			// effectiveAttrNames already skips, plus b-attr:* (which shouldn't appear
-			// on a call site anyway — the dispatcher already errors on those).
-			const callerAttrInfos: NonNullable<PartialRefTNode['callerAttrInfos']> = [];
-			for (const attr of tag.attrs) {
-				const n = attr.name;
-				if (n === 'b-name' || n === 'b-export') continue;
-				if (n === 'b-if' || n === 'b-for' || n === 'b-else' || n === 'b-else-if') continue;
-				if (n === 'b-part' || n === 'b-slot' || n === 'b-in') continue;
-				if (n.startsWith('b-data:')) continue;
-				if (n.startsWith('b-attr:')) continue;
-				const aLoc = attrLoc(tag, n);
-				if (n.startsWith('b-bind:') || n.startsWith(':')) {
-					const stripped = n.startsWith('b-bind:') ? n.slice('b-bind:'.length) : n.slice(1);
-					const effName = stripped.replace(/~$/, '');
-					const info: { name: string; kind: 'plain' | 'expr'; value: string; expr?: Parsed; loc?: SourceLoc } = {
-						name: effName,
-						kind: 'expr',
-						value: attr.value,
-						expr: interpretBackcode(attr.value),
-					};
-					if (aLoc) info.loc = aLoc;
-					callerAttrInfos.push(info);
-				} else {
-					const effName = n.endsWith('~') ? n.slice(0, -1) : n;
-					const info: { name: string; kind: 'plain' | 'expr'; value: string; expr?: Parsed; loc?: SourceLoc } = {
-						name: effName,
-						kind: 'plain',
-						value: attr.value,
-					};
-					if (aLoc) info.loc = aLoc;
-					callerAttrInfos.push(info);
-				}
-			}
-
-			const partialRef: PartialRefTNode = {
-				type: 'partial-ref',
-				file: null,                        // resolved post-parse via global registry
-				partialName: tag.tagName,
-				wrapper: null,                     // built at codegen time from callerOpenTag + definition's open tag
-				slots: { 'default': [] },
-				slotLocs: {},
-				bindings,
-				parent,
-				customElement: true,
-				callerOpenTag,
-				callerTagName: tag.tagName,
-				callerAttrNames: effectiveAttrNames(tag.attrs),
-				callerAttrInfos,
-				unresolvedRaw: raw,
-			};
-			const tagSrcLoc = tag.sourceCodeLocation as { startLine?: number; startCol?: number; startOffset?: number; endLine?: number; endCol?: number; endOffset?: number } | null | undefined;
-			if (tagSrcLoc?.startLine != null) {
-				partialRef.loc = {
-					startLine: tagSrcLoc.startLine,
-					startCol: tagSrcLoc.startCol ?? 1,
-					startOffset: tagSrcLoc.startOffset ?? 0,
-					endLine: tagSrcLoc.endLine ?? tagSrcLoc.startLine,
-					endCol: tagSrcLoc.endCol ?? (tagSrcLoc.startCol ?? 1),
-					endOffset: tagSrcLoc.endOffset ?? (tagSrcLoc.startOffset ?? 0) + raw.length,
-				};
-			}
-
+			const partialRef = buildCustomElementPartialRef(tag, raw, parent);
 			pushNodeHere(partialRef);
 
 			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
@@ -462,6 +549,28 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 						partialRef,
 						currentSlot: 'default'
 					}
+				});
+			}
+		}
+
+		// `<my-elem b-for|if|else-if|else>` — the call site is wrapped in a ForTNode
+		// or IfTNode (semantically identical to <b-unwrap b-for=...><my-elem>...</my-elem></b-unwrap>).
+		// The wrapping flow node and the partial-ref are built by shared helpers; this
+		// handler is the glue that sequences them and sets up tag_stack for the close tag.
+		function handleCustomElementCallWithFlow(tag: StartTag, raw: string, flowAttr: Attr) {
+			const fc = setupFlowContainer(tag, raw, flowAttr);
+			if (!fc) return;
+			const partialRef = buildCustomElementPartialRef(tag, raw, fc.container);
+			fc.container.tnodes!.push(partialRef);
+			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+				// tag_stack entry combines two roles:
+				//   - slotCollection: children of the call site go into the partial-ref's default slot
+				//   - tnode = fc.outer: on endTag, cur_tnode is repositioned as a sibling of the
+				//     outer flow node (so a following b-else can chain to this if_node).
+				tag_stack.push({
+					tag: tag.tagName,
+					tnode: fc.outer,
+					slotCollection: { partialRef, currentSlot: 'default' },
 				});
 			}
 		}
@@ -595,114 +704,19 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			return true;
 		}
 
-		function handleBFor(tag: StartTag, raw: string, b_a: Attr) {
-			const pieces = b_a.value.split(" in ");
-			if (pieces.length !== 2) {
-				errors.push(new BackflipError(`b-for value must be in the form "item in items", got: "${b_a.value}"`, attrErrorLoc(tag, 'b-for', filename)));
-				const new_cur = pushRawHere(raw);
-				if (cur_tnode !== null) cur_tnode = new_cur;
-				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-					tag_stack.push({ tag: tag.tagName });
-				}
-				return;
-			}
-			const iterable_parsed = interpretBackcode(pieces[1].trim());
-			const value_name = pieces[0].trim();
-			if (!value_name) {
-				errors.push(new BackflipError(`got bad iter value name: ${value_name}`, attrErrorLoc(tag, 'b-for', filename)));
-				const new_cur = pushRawHere(raw);
-				if (cur_tnode !== null) cur_tnode = new_cur;
-				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-					tag_stack.push({ tag: tag.tagName });
-				}
-				return;
-			}
-
-			const sc_for = getSlotCollection();
-			const parent: ParentTNode = sc_for ? sc_for.partialRef.parent : (cur_tnode ? cur_tnode.parent : currentPartialRoot!);
-			const for_node: ForTNode = { type: 'for', iterable: iterable_parsed, valName: value_name, tnodes: [], parent };
-			for_node.loc = attrLoc(tag, 'b-for');
-			const inner_tags = makeOpenTagNode(tag, ['b-for'], for_node);
-			for (const n of inner_tags) for_node.tnodes.push(n);
-			if (sc_for) {
-				pushNodeHere(for_node);
-			} else {
-				parent.tnodes!.push(for_node);
-			}
-			const lastFor = inner_tags[inner_tags.length - 1];
-			cur_tnode = lastFor ?? null;
+		// Handle a flow directive (b-for, b-if, b-else-if, b-else) on a regular
+		// (non-custom-element) tag. The wrapping ForTNode/IfTNode/IfBranch comes
+		// from setupFlowContainer; then we drop the tag's own open-tag TNodes into
+		// the container so the tag is rendered inside each iteration / branch.
+		function handleFlowOnRegularTag(tag: StartTag, raw: string, flowAttr: Attr) {
+			const fc = setupFlowContainer(tag, raw, flowAttr);
+			if (!fc) return;
+			const inner = makeOpenTagNode(tag, [flowAttr.name], fc.container);
+			for (const n of inner) fc.container.tnodes!.push(n);
+			const last = inner[inner.length - 1];
+			cur_tnode = last ?? null;
 			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-				tag_stack.push({ tag: tag.tagName, tnode: lastFor });
-			}
-		}
-
-		function handleBIf(tag: StartTag, _raw: string, b_a: Attr) {
-			const sc_if = getSlotCollection();
-			const parent: ParentTNode = sc_if ? sc_if.partialRef.parent : (cur_tnode ? cur_tnode.parent : currentPartialRoot!);
-			const if_node: IfTNode = { type: 'if', branches: [], parent };
-			const branch: IfBranch = { condition: interpretBackcode(b_a.value), tnodes: [], ifNode: if_node };
-			branch.loc = attrLoc(tag, 'b-if');
-			if_node.branches.push(branch);
-			const inner_tags_if = makeOpenTagNode(tag, ['b-if'], branch);
-			for (const n of inner_tags_if) branch.tnodes.push(n);
-			if (sc_if) {
-				pushNodeHere(if_node);
-			} else {
-				parent.tnodes!.push(if_node);
-			}
-			const lastIf = inner_tags_if[inner_tags_if.length - 1];
-			cur_tnode = lastIf ?? null;
-			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-				tag_stack.push({ tag: tag.tagName, tnode: lastIf });
-			}
-		}
-
-		function handleBElse(tag: StartTag, raw: string, b_a: Attr) {
-			if (!cur_tnode) {
-				errors.push(new BackflipError("b-else-if/b-else must follow a b-if block", attrErrorLoc(tag, b_a.name, filename)));
-				const new_cur = pushRawHere(raw);
-				if (cur_tnode !== null) cur_tnode = new_cur;
-				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-					tag_stack.push({ tag: tag.tagName });
-				}
-				return;
-			}
-			let if_node: IfTNode;
-			const sc_else = getSlotCollection();
-			try {
-				if (sc_else) {
-					const slotName = sc_else.currentSlot;
-					const arr = sc_else.partialRef.slots[slotName] || [];
-					if_node = findPrecedingIfInSlot(arr, attrErrorLoc(tag, b_a.name, filename));
-				} else {
-					if_node = findPrecedingIfInFile(cur_tnode, attrErrorLoc(tag, b_a.name, filename));
-				}
-			} catch (e) {
-				if (e instanceof BackflipError) {
-					errors.push(e);
-					const new_cur = pushRawHere(raw);
-					if (cur_tnode !== null) cur_tnode = new_cur;
-					if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-						tag_stack.push({ tag: tag.tagName });
-					}
-					return;
-				}
-				throw e;
-			}
-			if (b_a.name === 'b-else' && b_a.value) {
-				errors.push(new BackflipError("b-else should not have a value", attrErrorLoc(tag, 'b-else', filename)));
-				// Still process as b-else (parsing state stays correct)
-			}
-			const condition = b_a.name === 'b-else-if' ? interpretBackcode(b_a.value) : undefined;
-			const branch: IfBranch = { condition, tnodes: [], ifNode: if_node };
-			branch.loc = attrLoc(tag, b_a.name);
-			if_node.branches.push(branch);
-			const inner_tags_else = makeOpenTagNode(tag, [b_a.name], branch);
-			for (const n of inner_tags_else) branch.tnodes.push(n);
-			const lastElse = inner_tags_else[inner_tags_else.length - 1];
-			cur_tnode = lastElse ?? null;
-			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-				tag_stack.push({ tag: tag.tagName, tnode: lastElse });
+				tag_stack.push({ tag: tag.tagName, tnode: last });
 			}
 		}
 
@@ -773,31 +787,24 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				currentPartialRoot.meta!.isDocumentLevel = true;
 			}
 
-			// Custom element call site (no b-for/b-if on the same tag — wrap with <b-unwrap b-for=...> instead).
-			// b-part precedence already won above; this slot only runs for plain custom element tags.
-			if (isCustomElementTagName(tag.tagName)) {
-				const hasFlowAttr = tag.attrs.some(a => a.name === 'b-for' || a.name === 'b-if' || a.name === 'b-else-if' || a.name === 'b-else');
-				if (!hasFlowAttr) return handleCustomElementCall(tag, raw);
-			}
-
 			// --- b-for / b-if / b-else-if / b-else ---
 			const b_as = tag.attrs.filter(attr => ['b-for', 'b-if', 'b-else-if', 'b-else'].includes(attr.name));
 			if (b_as.length > 1) {
 				errors.push(new BackflipError("more than one b-attr", errorLoc(filename, tagLoc(tag))));
-				const new_cur = pushRawHere(raw);
-				if (cur_tnode !== null) cur_tnode = new_cur;
-				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-					tag_stack.push({ tag: tag.tagName });
-				}
+				fallbackToRawTag(tag, raw);
 				return;
 			}
 
-			if (b_as.length === 1) {
-				const b_a = b_as[0];
-				if (b_a.name === 'b-for') return handleBFor(tag, raw, b_a);
-				if (b_a.name === 'b-if') return handleBIf(tag, raw, b_a);
-				return handleBElse(tag, raw, b_a);
+			// Custom element call site. With a single flow directive, the call is
+			// wrapped in the matching ForTNode / IfTNode (equivalent to wrapping in
+			// <b-unwrap b-for|if|...>). Without a flow directive, it's a plain call.
+			// b-part precedence already won above; this only runs for plain custom element tags.
+			if (isCustomElementTagName(tag.tagName)) {
+				if (b_as.length === 1) return handleCustomElementCallWithFlow(tag, raw, b_as[0]);
+				return handleCustomElementCall(tag, raw);
 			}
+
+			if (b_as.length === 1) return handleFlowOnRegularTag(tag, raw, b_as[0]);
 
 			handleRegularTag(tag, raw);
 		} catch(e) { if (e instanceof BackflipError) { errors.push(e); } else { reject(e); } } });
@@ -838,8 +845,12 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			// If this was a slotCollection entry
 			if (matchTag.slotCollection) {
 				const tnode = matchTag.tnode;
-				if (tnode && tnode.type === 'partial-ref') {
-					// b-part closing - create a new raw node in partialRef's parent for subsequent content
+				// Three shapes land here:
+				//   - tnode.type === 'partial-ref' — plain b-part / custom element call.
+				//   - tnode.type === 'for' | 'if'  — custom element call with a flow directive;
+				//     resume as a SIBLING of the flow node, not inside it.
+				// In all three, the next emit point is a fresh raw node in tnode.parent.
+				if (tnode && (tnode.type === 'partial-ref' || tnode.type === 'for' || tnode.type === 'if')) {
 					const parent = tnode.parent;
 					const new_raw: RawTNode = { type: 'raw', raw: '', parent };
 					parent.tnodes!.push(new_raw);

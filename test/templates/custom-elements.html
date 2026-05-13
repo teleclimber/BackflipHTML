@@ -41,3 +41,18 @@
 <b-unwrap b-name="caller_unknown">
     <fancy-widget data-x="1">inside</fancy-widget>
 </b-unwrap>
+
+<b-unwrap b-name="caller_direct_for">
+    <my-greeting b-for="who in names" b-data:name="who"></my-greeting>
+</b-unwrap>
+
+<b-unwrap b-name="caller_direct_if">
+    <my-notice b-if="show"></my-notice>
+    <b-unwrap b-else>nothing</b-unwrap>
+</b-unwrap>
+
+<b-unwrap b-name="caller_direct_else_chain">
+    <my-greeting b-if="isA" b-data:name="'A'"></my-greeting>
+    <my-greeting b-else-if="isB" b-data:name="'B'"></my-greeting>
+    <my-greeting b-else b-data:name="'C'"></my-greeting>
+</b-unwrap>

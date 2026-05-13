@@ -430,6 +430,43 @@ Deno.test("custom-element: unknown tag falls back to plain HTML", () => {
     );
 });
 
+Deno.test("custom-element: b-for directly on call site loops correctly", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("custom-elements.html").caller_direct_for, { names: ["Ada", "Bob"] })),
+        "<my-greeting>Hello, Ada!</my-greeting><my-greeting>Hello, Bob!</my-greeting>"
+    );
+});
+
+Deno.test("custom-element: b-if directly on call site renders when true", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("custom-elements.html").caller_direct_if, { show: true })),
+        '<my-notice class="notice">Notice!</my-notice>'
+    );
+});
+
+Deno.test("custom-element: b-if directly on call site skipped when false (b-else runs)", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("custom-elements.html").caller_direct_if, { show: false })),
+        "nothing"
+    );
+});
+
+Deno.test("custom-element: b-if/b-else-if/b-else chain directly on call sites", () => {
+    const mod = getModule("custom-elements.html");
+    assertEquals(
+        normalize(renderRoot(mod.caller_direct_else_chain, { isA: true, isB: false })),
+        "<my-greeting>Hello, A!</my-greeting>"
+    );
+    assertEquals(
+        normalize(renderRoot(mod.caller_direct_else_chain, { isA: false, isB: true })),
+        "<my-greeting>Hello, B!</my-greeting>"
+    );
+    assertEquals(
+        normalize(renderRoot(mod.caller_direct_else_chain, { isA: false, isB: false })),
+        "<my-greeting>Hello, C!</my-greeting>"
+    );
+});
+
 Deno.test("custom-element: cross-file exported partial is callable from another file", () => {
     const mod = crossFileModules.get("ce-consumer.html")!;
     assertEquals(

@@ -339,7 +339,19 @@ If the same attribute name appears on both the call site and the definition (e.g
 
 ### Flow control on call sites
 
-`b-if` and `b-for` are not valid directly on a custom element call tag — wrap the call in `<b-unwrap>`:
+`b-for`, `b-if`, `b-else-if`, and `b-else` can be placed directly on a custom element call tag — the call (and its slot content) is wrapped in the matching loop or branch:
+
+```html
+<my-greeting b-for="who in names" b-data:name="who"></my-greeting>
+
+<my-notice b-if="warn"></my-notice>
+<my-banner b-else-if="info"></my-banner>
+<my-banner b-else b-data:tone="'quiet'"></my-banner>
+```
+
+The b-for variable (`who` above) is in scope for `b-data:*` bindings and slot content on the same call. b-else-if/b-else chain to a preceding b-if among siblings just like they do on regular tags, and the preceding b-if can be on a regular tag or another custom element call.
+
+The equivalent `<b-unwrap b-for=...>` wrapping form is also supported and produces the same output — use whichever reads better in context:
 
 ```html
 <b-unwrap b-for="who in names">

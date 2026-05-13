@@ -1405,3 +1405,194 @@ Deno.test("asset: resolveAssetRefs does not mutate original", async () => {
 
 // Top-level-element-without-b-name error tests live in partials_test.ts (scanPartials owns this check).
 
+// ---- compileFile: flow directives on custom element call sites ----
+// These exercise `<my-elem b-for=...>`, `<my-elem b-if=...>`, `<my-elem b-else-if=...>`,
+// `<my-elem b-else>`. The direct form is equivalent to wrapping the call in
+// `<b-unwrap b-for|if|...=...>` (which keeps working — see regression test below).
+
+Deno.test("custom element call: b-for wraps the call in a ForTNode", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><my-card b-for="item in items">{{ item }}</my-card></div>'
+	);
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('page')!;
+	const for_node = root.tnodes.find(n => n.type === 'for') as ForTNode | undefined;
+	assertExists(for_node);
+	assertEquals(for_node.valName, 'item');
+	assertEquals(for_node.iterable, interpretBackcode('items'));
+	// The for_node body should contain the partial-ref, not a raw <my-card> tag.
+	const ref = for_node.tnodes.find(n => n.type === 'partial-ref') as PartialRefTNode | undefined;
+	assertExists(ref);
+	assertEquals(ref.partialName, 'my-card');
+	assertEquals(ref.customElement, true);
+	// partial-ref.parent must be the ForTNode (so siblings logic stays sane downstream)
+	assertEquals(ref.parent, for_node);
+});
+
+Deno.test("custom element call: b-for slot content evaluates in the iteration scope", async () => {
+	// {{ item }} inside the call's slot content must refer to the b-for variable.
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><my-card b-for="item in items">{{ item.title }}</my-card></div>'
+	);
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('page')!;
+	const for_node = root.tnodes.find(n => n.type === 'for') as ForTNode;
+	const ref = for_node.tnodes.find(n => n.type === 'partial-ref') as PartialRefTNode;
+	const defaultSlot = ref.slots['default'];
+	const print = defaultSlot.find(n => n.type === 'print') as PrintTNode | undefined;
+	assertExists(print);
+	assertEquals(print.data, interpretBackcode('item.title'));
+});
+
+Deno.test("custom element call: b-for with b-data:* still captures the binding", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><my-card b-for="item in items" b-data:title="item.title"></my-card></div>'
+	);
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('page')!;
+	const for_node = root.tnodes.find(n => n.type === 'for') as ForTNode;
+	const ref = for_node.tnodes.find(n => n.type === 'partial-ref') as PartialRefTNode;
+	assertEquals(ref.bindings.length, 1);
+	assertEquals(ref.bindings[0].name, 'title');
+	assertEquals(ref.bindings[0].data, interpretBackcode('item.title'));
+});
+
+Deno.test("custom element call: b-if wraps the call in an IfTNode", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><my-card b-if="show">x</my-card></div>'
+	);
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('page')!;
+	const if_node = root.tnodes.find(n => n.type === 'if') as IfTNode | undefined;
+	assertExists(if_node);
+	assertEquals(if_node.branches.length, 1);
+	assertEquals(if_node.branches[0].condition, interpretBackcode('show'));
+	const ref = if_node.branches[0].tnodes.find(n => n.type === 'partial-ref') as PartialRefTNode | undefined;
+	assertExists(ref);
+	assertEquals(ref.partialName, 'my-card');
+});
+
+Deno.test("custom element call: b-if + b-else chain across custom elements", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><my-card b-if="a">A</my-card><my-other b-else>B</my-other></div>'
+	);
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('page')!;
+	const if_node = root.tnodes.find(n => n.type === 'if') as IfTNode;
+	assertExists(if_node);
+	assertEquals(if_node.branches.length, 2);
+	assertEquals(if_node.branches[0].condition, interpretBackcode('a'));
+	assertEquals(if_node.branches[1].condition, undefined);
+	const a = if_node.branches[0].tnodes.find(n => n.type === 'partial-ref') as PartialRefTNode;
+	const b = if_node.branches[1].tnodes.find(n => n.type === 'partial-ref') as PartialRefTNode;
+	assertEquals(a.partialName, 'my-card');
+	assertEquals(b.partialName, 'my-other');
+});
+
+Deno.test("custom element call: b-if / b-else-if / b-else chain across custom elements", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><my-a b-if="a">A</my-a><my-b b-else-if="b">B</my-b><my-c b-else>C</my-c></div>'
+	);
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('page')!;
+	const if_node = root.tnodes.find(n => n.type === 'if') as IfTNode;
+	assertEquals(if_node.branches.length, 3);
+	assertEquals(if_node.branches[0].condition, interpretBackcode('a'));
+	assertEquals(if_node.branches[1].condition, interpretBackcode('b'));
+	assertEquals(if_node.branches[2].condition, undefined);
+	const refs = if_node.branches.map(b => b.tnodes.find(n => n.type === 'partial-ref') as PartialRefTNode);
+	assertEquals(refs.map(r => r.partialName), ['my-a', 'my-b', 'my-c']);
+});
+
+Deno.test("custom element call: b-else on custom element chains to a preceding b-if on a regular tag", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><p b-if="cond">yes</p><my-card b-else>no</my-card></div>'
+	);
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('page')!;
+	const if_node = root.tnodes.find(n => n.type === 'if') as IfTNode;
+	assertEquals(if_node.branches.length, 2);
+	const ref = if_node.branches[1].tnodes.find(n => n.type === 'partial-ref') as PartialRefTNode;
+	assertExists(ref);
+	assertEquals(ref.partialName, 'my-card');
+});
+
+Deno.test("custom element call: b-else on regular tag chains to a preceding b-if on a custom element", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><my-card b-if="cond">yes</my-card><p b-else>no</p></div>'
+	);
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('page')!;
+	const if_node = root.tnodes.find(n => n.type === 'if') as IfTNode;
+	assertEquals(if_node.branches.length, 2);
+	const ref = if_node.branches[0].tnodes.find(n => n.type === 'partial-ref') as PartialRefTNode;
+	assertExists(ref);
+	const elseRaw = if_node.branches[1].tnodes.find(n => n.type === 'raw') as RawTNode;
+	assertEquals(elseRaw.raw.startsWith('<p>'), true);
+});
+
+Deno.test("custom element call: self-closing with b-if", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><my-card b-if="show" /></div>'
+	);
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('page')!;
+	const if_node = root.tnodes.find(n => n.type === 'if') as IfTNode | undefined;
+	assertExists(if_node);
+	const ref = if_node.branches[0].tnodes.find(n => n.type === 'partial-ref') as PartialRefTNode;
+	assertEquals(ref.partialName, 'my-card');
+});
+
+Deno.test("custom element call: content after b-for is a sibling, not inside the loop", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><my-card b-for="x in xs">in</my-card><p>after</p></div>'
+	);
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('page')!;
+	// Find the for_node and what follows it
+	const idx = root.tnodes.findIndex(n => n.type === 'for');
+	assertEquals(idx >= 0, true);
+	const after = root.tnodes.slice(idx + 1).map(n => n.type === 'raw' ? (n as RawTNode).raw : '').join('');
+	assertStringIncludes(after, '<p>after</p>');
+});
+
+Deno.test("custom element call: nested custom-element b-for inside another custom-element b-for slot", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><my-list b-for="row in rows"><my-item b-for="cell in row">x</my-item></my-list></div>'
+	);
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('page')!;
+	const outerFor = root.tnodes.find(n => n.type === 'for') as ForTNode;
+	assertEquals(outerFor.valName, 'row');
+	const outerRef = outerFor.tnodes.find(n => n.type === 'partial-ref') as PartialRefTNode;
+	assertEquals(outerRef.partialName, 'my-list');
+	// The inner b-for lives in the outer call's default slot
+	const innerFor = outerRef.slots['default'].find(n => n.type === 'for') as ForTNode | undefined;
+	assertExists(innerFor);
+	assertEquals(innerFor.valName, 'cell');
+	const innerRef = innerFor.tnodes.find(n => n.type === 'partial-ref') as PartialRefTNode;
+	assertEquals(innerRef.partialName, 'my-item');
+});
+
+Deno.test("custom element call: more than one flow attr reports 'more than one b-attr'", async () => {
+	const { errors } = await compileFile(
+		'<div b-name="page"><my-card b-for="x in xs" b-if="cond">x</my-card></div>'
+	);
+	assertEquals(errors.length > 0, true);
+	assertStringIncludes(errors.map(e => e.message).join(' | '), 'more than one b-attr');
+});
+
+Deno.test("custom element call: existing b-unwrap b-for wrap continues to work (regression)", async () => {
+	// The pre-existing workaround MUST keep compiling — we add a new direct form but
+	// don't break the wrapping form.
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><b-unwrap b-for="x in xs"><my-card b-data:item="x"></my-card></b-unwrap></div>'
+	);
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('page')!;
+	const for_node = root.tnodes.find(n => n.type === 'for') as ForTNode;
+	const ref = for_node.tnodes.find(n => n.type === 'partial-ref') as PartialRefTNode;
+	assertEquals(ref.partialName, 'my-card');
+	assertEquals(ref.bindings[0].name, 'item');
+});
+

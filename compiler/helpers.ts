@@ -82,6 +82,29 @@ export function parseBPartValue(value: string): { partialName: string; file: str
 }
 
 /**
+ * Parse a `b-for` attribute value of the form `"item in items"` into
+ * `{ valName, iterable }` (where `iterable` is the interpreted expression),
+ * or return `{ error }` with a human-readable message describing what's wrong.
+ *
+ * Shared by `handleBFor` and the custom-element-call-with-flow handler so the
+ * two stay in sync.
+ */
+export function parseBForValue(value: string):
+	| { valName: string; iterable: Parsed }
+	| { error: string }
+{
+	const pieces = value.split(" in ");
+	if (pieces.length !== 2) {
+		return { error: `b-for value must be in the form "item in items", got: "${value}"` };
+	}
+	const valName = pieces[0].trim();
+	if (!valName) {
+		return { error: `got bad iter value name: ${valName}` };
+	}
+	return { valName, iterable: interpretBackcode(pieces[1].trim()) };
+}
+
+/**
  * True when `name` is a hyphenated tag that should be treated as a custom element
  * partial — i.e. it follows the HTML custom element naming rule (lowercase letter
  * start, contains a hyphen) but is NOT a backflip directive tag (b-*).
