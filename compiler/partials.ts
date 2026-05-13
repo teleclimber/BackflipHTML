@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import stream from 'node:stream';
 import { RewritingStream } from 'parse5-html-rewriting-stream';
 import { compilePartial } from './compiler.js';
-import { collectSlots, isCustomElementTagName } from './helpers.js';
+import { collectSlots, isCustomElementTagName, parseBPartValue } from './helpers.js';
 import type { CompiledFile, CompileOptions, PartialRegistry, PartialRefTNode, RootTNode, PartialDef, PartialBinding, AttrBindTNode, TNode, RawTNode, SourceLoc, ForTNode, IfTNode } from './types.js';
 import { BackflipError } from './errors.js';
 import { validateBAttrUsage, inferDataShape } from './data-shape.js';
@@ -164,11 +164,8 @@ function scanCrossFileRefs(html: string): Set<string> {
     const refRegex = /\bb-part="([^"#][^"]*#[^"]*)"/g;
     let m: RegExpExecArray | null;
     while ((m = refRegex.exec(html)) !== null) {
-        const value = m[1];
-        const hashIdx = value.indexOf('#');
-        if (hashIdx > 0) {
-            refs.add(value.slice(0, hashIdx));
-        }
+        const { file } = parseBPartValue(m[1]);
+        if (file !== null) refs.add(file);
     }
     return refs;
 }

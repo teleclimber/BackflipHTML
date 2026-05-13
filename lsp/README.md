@@ -28,7 +28,6 @@ File changes trigger recompilation with a 300ms debounce. The server also watche
 | `src/references.ts` | Find-references for partial usage |
 | `src/symbols.ts` | Document symbols: lists partials in file |
 | `src/diagnostics.ts` | Compilation error → LSP diagnostic conversion |
-| `src/parse-bpart.ts` | Parses `b-part` attribute values (e.g. `file.html#name`) |
 | `build.mjs` | Rollup build script (bundles to `dist/server.cjs`) |
 
 ## Setup

@@ -1,7 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 
 import type { RootTNode, RawTNode } from "./types.ts";
-import { effectiveAttrNames, isCustomElementTagName, onText, pushRaw } from "./helpers.ts";
+import { effectiveAttrNames, isCustomElementTagName, onText, parseBPartValue, pushRaw } from "./helpers.ts";
 import { interpretBackcode } from "./backcode.ts";
 
 // ---- isCustomElementTagName unit tests ----
@@ -41,6 +41,28 @@ Deno.test("isCustomElementTagName: hyphen is required", () => {
 Deno.test("isCustomElementTagName: digits allowed after the leading letter", () => {
 	assertEquals(isCustomElementTagName('h1-header'), true);
 	assertEquals(isCustomElementTagName('foo2-bar'), true);
+});
+
+// ---- parseBPartValue unit tests ----
+
+Deno.test("parseBPartValue: same-file reference with #", () => {
+	assertEquals(parseBPartValue('#header'), { partialName: 'header', file: null });
+});
+
+Deno.test("parseBPartValue: cross-file reference", () => {
+	assertEquals(parseBPartValue('components.html#header'), { partialName: 'header', file: 'components.html' });
+});
+
+Deno.test("parseBPartValue: cross-file reference with subdirectory path", () => {
+	assertEquals(parseBPartValue('path/to/file.html#card'), { partialName: 'card', file: 'path/to/file.html' });
+});
+
+Deno.test("parseBPartValue: bare name is same-file reference", () => {
+	assertEquals(parseBPartValue('header'), { partialName: 'header', file: null });
+});
+
+Deno.test("parseBPartValue: empty string", () => {
+	assertEquals(parseBPartValue(''), { partialName: '', file: null });
 });
 
 // ---- effectiveAttrNames unit tests ----

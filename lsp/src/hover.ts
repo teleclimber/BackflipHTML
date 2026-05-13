@@ -4,7 +4,7 @@ import type { TextDocument } from 'vscode-languageserver-textdocument';
 import type { ProjectIndex, PartialDef } from './index.js';
 import type { CssAnalysisResult } from '@backflip/css';
 import type { DataShape } from '@backflip/html';
-import { parseBPartValue } from './parse-bpart.js';
+import { parseBPartValue } from '@backflip/html';
 import * as path from 'node:path';
 
 /**
@@ -289,7 +289,7 @@ function hoverBPart(
 	const value = matchAttr(line, 'b-part', position.character);
 	if (value === null) return null;
 
-	const { partialName, targetFile } = parseBPartValue(value);
+	const { partialName, file: targetFile } = parseBPartValue(value);
 	const def = resolvePartialDef(partialName, targetFile, filePath, index);
 
 	if (!def) {
@@ -344,7 +344,7 @@ function hoverBIn(
 		return mkHover([`**Slot** \`${slotName}\` — *enclosing b-part not found*`]);
 	}
 
-	const { partialName, targetFile } = parseBPartValue(partialInfo);
+	const { partialName, file: targetFile } = parseBPartValue(partialInfo);
 	const def = resolvePartialDef(partialName, targetFile, filePath, index);
 
 	if (!def) {
@@ -444,7 +444,7 @@ function findCallSitePartial(
 
 	const bPartMatch = tag.openTagText.match(/b-part="([^"]*)"/);
 	if (bPartMatch) {
-		const { partialName, targetFile } = parseBPartValue(bPartMatch[1]);
+		const { partialName, file: targetFile } = parseBPartValue(bPartMatch[1]);
 		return { partialName, def: resolvePartialDef(partialName, targetFile, filePath, index) };
 	}
 

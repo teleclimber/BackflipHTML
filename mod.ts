@@ -5,7 +5,7 @@ export { fileToPhpFile } from './compiler/generate/php/nodes2php.js';
 export { BackflipError } from './compiler/errors.js';
 export { loadConfig, resolveConfigRoot, resolveAssetDirs, CONFIG_FILENAME } from './compiler/config.js';
 export type { BackflipConfig, OutputConfig, AssetDirConfig, LoadConfigResult } from './compiler/config.js';
-export { collectSlots, resolveAssetRefs } from './compiler/helpers.js';
+export { collectSlots, resolveAssetRefs, parseBPartValue } from './compiler/helpers.js';
 export type { SourceLoc, CompiledFile, CompileOptions, RootTNode, TNode, PartialRefTNode, ForTNode, IfTNode, IfBranch, SlotTNode, PrintTNode, RawTNode, AttrBindTNode, AssetRefTNode, AssetRef, AttrPart, PartialMeta } from './compiler/types.js';
 export { inferDataShape, inferFreeVars } from './compiler/data-shape.js';
 export type { DataShape, UsageKind } from './compiler/data-shape.js';

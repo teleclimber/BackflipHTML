@@ -63,6 +63,25 @@ export function stripAssetSuffix(attrName: string): string {
 }
 
 /**
+ * Parse a `b-part` attribute value into its file/partialName components.
+ *
+ * Formats:
+ *   "#name"           → same-file reference (file: null)
+ *   "file.html#name"  → cross-file reference
+ *   "name"            → bare name, same-file reference (file: null)
+ */
+export function parseBPartValue(value: string): { partialName: string; file: string | null } {
+	if (value.startsWith('#')) {
+		return { partialName: value.slice(1), file: null };
+	}
+	const hashIdx = value.indexOf('#');
+	if (hashIdx > 0) {
+		return { partialName: value.slice(hashIdx + 1), file: value.slice(0, hashIdx) };
+	}
+	return { partialName: value, file: null };
+}
+
+/**
  * True when `name` is a hyphenated tag that should be treated as a custom element
  * partial — i.e. it follows the HTML custom element naming rule (lowercase letter
  * start, contains a hyphen) but is NOT a backflip directive tag (b-*).

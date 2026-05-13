@@ -16,7 +16,7 @@ import {
 	DiagnosticSeverity,
 } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { compileDirectory, loadConfig, resolveConfigRoot, resolveAssetDirs, CONFIG_FILENAME, previewPartial, type BackflipError, type CompiledFile, type CompileOptions, type LoadConfigResult } from '@backflip/html';
+import { compileDirectory, loadConfig, resolveConfigRoot, resolveAssetDirs, CONFIG_FILENAME, previewPartial, parseBPartValue, type BackflipError, type CompiledFile, type CompileOptions, type LoadConfigResult } from '@backflip/html';
 import { analyzeCss, discoverCssFiles, type CssAnalysisResult, type PartialSourceInfo } from '@backflip/css';
 import { discoverAssetFileInfos, collectAllAssetReferences, validateAssetFiles, buildAssetUsageReport, filterReport, renderAssetReportHtml } from '@backflip/assets';
 import { buildIndex, type ProjectIndex } from './index.js';
@@ -24,7 +24,6 @@ import { errorsToDiagnostics } from './diagnostics.js';
 import { findDefinition, findAssetDefinition, findCustomElementDefinition } from './definition.js';
 import { findReferences, parseAssetRefAtCursor, findAssetReferences } from './references.js';
 import { getDocumentSymbols } from './symbols.js';
-import { parseBPartValue } from './parse-bpart.js';
 import { getHover, findElementsForSelector, findRulesForElement, findCustomElementTagAtCursor } from './hover.js';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
@@ -321,9 +320,9 @@ connection.onDefinition((params: DefinitionParams) => {
 	const filePath = uri.replace('file://', '');
 	const relPath = path.relative(templateRoot, filePath);
 
-	const { partialName, targetFile } = parseBPartValue(value);
+	const { partialName, file } = parseBPartValue(value);
 
-	return findDefinition(partialName, targetFile, relPath, projectIndex, templateRoot);
+	return findDefinition(partialName, file, relPath, projectIndex, templateRoot);
 });
 
 // Find References: b-name → all b-part usages

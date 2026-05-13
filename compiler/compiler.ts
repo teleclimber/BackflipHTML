@@ -13,7 +13,7 @@ import {
 	attrLoc, tagLoc, errorLoc, attrErrorLoc, bDataNameLoc, interpolationLoc,
 	isBindAttr, isAssetAttr,
 	buildTagPrefix, LineMap,
-	isCustomElementTagName, effectiveAttrNames,
+	isCustomElementTagName, effectiveAttrNames, parseBPartValue,
 	dataLocAttr as dataLocAttrPure,
 	getSlotCollection as getSlotCollectionPure,
 	classifyOpenTagAttrs, buildRawAttrSequence, buildAttrBindNode,
@@ -474,22 +474,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				}
 				return;
 			}
-			const partValue = bPartAttr.value;
-			let file: string | null;
-			let partialName: string;
-			if (partValue.startsWith('#')) {
-				file = null;
-				partialName = partValue.slice(1);
-			} else {
-				const hashIdx = partValue.indexOf('#');
-				if (hashIdx === -1) {
-					file = null;
-					partialName = partValue;
-				} else {
-					file = partValue.slice(0, hashIdx);
-					partialName = partValue.slice(hashIdx + 1);
-				}
-			}
+			const { file, partialName } = parseBPartValue(bPartAttr.value);
 
 			const bindings: PartialBinding[] = [];
 			for (const attr of tag.attrs) {
