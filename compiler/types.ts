@@ -17,9 +17,6 @@ export interface PartialMeta {
 	isDocumentLevel: boolean;  // true if partial contains/is html, head, or body
 }
 
-export interface ChildTNode {
-	parent: ParentTNode
-}
 interface BaseRoot {
 	type: 'root',
 	tnodes: TNode[],
@@ -37,16 +34,16 @@ export interface CustomElementPartialRoot extends BaseRoot {
 	bAttrs?: { name: string; isBool: boolean; loc?: SourceLoc }[],  // declared b-attr:* directives on the custom element definition tag
 }
 export type RootTNode = NamedPartialRoot | CustomElementPartialRoot;
-export interface RawTNode extends ChildTNode {
+export interface RawTNode {
 	type: 'raw',
 	raw: string
 }
-export interface PrintTNode extends ChildTNode {	// for outputing {{ foo }} into HTML (do escaping)
+export interface PrintTNode {	// for outputing {{ foo }} into HTML (do escaping)
 	type: 'print',
 	data: Parsed,
 	loc?: SourceLoc
 }
-export interface ForTNode extends ChildTNode {
+export interface ForTNode {
 	type: 'for',
 	iterable: Parsed,
 	valName: string,
@@ -56,15 +53,14 @@ export interface ForTNode extends ChildTNode {
 export interface IfBranch {
 	condition?: Parsed,
 	tnodes: TNode[],
-	ifNode: IfTNode,
 	loc?: SourceLoc
 }
-export interface IfTNode extends ChildTNode {
+export interface IfTNode {
 	type: 'if',
 	branches: IfBranch[]
 }
 
-export interface SlotTNode extends ChildTNode {
+export interface SlotTNode {
 	type: 'slot',
 	name: string | undefined,   // undefined = default slot
 	loc?: SourceLoc
@@ -72,7 +68,7 @@ export interface SlotTNode extends ChildTNode {
 export type PartialBinding =
 	| { kind: 'expr'; name: string; data: Parsed; cast?: 'bool' | 'string'; nameLoc?: SourceLoc }
 	| { kind: 'literal'; name: string; value: string | boolean; nameLoc?: SourceLoc };
-interface BasePartialCall extends ChildTNode {
+interface BasePartialCall {
 	type: 'partial-ref',
 	file: string | null,        // null = same-file reference (b-part="#name")
 	partialName: string,
@@ -128,7 +124,7 @@ export type AttrPart =
 	| { type: 'dynamic'; name: string; expr: Parsed; isBoolean: boolean; isAsset?: boolean; loc?: SourceLoc }
 	| { type: 'asset'; attrName: string; originalValue: string; refs: AssetRef[]; loc?: SourceLoc }
 
-export interface AttrBindTNode extends ChildTNode {
+export interface AttrBindTNode {
 	type: 'attr-bind'
 	tagOpen: string   // e.g. `<a`
 	parts: AttrPart[]
@@ -136,7 +132,7 @@ export interface AttrBindTNode extends ChildTNode {
 	attrsOnly?: boolean   // when true, suppress tagOpen prefix and the trailing `>`/` />`. Used by custom element partials so their open-tag attrs can be merged into a single rendered tag.
 }
 
-export interface AssetRefTNode extends ChildTNode {
+export interface AssetRefTNode {
 	type: 'asset-ref'
 	attrName: string          // e.g. "src", "srcset"
 	originalValue: string     // e.g. "@images/photo.jpg"

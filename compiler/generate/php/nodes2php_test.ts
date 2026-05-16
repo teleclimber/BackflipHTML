@@ -14,7 +14,7 @@ function makeRoot(...tnodes: any[]): RootTNode {
 
 Deno.test("raw node", () => {
 	const root = makeRoot();
-	const node: RawTNode = { type: 'raw', raw: 'hello world', parent: root };
+	const node: RawTNode = { type: 'raw', raw: 'hello world' };
 	const php = nodeToPhp(node);
 	assertMatch(php, /'type' => 'raw'/);
 	assertMatch(php, /'raw' => 'hello world'/);
@@ -22,21 +22,21 @@ Deno.test("raw node", () => {
 
 Deno.test("raw node with single quote escaped", () => {
 	const root = makeRoot();
-	const node: RawTNode = { type: 'raw', raw: "it's", parent: root };
+	const node: RawTNode = { type: 'raw', raw: "it's" };
 	const php = nodeToPhp(node);
 	assertMatch(php, /it\\'s/);
 });
 
 Deno.test("raw node with backslash escaped", () => {
 	const root = makeRoot();
-	const node: RawTNode = { type: 'raw', raw: 'a\\b', parent: root };
+	const node: RawTNode = { type: 'raw', raw: 'a\\b' };
 	const php = nodeToPhp(node);
 	assertMatch(php, /a\\\\b/);
 });
 
 Deno.test("raw node allows literal newlines", () => {
 	const root = makeRoot();
-	const node: RawTNode = { type: 'raw', raw: 'hello\nworld', parent: root };
+	const node: RawTNode = { type: 'raw', raw: 'hello\nworld' };
 	const php = nodeToPhp(node);
 	// PHP single-quoted strings allow literal newlines
 	assertMatch(php, /hello\nworld/);
@@ -45,7 +45,7 @@ Deno.test("raw node allows literal newlines", () => {
 Deno.test("print node", () => {
 	const root = makeRoot();
 	const parsed = makeParsed('foo');
-	const node: PrintTNode = { type: 'print', data: parsed, parent: root };
+	const node: PrintTNode = { type: 'print', data: parsed };
 	const php = nodeToPhp(node);
 	assertMatch(php, /'type' => 'print'/);
 	assertMatch(php, /'fn' =>/);
@@ -55,13 +55,12 @@ Deno.test("print node", () => {
 Deno.test("for node", () => {
 	const root = makeRoot();
 	const parsed = makeParsed('items');
-	const innerRaw: RawTNode = { type: 'raw', raw: '<li>hi</li>', parent: root };
+	const innerRaw: RawTNode = { type: 'raw', raw: '<li>hi</li>' };
 	const node: ForTNode = {
 		type: 'for',
 		iterable: parsed,
 		valName: 'item',
 		tnodes: [innerRaw],
-		parent: root
 	};
 	const php = nodeToPhp(node);
 	assertMatch(php, /'type' => 'for'/);
@@ -74,16 +73,14 @@ Deno.test("for node", () => {
 Deno.test("if node with condition branch", () => {
 	const root = makeRoot();
 	const condition = makeParsed('show');
-	const innerRaw: RawTNode = { type: 'raw', raw: '<div>yes</div>', parent: root };
+	const innerRaw: RawTNode = { type: 'raw', raw: '<div>yes</div>' };
 	const ifNode: IfTNode = {
 		type: 'if',
 		branches: [],
-		parent: root
 	};
 	const branch: IfBranch = {
 		condition,
 		tnodes: [innerRaw],
-		ifNode
 	};
 	ifNode.branches.push(branch);
 	const php = nodeToPhp(ifNode);
@@ -96,24 +93,23 @@ Deno.test("if node with condition branch", () => {
 Deno.test("if node with else branch (no condition) emits null", () => {
 	const root = makeRoot();
 	const condition = makeParsed('show');
-	const raw1: RawTNode = { type: 'raw', raw: 'yes', parent: root };
-	const raw2: RawTNode = { type: 'raw', raw: 'no', parent: root };
+	const raw1: RawTNode = { type: 'raw', raw: 'yes' };
+	const raw2: RawTNode = { type: 'raw', raw: 'no' };
 	const ifNode: IfTNode = {
 		type: 'if',
 		branches: [],
-		parent: root
 	};
-	ifNode.branches.push({ condition, tnodes: [raw1], ifNode });
-	ifNode.branches.push({ condition: undefined, tnodes: [raw2], ifNode });
+	ifNode.branches.push({ condition, tnodes: [raw1] });
+	ifNode.branches.push({ condition: undefined, tnodes: [raw2] });
 	const php = nodeToPhp(ifNode);
 	assertMatch(php, /'condition' => null/);
 });
 
 Deno.test("root node with children", () => {
 	const root: RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
-	const raw: RawTNode = { type: 'raw', raw: 'hello', parent: root };
+	const raw: RawTNode = { type: 'raw', raw: 'hello' };
 	const parsed = makeParsed('x');
-	const print: PrintTNode = { type: 'print', data: parsed, parent: root };
+	const print: PrintTNode = { type: 'print', data: parsed };
 	root.tnodes.push(raw, print);
 	const php = nodeToPhp(root);
 	assertMatch(php, /'type' => 'root'/);
@@ -124,7 +120,7 @@ Deno.test("root node with children", () => {
 
 Deno.test("slot node with name", () => {
 	const root = makeRoot();
-	const node: SlotTNode = { type: 'slot', name: 'message', parent: root };
+	const node: SlotTNode = { type: 'slot', name: 'message' };
 	const php = nodeToPhp(node);
 	assertMatch(php, /'type' => 'slot'/);
 	assertMatch(php, /'name' => 'message'/);
@@ -132,7 +128,7 @@ Deno.test("slot node with name", () => {
 
 Deno.test("slot node without name (undefined) emits null", () => {
 	const root = makeRoot();
-	const node: SlotTNode = { type: 'slot', name: undefined, parent: root };
+	const node: SlotTNode = { type: 'slot', name: undefined };
 	const php = nodeToPhp(node);
 	assertMatch(php, /'type' => 'slot'/);
 	assertMatch(php, /'name' => null/);
@@ -154,7 +150,6 @@ Deno.test("partial-ref node with same-file reference", () => {
 		wrapper: null,
 		slots: {},
 		bindings: [],
-		parent: root
 	};
 	const php = nodeToPhp(node);
 	assertMatch(php, /'type' => 'partial-ref'/);
@@ -172,7 +167,6 @@ Deno.test("partial-ref node with cross-file reference uses variable alias", () =
 		wrapper: null,
 		slots: {},
 		bindings: [],
-		parent: root
 	};
 	const php = nodeToPhp(node);
 	assertMatch(php, /\$graphics_charts__pie_chart/);
@@ -188,7 +182,6 @@ Deno.test("partial-ref node with wrapper", () => {
 		wrapper: { open: '<div class="x">', close: '</div>' },
 		slots: {},
 		bindings: [],
-		parent: root
 	};
 	const php = nodeToPhp(node);
 	assertMatch(php, /'open' =>/);
@@ -197,7 +190,7 @@ Deno.test("partial-ref node with wrapper", () => {
 
 Deno.test("partial-ref node with default slot content", () => {
 	const root = makeRoot();
-	const slotRaw: RawTNode = { type: 'raw', raw: 'slot content', parent: root };
+	const slotRaw: RawTNode = { type: 'raw', raw: 'slot content' };
 	const node: PartialRefTNode = {
 		type: 'partial-ref',
 		kind: 'b-part' as const,
@@ -206,7 +199,6 @@ Deno.test("partial-ref node with default slot content", () => {
 		wrapper: null,
 		slots: { default: [slotRaw] },
 		bindings: [],
-		parent: root
 	};
 	const php = nodeToPhp(node);
 	assertMatch(php, /'slots' =>/);
@@ -224,7 +216,6 @@ Deno.test("partial-ref node with binding", () => {
 		wrapper: null,
 		slots: {},
 		bindings: [{ kind: 'expr', name: 'mood', data: makeParsed('user.mood') }],
-		parent: root
 	};
 	const php = nodeToPhp(node);
 	assertMatch(php, /'bindings' =>/);
@@ -242,7 +233,6 @@ Deno.test("partial-ref binding with literal true (bare boolean)", () => {
 		wrapper: null,
 		slots: {},
 		bindings: [{ kind: 'literal', name: 'premium', value: true }],
-		parent: root
 	};
 	const php = nodeToPhp(node);
 	assertMatch(php, /'name' => 'premium'/);
@@ -261,7 +251,6 @@ Deno.test("partial-ref binding with literal false", () => {
 		wrapper: null,
 		slots: {},
 		bindings: [{ kind: 'literal', name: 'premium', value: false }],
-		parent: root
 	};
 	const php = nodeToPhp(node);
 	assertMatch(php, /'name' => 'premium'/);
@@ -278,7 +267,6 @@ Deno.test("partial-ref binding with literal string value", () => {
 		wrapper: null,
 		slots: {},
 		bindings: [{ kind: 'literal', name: 'label', value: 'hello' }],
-		parent: root
 	};
 	const php = nodeToPhp(node);
 	assertMatch(php, /'name' => 'label'/);
@@ -295,7 +283,6 @@ Deno.test("partial-ref binding with literal string escapes single quotes", () =>
 		wrapper: null,
 		slots: {},
 		bindings: [{ kind: 'literal', name: 'label', value: "it's" }],
-		parent: root
 	};
 	const php = nodeToPhp(node);
 	assertMatch(php, /'literal' => 'it\\'s'/);
@@ -311,7 +298,6 @@ Deno.test("partial-ref binding with cast=bool", () => {
 		wrapper: null,
 		slots: {},
 		bindings: [{ kind: 'expr', name: 'premium', data: makeParsed('user.isPro'), cast: 'bool' }],
-		parent: root
 	};
 	const php = nodeToPhp(node);
 	assertMatch(php, /'name' => 'premium'/);
@@ -329,7 +315,6 @@ Deno.test("partial-ref binding with cast=string", () => {
 		wrapper: null,
 		slots: {},
 		bindings: [{ kind: 'expr', name: 'label', data: makeParsed('count'), cast: 'string' }],
-		parent: root
 	};
 	const php = nodeToPhp(node);
 	assertMatch(php, /'name' => 'label'/);
@@ -354,7 +339,6 @@ Deno.test("custom-element partial-ref binding shapes coexist", () => {
 		],
 		callerTagName: 'my-card',
 		callerOpenTag: [],
-		parent: root
 	};
 	const php = nodeToPhp(node);
 	assertMatch(php, /'name' => 'title'/);
@@ -374,7 +358,7 @@ Deno.test("sanitizeName replaces hyphens and dots", () => {
 
 Deno.test("fileToPhpFile starts with <?php and ends with return compact(", () => {
 	const root: RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
-	root.tnodes.push({ type: 'raw', raw: '<p>hello</p>', parent: root });
+	root.tnodes.push({ type: 'raw', raw: '<p>hello</p>' });
 	const file: CompiledFile = {
 		partials: new Map([['notice', root]])
 	};
@@ -386,9 +370,9 @@ Deno.test("fileToPhpFile starts with <?php and ends with return compact(", () =>
 
 Deno.test("fileToPhpFile contains all partial names", () => {
 	const root1: RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
-	root1.tnodes.push({ type: 'raw', raw: '<p>notice</p>', parent: root1 });
+	root1.tnodes.push({ type: 'raw', raw: '<p>notice</p>' });
 	const root2: RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
-	root2.tnodes.push({ type: 'raw', raw: '<article>post</article>', parent: root2 });
+	root2.tnodes.push({ type: 'raw', raw: '<article>post</article>' });
 	const file: CompiledFile = {
 		partials: new Map([['notice', root1], ['post', root2]])
 	};
@@ -408,7 +392,6 @@ Deno.test("fileToPhpFile emits backflip_require for cross-file partial-ref", () 
 		wrapper: null,
 		slots: {},
 		bindings: [],
-		parent: root
 	};
 	root.tnodes.push(ref);
 	const file: CompiledFile = {
@@ -422,12 +405,12 @@ Deno.test("fileToPhpFile emits backflip_require for cross-file partial-ref", () 
 
 Deno.test("fileToPhpFile same-file dep comes before dependent", () => {
 	const noticeRoot: RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
-	noticeRoot.tnodes.push({ type: 'raw', raw: 'notice', parent: noticeRoot });
+	noticeRoot.tnodes.push({ type: 'raw', raw: 'notice' });
 
 	const postRoot: RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
 	const ref: PartialRefTNode = {
 		type: 'partial-ref', kind: 'b-part', file: null, partialName: 'notice',
-		wrapper: null, slots: {}, bindings: [], parent: postRoot
+		wrapper: null, slots: {}, bindings: []
 	};
 	postRoot.tnodes.push(ref);
 

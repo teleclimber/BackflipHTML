@@ -12,7 +12,7 @@ function makeRoot(tnodes: any[], loc?: SourceLoc, opts?: { exported?: boolean })
 }
 
 function makeSlot(name?: string): SlotTNode {
-	return { type: 'slot', name, parent: {} as any } as SlotTNode;
+	return { type: 'slot', name } as SlotTNode;
 }
 
 function makePartialRef(partialName: string, file: string | null, loc?: SourceLoc, opts?: { bindings?: { kind: 'expr', name: string, data: any }[], slots?: Record<string, any[]> }): PartialRefTNode {
@@ -25,7 +25,6 @@ function makePartialRef(partialName: string, file: string | null, loc?: SourceLo
 		slots: opts?.slots ?? {},
 		bindings: opts?.bindings ?? [],
 		loc,
-		parent: {} as any,
 	} as PartialRefTNode;
 }
 

@@ -1437,8 +1437,7 @@ Deno.test("custom element call: b-for wraps the call in a ForTNode", async () =>
 	assertExists(ref);
 	assertEquals(ref.partialName, 'my-card');
 	assertEquals(ref.kind, 'custom-element');
-	// partial-ref.parent must be the ForTNode (so siblings logic stays sane downstream)
-	assertEquals(ref.parent, for_node);
+	// Structural placement: ref lives in for_node.tnodes (verified by the find() above).
 });
 
 Deno.test("custom element call: b-for slot content evaluates in the iteration scope", async () => {

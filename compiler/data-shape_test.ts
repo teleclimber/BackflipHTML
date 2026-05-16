@@ -26,15 +26,15 @@ function asBAttrRoot(root: RootTNode): CustomElementPartialRoot {
 }
 
 function makePrint(vars: string[]): PrintTNode {
-	return { type: 'print', data: parsed(vars), parent: {} as ParentTNode };
+	return { type: 'print', data: parsed(vars) };
 }
 
 function makeFor(valName: string, iterableVars: string[], children: TNode[]): ForTNode {
-	return { type: 'for', iterable: parsed(iterableVars), valName, tnodes: children, parent: {} as ParentTNode };
+	return { type: 'for', iterable: parsed(iterableVars), valName, tnodes: children };
 }
 
 function makeIf(branches: { conditionVars?: string[], children: TNode[] }[]): IfTNode {
-	const ifNode: IfTNode = { type: 'if', branches: [], parent: {} as ParentTNode };
+	const ifNode: IfTNode = { type: 'if', branches: [] };
 	ifNode.branches = branches.map(b => ({
 		condition: b.conditionVars ? parsed(b.conditionVars) : undefined,
 		tnodes: b.children,
@@ -53,7 +53,6 @@ function makeAttrBind(dynamicParts: { name: string, vars: string[] }[]): AttrBin
 			expr: parsed(p.vars),
 			isBoolean: false,
 		})),
-		parent: {} as ParentTNode,
 	};
 }
 
@@ -66,14 +65,13 @@ function makePartialRef(bindingVars: { name: string, vars: string[] }[], slotCon
 		wrapper: null,
 		slots: slotContents ?? { 'default': [] },
 		bindings: bindingVars.map(b => ({ kind: 'expr' as const, name: b.name, data: parsed(b.vars) })),
-		parent: {} as ParentTNode,
 		loc: undefined,
 	};
 }
 
 Deno.test("inferFreeVars: returns empty for partial with no expressions", () => {
 	const root = makeRoot([
-		{ type: 'raw', raw: '<p>Hello</p>', parent: {} as ParentTNode } as RawTNode,
+		{ type: 'raw', raw: '<p>Hello</p>' } as RawTNode,
 	]);
 	assertEquals(inferFreeVars(root), []);
 });
@@ -183,7 +181,7 @@ Deno.test("inferFreeVars: collects vars from slot contents in partial refs", () 
 
 Deno.test("inferFreeVars: does not collect vars from slot placeholders", () => {
 	const root = makeRoot([
-		{ type: 'slot', name: 'header', parent: {} as ParentTNode } as SlotTNode,
+		{ type: 'slot', name: 'header' } as SlotTNode,
 	]);
 	assertEquals(inferFreeVars(root), []);
 });
@@ -216,15 +214,15 @@ Deno.test("inferFreeVars: handles complex nesting: b-for inside b-if with attr-b
 
 // Helpers for shape tests that use real parsed expressions
 function makePrintReal(code: string): PrintTNode {
-	return { type: 'print', data: realParsed(code), parent: {} as ParentTNode };
+	return { type: 'print', data: realParsed(code) };
 }
 
 function makeForReal(valName: string, iterableCode: string, children: TNode[]): ForTNode {
-	return { type: 'for', iterable: realParsed(iterableCode), valName, tnodes: children, parent: {} as ParentTNode };
+	return { type: 'for', iterable: realParsed(iterableCode), valName, tnodes: children };
 }
 
 function makeIfReal(branches: { conditionCode?: string, children: TNode[] }[]): IfTNode {
-	const ifNode: IfTNode = { type: 'if', branches: [], parent: {} as ParentTNode };
+	const ifNode: IfTNode = { type: 'if', branches: [] };
 	ifNode.branches = branches.map(b => ({
 		condition: b.conditionCode ? realParsed(b.conditionCode) : undefined,
 		tnodes: b.children,
@@ -243,7 +241,6 @@ function makeAttrBindReal(parts: { name: string, code: string }[]): AttrBindTNod
 			expr: realParsed(p.code),
 			isBoolean: false,
 		})),
-		parent: {} as ParentTNode,
 	};
 }
 
@@ -256,7 +253,6 @@ function makePartialRefReal(partialName: string, bindings: { name: string, code:
 		wrapper: null,
 		slots: slotContents ?? { 'default': [] },
 		bindings: bindings.map(b => ({ kind: 'expr' as const, name: b.name, data: realParsed(b.code) })),
-		parent: {} as ParentTNode,
 		loc: undefined,
 	};
 }
@@ -523,7 +519,7 @@ Deno.test("inferDataShape: nested for scoping", () => {
 
 Deno.test("inferDataShape: static partial returns empty map", () => {
 	const root = makeRoot([
-		{ type: 'raw', raw: '<p>Hello</p>', parent: {} as ParentTNode } as RawTNode,
+		{ type: 'raw', raw: '<p>Hello</p>' } as RawTNode,
 	]);
 	const shapes = inferDataShape(root);
 	assertEquals(shapes.size, 0);
@@ -582,7 +578,7 @@ Deno.test("inferDataShape: pre-seeds b-attr bool variable as scalar 'bool'", () 
 
 Deno.test("inferDataShape: unused b-attr variable still appears in shape map", () => {
 	const root = makeRoot([
-		{ type: 'raw', raw: '<p>static</p>', parent: {} as ParentTNode } as RawTNode,
+		{ type: 'raw', raw: '<p>static</p>' } as RawTNode,
 	]);
 	asBAttrRoot(root).bAttrs =[{ name: 'premium', isBool: true }, { name: 'label', isBool: false }];
 	const shapes = inferDataShape(root);

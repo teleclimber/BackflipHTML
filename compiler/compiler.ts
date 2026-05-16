@@ -60,6 +60,10 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 		let currentPartialRoot: RootTNode | null = null;
 		let currentPartialName: string | null = null;
 		let cur_tnode: TNode | null = null;
+		// cur_parent tracks the container we're currently pushing into (replaces
+		// the dropped `node.parent` field on TNodes). Maintained in lockstep with
+		// cur_tnode: any place that assigns cur_tnode also assigns cur_parent.
+		let cur_parent: ParentTNode | null = null;
 
 		const includeLocs = options?.includeLocs ?? false;
 
@@ -82,19 +86,21 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 					(lastNode as RawTNode).raw += raw;
 					return lastNode;
 				} else {
-					const raw_node: RawTNode = { type: 'raw', raw, parent: sc.partialRef.parent };
+					const raw_node: RawTNode = { type: 'raw', raw };
 					arr.push(raw_node);
 					return raw_node;
 				}
 			} else {
 				if (cur_tnode === null) {
 					if (currentPartialRoot === null) return null;
-					const raw_node: RawTNode = { type: 'raw', raw, parent: currentPartialRoot };
+					const raw_node: RawTNode = { type: 'raw', raw };
 					currentPartialRoot.tnodes.push(raw_node);
 					cur_tnode = raw_node;
+					cur_parent = currentPartialRoot;
 					return raw_node;
 				}
-				return pushRaw(cur_tnode, raw);
+				if (cur_parent === null) throw new BackflipError("pushRawHere: cur_parent unset");
+				return pushRaw(cur_tnode, cur_parent, raw);
 			}
 		}
 
@@ -108,8 +114,8 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				}
 				sc.partialRef.slots[slotName].push(node);
 			} else {
-				if (cur_tnode !== null) {
-					cur_tnode.parent.tnodes!.push(node);
+				if (cur_parent !== null) {
+					cur_parent.tnodes!.push(node);
 				} else if (currentPartialRoot !== null) {
 					currentPartialRoot.tnodes.push(node);
 				}
@@ -131,33 +137,33 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 
 		// Helper: make TNode(s) for a tag's open element.
 		// Returns an array because tags with static asset attrs produce interleaved RawTNode + AssetRefTNode nodes.
-		function makeOpenTagNode(tag: {tagName:string, attrs:{name:string,value:string}[], selfClosing:boolean, sourceCodeLocation?: unknown}, excludeAttrs: string[], parent: ParentTNode): TNode[] {
+		function makeOpenTagNode(tag: {tagName:string, attrs:{name:string,value:string}[], selfClosing:boolean, sourceCodeLocation?: unknown}, excludeAttrs: string[]): TNode[] {
 			if (tag.tagName === 'b-unwrap') {
-				return [{ type: 'raw', raw: '', parent } as RawTNode];
+				return [{ type: 'raw', raw: '' } as RawTNode];
 			}
 			const closeBracket = tag.selfClosing ? ' />' : '>';
 			const { segments, hasBind } = classifyAttrs(tag, excludeAttrs);
 			const locStr = dataLocAttr(tag);
 			if (!hasBind) {
-				return buildRawAttrSequence(segments, `<${tag.tagName}`, locStr + closeBracket, parent);
+				return buildRawAttrSequence(segments, `<${tag.tagName}`, locStr + closeBracket);
 			}
-			return [buildAttrBindNode(segments, `<${tag.tagName}`, locStr, tag.selfClosing, false, parent)];
+			return [buildAttrBindNode(segments, `<${tag.tagName}`, locStr, tag.selfClosing, false)];
 		}
 
 		// Like makeOpenTagNode but without the leading `<tagName` and trailing
 		// `>` / ` />`. Used for custom element partials, where the call site
 		// and definition merge into a single rendered tag and neither side
 		// emits the brackets.
-		function makeAttrsOnlyNodes(tag: {tagName:string, attrs:{name:string,value:string}[], selfClosing:boolean, sourceCodeLocation?: unknown}, excludeAttrs: string[], parent: ParentTNode): TNode[] {
+		function makeAttrsOnlyNodes(tag: {tagName:string, attrs:{name:string,value:string}[], selfClosing:boolean, sourceCodeLocation?: unknown}, excludeAttrs: string[]): TNode[] {
 			if (tag.tagName === 'b-unwrap') {
-				return [{ type: 'raw', raw: '', parent } as RawTNode];
+				return [{ type: 'raw', raw: '' } as RawTNode];
 			}
 			const { segments, hasBind } = classifyAttrs(tag, excludeAttrs);
 			const locStr = dataLocAttr(tag);
 			if (!hasBind) {
-				return buildRawAttrSequence(segments, '', locStr, parent);
+				return buildRawAttrSequence(segments, '', locStr);
 			}
-			return [buildAttrBindNode(segments, '', locStr, false, true, parent)];
+			return [buildAttrBindNode(segments, '', locStr, false, true)];
 		}
 
 		const void_elements = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
@@ -166,7 +172,10 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 		// Used by flow-directive handlers when they can't construct their structured node.
 		function fallbackToRawTag(tag: StartTag, raw: string): void {
 			const new_cur = pushRawHere(raw);
-			if (cur_tnode !== null) cur_tnode = new_cur;
+			if (cur_tnode !== null) {
+				cur_tnode = new_cur;
+				// cur_parent unchanged: pushRawHere appends a sibling within the same container.
+			}
 			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
 				tag_stack.push({ tag: tag.tagName });
 			}
@@ -181,11 +190,11 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 		// On error (bad b-for syntax, dangling b-else, etc.), pushes the error,
 		// runs `fallbackToRawTag`, and returns null — caller should just return.
 		// Shared between the regular flow handler and the custom-element-call-with-flow handler.
-		function setupFlowContainer(tag: StartTag, raw: string, flowAttr: Attr): { container: ParentTNode, outer: TNode } | null {
+		function setupFlowContainer(tag: StartTag, raw: string, flowAttr: Attr): { container: ParentTNode, outer: TNode, outerParent: ParentTNode } | null {
 			const sc = getSlotCollection();
 			const flowParent: ParentTNode = sc
-				? sc.partialRef.parent
-				: (cur_tnode ? cur_tnode.parent : currentPartialRoot!);
+				? sc.partialRefParent
+				: (cur_parent ?? currentPartialRoot!);
 
 			if (flowAttr.name === 'b-for') {
 				const parsed = parseBForValue(flowAttr.value);
@@ -194,21 +203,21 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 					fallbackToRawTag(tag, raw);
 					return null;
 				}
-				const for_node: ForTNode = { type: 'for', iterable: parsed.iterable, valName: parsed.valName, tnodes: [], parent: flowParent };
+				const for_node: ForTNode = { type: 'for', iterable: parsed.iterable, valName: parsed.valName, tnodes: [] };
 				for_node.loc = attrLoc(tag, 'b-for');
 				if (sc) pushNodeHere(for_node);
 				else flowParent.tnodes!.push(for_node);
-				return { container: for_node, outer: for_node };
+				return { container: for_node, outer: for_node, outerParent: flowParent };
 			}
 
 			if (flowAttr.name === 'b-if') {
-				const if_node: IfTNode = { type: 'if', branches: [], parent: flowParent };
-				const branch: IfBranch = { condition: interpretBackcode(flowAttr.value), tnodes: [], ifNode: if_node };
+				const if_node: IfTNode = { type: 'if', branches: [] };
+				const branch: IfBranch = { condition: interpretBackcode(flowAttr.value), tnodes: [] };
 				branch.loc = attrLoc(tag, 'b-if');
 				if_node.branches.push(branch);
 				if (sc) pushNodeHere(if_node);
 				else flowParent.tnodes!.push(if_node);
-				return { container: branch, outer: if_node };
+				return { container: branch, outer: if_node, outerParent: flowParent };
 			}
 
 			// b-else-if / b-else: chain onto a preceding b-if among current siblings.
@@ -224,7 +233,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 					const arr = sc.partialRef.slots[slotName] || [];
 					if_node = findPrecedingIfInSlot(arr, attrErrorLoc(tag, flowAttr.name, filename));
 				} else {
-					if_node = findPrecedingIfInFile(cur_tnode, attrErrorLoc(tag, flowAttr.name, filename));
+					if_node = findPrecedingIfInFile(cur_tnode, cur_parent, attrErrorLoc(tag, flowAttr.name, filename));
 				}
 			} catch (e) {
 				if (e instanceof BackflipError) {
@@ -239,17 +248,17 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				// fall through — branch is still added so parsing state stays correct
 			}
 			const condition = flowAttr.name === 'b-else-if' ? interpretBackcode(flowAttr.value) : undefined;
-			const branch: IfBranch = { condition, tnodes: [], ifNode: if_node };
+			const branch: IfBranch = { condition, tnodes: [] };
 			branch.loc = attrLoc(tag, flowAttr.name);
 			if_node.branches.push(branch);
-			return { container: branch, outer: if_node };
+			return { container: branch, outer: if_node, outerParent: flowParent };
 		}
 
 		// Build the PartialRefTNode for a custom element call site. Does NOT push it
 		// into a parent or onto the tag_stack — the caller decides where it lives
 		// (directly under the current parent for plain calls, inside a flow node's
 		// container for `<my-elem b-for|if|...>` calls).
-		function buildCustomElementPartialRef(tag: StartTag, raw: string, parent: ParentTNode): PartialRefTNode {
+		function buildCustomElementPartialRef(tag: StartTag, raw: string): CustomElementCallTNode {
 			const bindings: PartialBinding[] = [];
 			for (const attr of tag.attrs) {
 				if (attr.name.startsWith('b-data:')) {
@@ -265,7 +274,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			// IfTNode (built in handleCustomElementCallWithFlow) and must never appear in
 			// the rendered tag. They're excluded here so makeAttrsOnlyNodes drops them.
 			// In the non-flow call path they're absent anyway, so the extra excludes are no-ops.
-			const callerOpenTag = makeAttrsOnlyNodes(tag, ['b-export', 'b-if', 'b-for', 'b-else', 'b-else-if'], parent);
+			const callerOpenTag = makeAttrsOnlyNodes(tag, ['b-export', 'b-if', 'b-for', 'b-else', 'b-else-if']);
 
 			const callerAttrInfos: NonNullable<CustomElementCallTNode['callerAttrInfos']> = [];
 			for (const attr of tag.attrs) {
@@ -307,7 +316,6 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				slots: { 'default': [] },
 				slotLocs: {},
 				bindings,
-				parent,
 				callerOpenTag,
 				callerTagName: tag.tagName,
 				callerAttrNames: effectiveAttrNames(tag.attrs),
@@ -384,17 +392,19 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 
 			if (tag.tagName === 'b-unwrap') {
 				// Don't emit opening tag; just track for closing
-				const init_raw: RawTNode = { type: 'raw', raw: '', parent: partialRoot };
+				const init_raw: RawTNode = { type: 'raw', raw: '' };
 				partialRoot.tnodes.push(init_raw);
 				cur_tnode = init_raw;
+				cur_parent = partialRoot;
 				if (!tag.selfClosing) {
 					tag_stack.push({ tag: tag.tagName });
 				}
 			} else {
-				const openNodes = makeOpenTagNode(tag, ['b-name', 'b-export'], partialRoot);
+				const openNodes = makeOpenTagNode(tag, ['b-name', 'b-export']);
 				for (const n of openNodes) partialRoot.tnodes.push(n);
 				const lastOpen = openNodes[openNodes.length - 1];
 				cur_tnode = lastOpen?.type === 'raw' ? lastOpen as RawTNode : null;
+				cur_parent = partialRoot;
 				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
 					tag_stack.push({ tag: tag.tagName });
 				} else {
@@ -518,11 +528,12 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			// with caller-side attrs into one tag), so we keep it OFF of partialRoot.tnodes.
 			// We do still need to compile the open tag's attrs (in attrs-only form) and store
 			// them so the call-site renderer can emit them in childCtx.
-			partialRoot.definitionAttrNodes = makeAttrsOnlyNodes(tag, ['b-export'], partialRoot);
+			partialRoot.definitionAttrNodes = makeAttrsOnlyNodes(tag, ['b-export']);
 			// Seed the body with an empty raw sentinel so subsequent text/tags get appended here.
-			const sentinel: RawTNode = { type: 'raw', raw: '', parent: partialRoot };
+			const sentinel: RawTNode = { type: 'raw', raw: '' };
 			partialRoot.tnodes.push(sentinel);
 			cur_tnode = sentinel;
+			cur_parent = partialRoot;
 			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
 				tag_stack.push({ tag: tag.tagName });
 			} else {
@@ -535,16 +546,18 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			// no flow directive on the same tag (see handleCustomElementCallWithFlow for that case).
 			// Inside a partial (cur_tnode or currentPartialRoot must be set; the dispatcher's "skip
 			// outside partial" path runs before this).
-			const parent: ParentTNode = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
-			const partialRef = buildCustomElementPartialRef(tag, raw, parent);
+			const parent: ParentTNode = cur_parent ?? currentPartialRoot!;
+			const partialRef = buildCustomElementPartialRef(tag, raw);
 			pushNodeHere(partialRef);
 
 			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
 				tag_stack.push({
 					tag: tag.tagName,
 					tnode: partialRef,
+					parent,
 					slotCollection: {
 						partialRef,
+						partialRefParent: parent,
 						currentSlot: 'default'
 					}
 				});
@@ -558,7 +571,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 		function handleCustomElementCallWithFlow(tag: StartTag, raw: string, flowAttr: Attr) {
 			const fc = setupFlowContainer(tag, raw, flowAttr);
 			if (!fc) return;
-			const partialRef = buildCustomElementPartialRef(tag, raw, fc.container);
+			const partialRef = buildCustomElementPartialRef(tag, raw);
 			fc.container.tnodes!.push(partialRef);
 			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
 				// tag_stack entry combines two roles:
@@ -568,7 +581,8 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				tag_stack.push({
 					tag: tag.tagName,
 					tnode: fc.outer,
-					slotCollection: { partialRef, currentSlot: 'default' },
+					parent: fc.outerParent,
+					slotCollection: { partialRef, partialRefParent: fc.container, currentSlot: 'default' },
 				});
 			}
 		}
@@ -602,7 +616,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				wrapper = { open, close: `</${tag.tagName}>` };
 			}
 
-			const parent: ParentTNode = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
+			const parent: ParentTNode = cur_parent ?? currentPartialRoot!;
 
 			const partialRef: BPartCallTNode = {
 				type: 'partial-ref',
@@ -613,7 +627,6 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				slots: { 'default': [] },
 				slotLocs: {},
 				bindings,
-				parent
 			};
 			partialRef.loc = attrLoc(tag, 'b-part');
 
@@ -623,8 +636,10 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				tag_stack.push({
 					tag: tag.tagName,
 					tnode: partialRef,
+					parent,
 					slotCollection: {
 						partialRef,
+						partialRefParent: parent,
 						currentSlot: 'default'
 					}
 				});
@@ -640,31 +655,24 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				return;
 			}
 			const slotName = bSlotAttr.value !== '' ? bSlotAttr.value : undefined;
-			const parent: ParentTNode = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
+			const parent: ParentTNode = cur_parent ?? currentPartialRoot!;
 
 			// For non-b-unwrap tags, the carrying element wraps the slot in the output:
 			// emit the open tag before the slot node; the close tag is added after
 			// through the regular endTag path (matched via tnode = slot_node).
 			if (tag.tagName !== 'b-unwrap') {
-				const openNodes = makeOpenTagNode(tag, ['b-slot'], parent);
+				const openNodes = makeOpenTagNode(tag, ['b-slot']);
 				for (const n of openNodes) {
-					if (cur_tnode !== null) {
-						cur_tnode.parent.tnodes!.push(n);
-					} else if (currentPartialRoot !== null) {
-						currentPartialRoot.tnodes.push(n);
-					}
+					parent.tnodes!.push(n);
 				}
 			}
 
-			const slot_node: SlotTNode = { type: 'slot', name: slotName, parent };
+			const slot_node: SlotTNode = { type: 'slot', name: slotName };
 			slot_node.loc = attrLoc(tag, 'b-slot');
 
-			if (cur_tnode !== null) {
-				cur_tnode.parent.tnodes!.push(slot_node);
-			} else if (currentPartialRoot !== null) {
-				currentPartialRoot.tnodes.push(slot_node);
-			}
+			parent.tnodes!.push(slot_node);
 			cur_tnode = slot_node as unknown as TNode;
+			cur_parent = parent;
 
 			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
 				// Push to tag_stack so endTag is consumed correctly.
@@ -672,7 +680,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				if (tag.tagName === 'b-unwrap') {
 					tag_stack.push({ tag: tag.tagName });
 				} else {
-					tag_stack.push({ tag: tag.tagName, tnode: slot_node as unknown as TNode });
+					tag_stack.push({ tag: tag.tagName, tnode: slot_node as unknown as TNode, parent });
 				}
 			}
 		}
@@ -693,6 +701,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				tag: tag.tagName,
 				slotCollection: {
 					partialRef: innermost.partialRef,
+					partialRefParent: innermost.partialRefParent,
 					currentSlot: slotName
 				}
 			});
@@ -710,12 +719,15 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 		function handleFlowOnRegularTag(tag: StartTag, raw: string, flowAttr: Attr) {
 			const fc = setupFlowContainer(tag, raw, flowAttr);
 			if (!fc) return;
-			const inner = makeOpenTagNode(tag, [flowAttr.name], fc.container);
+			const inner = makeOpenTagNode(tag, [flowAttr.name]);
 			for (const n of inner) fc.container.tnodes!.push(n);
 			const last = inner[inner.length - 1];
 			cur_tnode = last ?? null;
+			cur_parent = fc.container;
 			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-				tag_stack.push({ tag: tag.tagName, tnode: last });
+				// On close, resume at fc.outer (the wrapping if_node/for_node) so that
+				// b-else-if/b-else can chain to it among siblings of fc.outerParent.
+				tag_stack.push({ tag: tag.tagName, tnode: fc.outer, parent: fc.outerParent });
 			}
 		}
 
@@ -723,8 +735,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			const hasBindAttrs = tag.attrs.some(attr => isBindAttr(attr.name));
 			const hasAssetAttrs = tag.attrs.some(attr => isAssetAttr(attr.name));
 			if (hasBindAttrs || hasAssetAttrs) {
-				const parent: ParentTNode = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
-				const nodes = makeOpenTagNode(tag, [], parent);
+				const nodes = makeOpenTagNode(tag, []);
 				for (const n of nodes) pushNodeHere(n);
 				const lastNode = nodes[nodes.length - 1];
 				cur_tnode = lastNode ?? null;
@@ -812,14 +823,14 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			const matchTag = tag_stack.pop();
 			if (!matchTag) {
 				errors.push(new BackflipError("popped the last tagMatcher prematurely", errorLoc(filename, tagLoc(tag))));
-				if (cur_tnode !== null) cur_tnode = pushRaw(cur_tnode, raw);
+				if (cur_tnode !== null && cur_parent !== null) cur_tnode = pushRaw(cur_tnode, cur_parent, raw);
 				else if (currentPartialRoot !== null) pushRawHere(raw);
 				return;
 			}
 			if (matchTag.tag !== tag.tagName) {
 				errors.push(new BackflipError(`mismatched start/end tags: ${matchTag.tag} ${tag.tagName}`, errorLoc(filename, tagLoc(tag))));
 				tag_stack.push(matchTag);
-				if (cur_tnode !== null) cur_tnode = pushRaw(cur_tnode, raw);
+				if (cur_tnode !== null && cur_parent !== null) cur_tnode = pushRaw(cur_tnode, cur_parent, raw);
 				else if (currentPartialRoot !== null) pushRawHere(raw);
 				return;
 			}
@@ -838,6 +849,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				currentPartialRoot = null;
 				currentPartialName = null;
 				cur_tnode = null;
+				cur_parent = null;
 				return;
 			}
 
@@ -848,12 +860,13 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				//   - tnode.type === 'partial-ref' — plain b-part / custom element call.
 				//   - tnode.type === 'for' | 'if'  — custom element call with a flow directive;
 				//     resume as a SIBLING of the flow node, not inside it.
-				// In all three, the next emit point is a fresh raw node in tnode.parent.
+				// In all three, the next emit point is a fresh raw node in matchTag.parent.
 				if (tnode && (tnode.type === 'partial-ref' || tnode.type === 'for' || tnode.type === 'if')) {
-					const parent = tnode.parent;
-					const new_raw: RawTNode = { type: 'raw', raw: '', parent };
+					const parent = matchTag.parent!;
+					const new_raw: RawTNode = { type: 'raw', raw: '' };
 					parent.tnodes!.push(new_raw);
 					cur_tnode = new_raw;
+					cur_parent = parent;
 				}
 				// b-in closing - emit closing tag for non-b-unwrap elements
 				else if (matchTag.tag !== 'b-unwrap') {
@@ -864,7 +877,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 					if (lastNode && lastNode.type === 'raw') {
 						(lastNode as RawTNode).raw += raw;
 					} else {
-						const raw_node: RawTNode = { type: 'raw', raw, parent: sc.partialRef.parent };
+						const raw_node: RawTNode = { type: 'raw', raw };
 						arr.push(raw_node);
 					}
 				}
@@ -874,32 +887,24 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			// Regular closing
 			if (matchTag.tnode) {
 				// Close tag belongs to the structured node (b-for/b-if/b-slot), not the slot
-				if (cur_tnode !== null && tag.tagName !== 'b-unwrap') {
-					cur_tnode = pushRaw(cur_tnode, raw);
+				if (cur_tnode !== null && cur_parent !== null && tag.tagName !== 'b-unwrap') {
+					cur_tnode = pushRaw(cur_tnode, cur_parent, raw);
 				}
 			} else {
 				const sc = getSlotCollection();
 				if (sc) {
 					pushRawHere(raw);
-				} else if (cur_tnode !== null) {
-					cur_tnode = pushRaw(cur_tnode, raw);
+				} else if (cur_tnode !== null && cur_parent !== null) {
+					cur_tnode = pushRaw(cur_tnode, cur_parent, raw);
 				}
 			}
 
 			if (matchTag.tnode) {
-				if (!matchTag.tnode.parent) throw new BackflipError("expected a parent");
-				const parent = matchTag.tnode.parent;
-				if ('ifNode' in parent) {
-					cur_tnode = (parent as IfBranch).ifNode as unknown as TNode;
-				} else if (parent.type === 'root') {
-					// RootTNode has no `.parent`, so cur_tnode can't point at it directly —
-					// pushRaw on cur_tnode walks up via cur_tnode.parent. Anchor on the
-					// just-closed node instead; subsequent pushRaw creates siblings inside
-					// the root (since the closed node already lives in root.tnodes).
-					cur_tnode = matchTag.tnode;
-				} else {
-					cur_tnode = parent as TNode;
-				}
+				// Resume the cursor at the structural node and its container so that:
+				//   - subsequent pushRaw appends a sibling after the closed node,
+				//   - b-else-if/b-else can chain to a preceding b-if among siblings.
+				cur_tnode = matchTag.tnode;
+				cur_parent = matchTag.parent ?? currentPartialRoot;
 			}
 		} catch(e) { if (e instanceof BackflipError) { errors.push(e); } else { reject(e); } } });
 
@@ -916,7 +921,6 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 					sc.partialRef.slots[slotName] = [];
 				}
 				const arr = sc.partialRef.slots[slotName];
-				const dummyParent = sc.partialRef.parent;
 
 				const matches = raw.matchAll(cf_text_regex);
 				let raw_it = 0;
@@ -925,17 +929,17 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 						const sub = raw.substring(raw_it, m.index);
 						const last = arr.length > 0 ? arr[arr.length - 1] : null;
 						if (last && last.type === 'raw') { (last as RawTNode).raw += sub; }
-						else { arr.push({ type: 'raw', raw: sub, parent: dummyParent }); }
+						else { arr.push({ type: 'raw', raw: sub }); }
 					}
 					const code_str = m[0].substring(2, m[0].length - 2).trim();
 					if (!code_str) {
 						const last = arr.length > 0 ? arr[arr.length - 1] : null;
 						if (last && last.type === 'raw') { (last as RawTNode).raw += m[0]; }
-						else { arr.push({ type: 'raw', raw: m[0], parent: dummyParent }); }
+						else { arr.push({ type: 'raw', raw: m[0] }); }
 						raw_it = m.index + m[0].length;
 						continue;
 					}
-					const print_node: PrintTNode = { type: 'print', data: interpretBackcode(code_str), parent: dummyParent };
+					const print_node: PrintTNode = { type: 'print', data: interpretBackcode(code_str) };
 					if (textLoc) print_node.loc = interpolationLoc(textLoc, raw.substring(0, m.index), m[0]);
 					arr.push(print_node);
 					raw_it = m.index + m[0].length;
@@ -944,10 +948,10 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 					const sub = raw.substring(raw_it);
 					const last = arr.length > 0 ? arr[arr.length - 1] : null;
 					if (last && last.type === 'raw') { (last as RawTNode).raw += sub; }
-					else { arr.push({ type: 'raw', raw: sub, parent: dummyParent }); }
+					else { arr.push({ type: 'raw', raw: sub }); }
 				}
-			} else if (cur_tnode !== null) {
-				cur_tnode = onText(cur_tnode, raw, textLoc);
+			} else if (cur_tnode !== null && cur_parent !== null) {
+				cur_tnode = onText(cur_tnode, cur_parent, raw, textLoc);
 			}
 		} catch(e) { if (e instanceof BackflipError) { errors.push(e); } else { reject(e); } } });
 

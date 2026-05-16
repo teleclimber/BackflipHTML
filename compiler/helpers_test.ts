@@ -176,10 +176,10 @@ Deno.test("effectiveAttrNames: mixed attrs preserve order and apply all rules", 
 
 Deno.test("pushRaw: appends to existing raw node", () => {
 	const root :RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
-	const child_node :RawTNode = { type: 'raw', raw: 'hello', parent: root	};
+	const child_node :RawTNode = { type: 'raw', raw: 'hello' };
 	root.tnodes.push(child_node);
 
-	const ret_node = pushRaw(root.tnodes[0], "world");
+	const ret_node = pushRaw(root.tnodes[0], root, "world");
 	const ret_raw = ret_node.type === 'raw' ? ret_node.raw : '';
 	assertEquals(ret_raw, 'helloworld');
 });
@@ -188,128 +188,104 @@ Deno.test("pushRaw: appends to existing raw node", () => {
 
 Deno.test("onText: plain text appended to raw node", () => {
 	const root :RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
-	const child_node :RawTNode = { type: 'raw', raw: '', parent: root	};
+	const child_node :RawTNode = { type: 'raw', raw: '' };
 	root.tnodes.push(child_node);
 
-	onText(root.tnodes![0], 'world');
+	onText(root.tnodes![0], root,'world');
 
 	assertEquals(root, {
 		type: 'root',
 		kind: 'named',
 		tnodes: [{
 			type: 'raw',
-			raw: 'world',
-			parent: root
-		}]
+			raw: 'world'		}]
 	});
 });
 
 Deno.test("onText: single interpolation", () => {
 	const root :RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
-	const child_node :RawTNode = { type: 'raw', raw: '', parent: root	};
+	const child_node :RawTNode = { type: 'raw', raw: '' };
 	root.tnodes.push(child_node);
 
-	onText(root.tnodes![0], '{{ g }}');
+	onText(root.tnodes![0], root,'{{ g }}');
 
 	assertEquals(root, {
 		type: 'root',
 		kind: 'named',
 		tnodes: [{
 			type: 'raw',
-			raw: '',
-			parent: root
-		}, {
+			raw: ''		}, {
 			type: 'print',
-			data: interpretBackcode('g'),
-			parent: root
-		}]
+			data: interpretBackcode('g')		}]
 	});
 });
 
 Deno.test("onText: text before interpolation", () => {
 	const root :RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
-	const child_node :RawTNode = { type: 'raw', raw: '', parent: root	};
+	const child_node :RawTNode = { type: 'raw', raw: '' };
 	root.tnodes.push(child_node);
 
-	onText(root.tnodes![0], 'hello {{ g }}');
+	onText(root.tnodes![0], root,'hello {{ g }}');
 
 	assertEquals(root, {
 		type: 'root',
 		kind: 'named',
 		tnodes: [{
 			type: 'raw',
-			raw: 'hello ',
-			parent: root
-		}, {
+			raw: 'hello '		}, {
 			type: 'print',
-			data: interpretBackcode('g'),
-			parent: root
-		}]
+			data: interpretBackcode('g')		}]
 	});
 });
 
 Deno.test("onText: text around interpolation", () => {
 	const root :RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
-	const child_node :RawTNode = { type: 'raw', raw: '', parent: root	};
+	const child_node :RawTNode = { type: 'raw', raw: '' };
 	root.tnodes.push(child_node);
 
-	onText(root.tnodes![0], 'hello {{ g }} world');
+	onText(root.tnodes![0], root,'hello {{ g }} world');
 
 	assertEquals(root, {
 		type: 'root',
 		kind: 'named',
 		tnodes: [{
 			type: 'raw',
-			raw: 'hello ',
-			parent: root
-		}, {
+			raw: 'hello '		}, {
 			type: 'print',
-			data: interpretBackcode('g'),
-			parent: root
-		}, {
+			data: interpretBackcode('g')		}, {
 			type: 'raw',
-			raw: ' world',
-			parent: root
-		}]
+			raw: ' world'		}]
 	});
 });
 
 Deno.test("onText: two interpolations with surrounding text", () => {
 	const root :RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
-	const child_node :RawTNode = { type: 'raw', raw: '', parent: root	};
+	const child_node :RawTNode = { type: 'raw', raw: '' };
 	root.tnodes.push(child_node);
 
-	onText(root.tnodes![0], 'hello {{ g }}{{ k }} world');
+	onText(root.tnodes![0], root,'hello {{ g }}{{ k }} world');
 
 	assertEquals(root, {
 		type: 'root',
 		kind: 'named',
 		tnodes: [{
 			type: 'raw',
-			raw: 'hello ',
-			parent: root
-		}, {
+			raw: 'hello '		}, {
 			type: 'print',
-			data: interpretBackcode('g'),
-			parent: root
-		}, {
+			data: interpretBackcode('g')		}, {
 			type: 'print',
-			data: interpretBackcode('k'),
-			parent: root
-		}, {
+			data: interpretBackcode('k')		}, {
 			type: 'raw',
-			raw: ' world',
-			parent: root
-		}]
+			raw: ' world'		}]
 	});
 });
 
 Deno.test("onText: parentheses in expression", () => {
 	const root :RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
-	const child_node :RawTNode = { type: 'raw', raw: '', parent: root	};
+	const child_node :RawTNode = { type: 'raw', raw: '' };
 	root.tnodes.push(child_node);
 
-	onText(root.tnodes![0], '{{ func() }}');
+	onText(root.tnodes![0], root,'{{ func() }}');
 
 	assertEquals(root.tnodes.length, 2);
 	assertEquals(root.tnodes[1].type, 'print');
@@ -317,10 +293,10 @@ Deno.test("onText: parentheses in expression", () => {
 
 Deno.test("onText: empty braces skipped", () => {
 	const root :RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
-	const child_node :RawTNode = { type: 'raw', raw: '', parent: root	};
+	const child_node :RawTNode = { type: 'raw', raw: '' };
 	root.tnodes.push(child_node);
 
-	onText(root.tnodes![0], 'before{{  }}after');
+	onText(root.tnodes![0], root,'before{{  }}after');
 
 	// Should skip the empty expression, treating it as raw text
 	assertEquals(root.tnodes.length, 1);

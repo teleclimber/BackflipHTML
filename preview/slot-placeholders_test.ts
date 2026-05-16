@@ -9,17 +9,17 @@ function dummyRoot(): RootTNode {
 
 /** Create a slot TNode. */
 function slotNode(name?: string): TNode {
-	return { type: 'slot', name, parent: dummyRoot() } as TNode;
+	return { type: 'slot', name } as TNode;
 }
 
 /** Create a raw TNode. */
 function rawNode(raw: string): TNode {
-	return { type: 'raw', raw, parent: dummyRoot() } as TNode;
+	return { type: 'raw', raw } as TNode;
 }
 
 /** Create an attr-bind TNode. */
 function attrBindNode(tagOpen: string): TNode {
-	return { type: 'attr-bind', tagOpen, parts: [], parent: dummyRoot() } as TNode;
+	return { type: 'attr-bind', tagOpen, parts: [] } as TNode;
 }
 
 Deno.test("generates placeholder for default slot", () => {

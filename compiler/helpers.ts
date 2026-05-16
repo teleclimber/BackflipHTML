@@ -37,8 +37,10 @@ export const BOOLEAN_ATTRS = new Set([
 export type TagMatcher = {
 	tag: string,
 	tnode?: TNode,
+	parent?: ParentTNode,   // cur_parent to restore on close (and the container of tnode)
 	slotCollection?: {
 		partialRef: PartialRefTNode,
+		partialRefParent: ParentTNode,   // container of the partialRef (replaces the dropped node.parent field)
 		currentSlot: string   // 'default' or named
 	}
 }
@@ -485,21 +487,21 @@ export function classifyOpenTagAttrs(
  * appended to the final one (callers pass `<tagName` / `>` for full open
  * tags, and empty strings for attrs-only).
  */
-export function buildRawAttrSequence(segments: AttrSegment[], prefix: string, suffix: string, parent: ParentTNode): TNode[] {
+export function buildRawAttrSequence(segments: AttrSegment[], prefix: string, suffix: string): TNode[] {
 	const nodes: TNode[] = [];
 	let buf = prefix;
 	for (const seg of segments) {
 		if (seg.kind === 'static') {
 			buf += seg.text;
 		} else if (seg.kind === 'asset') {
-			if (buf) { nodes.push({ type: 'raw', raw: buf, parent } as RawTNode); buf = ''; }
-			nodes.push({ type: 'asset-ref', attrName: seg.attrName, originalValue: seg.originalValue, refs: seg.refs, parent, loc: seg.loc } as AssetRefTNode);
+			if (buf) { nodes.push({ type: 'raw', raw: buf } as RawTNode); buf = ''; }
+			nodes.push({ type: 'asset-ref', attrName: seg.attrName, originalValue: seg.originalValue, refs: seg.refs, loc: seg.loc } as AssetRefTNode);
 		}
 		// 'bind' segments don't appear when hasBind is false
 	}
 	buf += suffix;
-	if (buf) nodes.push({ type: 'raw', raw: buf, parent } as RawTNode);
-	if (nodes.length === 0) nodes.push({ type: 'raw', raw: '', parent } as RawTNode);
+	if (buf) nodes.push({ type: 'raw', raw: buf } as RawTNode);
+	if (nodes.length === 0) nodes.push({ type: 'raw', raw: '' } as RawTNode);
 	return nodes;
 }
 
@@ -515,7 +517,6 @@ export function buildAttrBindNode(
 	trailingStatic: string,
 	selfClosing: boolean,
 	attrsOnly: boolean,
-	parent: ParentTNode,
 ): AttrBindTNode {
 	const parts: AttrPart[] = [];
 	let staticBuf = '';
@@ -535,7 +536,7 @@ export function buildAttrBindNode(
 	}
 	staticBuf += trailingStatic;
 	if (staticBuf) parts.push({ type: 'static', raw: staticBuf });
-	const node: AttrBindTNode = { type: 'attr-bind', tagOpen, parts, parent };
+	const node: AttrBindTNode = { type: 'attr-bind', tagOpen, parts };
 	if (selfClosing) node.selfClosing = true;
 	if (attrsOnly) node.attrsOnly = true;
 	return node;
@@ -544,10 +545,10 @@ export function buildAttrBindNode(
 // --- if-branch lookup ---
 
 // This should be renamed to InPartial?
-export function findPrecedingIfInFile(cur: TNode, loc?: { filename?: string, line?: number, col?: number }): IfTNode {
+export function findPrecedingIfInFile(cur: TNode, parent: ParentTNode | null, loc?: { filename?: string, line?: number, col?: number }): IfTNode {
 	if (cur.type === 'if') return cur;
-	if (cur.parent && 'tnodes' in cur.parent) {
-		const siblings = cur.parent.tnodes;
+	if (parent && 'tnodes' in parent) {
+		const siblings = parent.tnodes;
 		for (let i = siblings.length - 1; i >= 0; i--) {
 			if (siblings[i].type === 'if') return siblings[i] as IfTNode;
 			if (siblings[i].type === 'raw' && (siblings[i] as RawTNode).raw.trim() === '') continue;
@@ -570,19 +571,19 @@ export function findPrecedingIfInSlot(arr: TNode[], loc?: { filename?: string, l
 
 const text_regex = new RegExp("({{[^{}]*}})", 'g');
 
-export function onText(cur:TNode, raw :string, textLoc?: {startLine:number;startCol:number;startOffset:number}) :TNode {
+export function onText(cur:TNode, parent: ParentTNode, raw :string, textLoc?: {startLine:number;startCol:number;startOffset:number}) :TNode {
 	// later match string against {{ }}
 	const matches = raw.matchAll(text_regex);
 
 	let raw_it = 0;
 	for( const m of matches ) {
 		if( m.index > raw_it ) {
-			cur = pushRaw(cur, raw.substring(raw_it, m.index));
+			cur = pushRaw(cur, parent, raw.substring(raw_it, m.index));
 		}
 		const code_str = m[0].substring(2, m[0].length -2).trim();
 		if( !code_str ) {
 			// empty {{ }}, treat as raw text
-			cur = pushRaw(cur, m[0]);
+			cur = pushRaw(cur, parent, m[0]);
 			raw_it = m.index + m[0].length;
 			continue;
 		}
@@ -591,24 +592,23 @@ export function onText(cur:TNode, raw :string, textLoc?: {startLine:number;start
 		const print_node :PrintTNode = {
 			type: 'print',
 			data: code_parsed,
-			parent: cur.parent
 		};
 		if (textLoc) print_node.loc = interpolationLoc(textLoc, raw.substring(0, m.index), m[0]);
-		if( !cur.parent?.tnodes ) throw new BackflipError("expected tnodes here");
-		cur.parent.tnodes.push(print_node);
+		if( !parent.tnodes ) throw new BackflipError("expected tnodes here");
+		parent.tnodes.push(print_node);
 		cur = print_node;
 
 		raw_it = m.index + m[0].length;
 	}
 
 	if( raw_it < raw.length ) {
-		cur = pushRaw(cur, raw.substring(raw_it, raw.length));
+		cur = pushRaw(cur, parent, raw.substring(raw_it, raw.length));
 	}
 
 	return cur;
 }
 
-export function pushRaw(cur_tnode: TNode, raw :string) :TNode {
+export function pushRaw(cur_tnode: TNode, parent: ParentTNode, raw :string) :TNode {
 	if( cur_tnode.type === 'raw' ) {
 		cur_tnode.raw += raw
 	}
@@ -616,10 +616,9 @@ export function pushRaw(cur_tnode: TNode, raw :string) :TNode {
 		const raw_node :TNode = {
 			type: 'raw',
 			raw: raw,
-			parent: cur_tnode.parent
 		};
-		if( !cur_tnode.parent?.tnodes ) throw new BackflipError("expected tnodes here");
-		cur_tnode.parent.tnodes.push(raw_node);
+		if( !parent.tnodes ) throw new BackflipError("expected tnodes here");
+		parent.tnodes.push(raw_node);
 		cur_tnode = raw_node;
 	}
 	return cur_tnode;
@@ -632,7 +631,7 @@ export function pushRaw(cur_tnode: TNode, raw :string) :TNode {
  * Stops at any entry with a structural `tnode` first — content inside b-for/b-if
  * should flow into that node's tree, not into the slot above it.
  */
-export function getSlotCollection(tag_stack: TagMatcher[]): { partialRef: PartialRefTNode, currentSlot: string } | null {
+export function getSlotCollection(tag_stack: TagMatcher[]): { partialRef: PartialRefTNode, partialRefParent: ParentTNode, currentSlot: string } | null {
 	for (let i = tag_stack.length - 1; i >= 0; i--) {
 		if (tag_stack[i].slotCollection) {
 			return tag_stack[i].slotCollection!;
@@ -697,16 +696,16 @@ export function resolveAssetRefs(compiled: CompiledFile, assetMap: Map<string, s
 				...(root.exported !== undefined ? { exported: root.exported } : {}),
 				...(root.meta ? { meta: root.meta } : {}),
 			};
-		newRoot.tnodes = resolveTNodes(root.tnodes, newRoot, assetMap);
+		newRoot.tnodes = resolveTNodes(root.tnodes, assetMap);
 		if (root.kind === 'custom-element' && root.definitionAttrNodes) {
-			(newRoot as CustomElementPartialRoot).definitionAttrNodes = resolveTNodes(root.definitionAttrNodes, newRoot, assetMap);
+			(newRoot as CustomElementPartialRoot).definitionAttrNodes = resolveTNodes(root.definitionAttrNodes, assetMap);
 		}
 		newPartials.set(name, newRoot);
 	}
 	return { partials: newPartials };
 }
 
-function resolveTNodes(tnodes: TNode[], parent: ParentTNode, assetMap: Map<string, string>): TNode[] {
+function resolveTNodes(tnodes: TNode[], assetMap: Map<string, string>): TNode[] {
 	const result: TNode[] = [];
 	for (const node of tnodes) {
 		switch (node.type) {
@@ -719,7 +718,7 @@ function resolveTNodes(tnodes: TNode[], parent: ParentTNode, assetMap: Map<strin
 				if (prev && prev.type === 'raw') {
 					(prev as RawTNode).raw += raw;
 				} else {
-					result.push({ type: 'raw', raw, parent } as RawTNode);
+					result.push({ type: 'raw', raw } as RawTNode);
 				}
 				break;
 			}
@@ -730,39 +729,39 @@ function resolveTNodes(tnodes: TNode[], parent: ParentTNode, assetMap: Map<strin
 				if (prev && prev.type === 'raw') {
 					(prev as RawTNode).raw += n.raw;
 				} else {
-					result.push({ type: 'raw', raw: n.raw, parent } as RawTNode);
+					result.push({ type: 'raw', raw: n.raw } as RawTNode);
 				}
 				break;
 			}
 			case 'print': {
 				const n = node as PrintTNode;
-				const newNode: PrintTNode = { type: 'print', data: n.data, parent };
+				const newNode: PrintTNode = { type: 'print', data: n.data };
 				if (n.loc) newNode.loc = n.loc;
 				result.push(newNode);
 				break;
 			}
 			case 'slot': {
 				const n = node as SlotTNode;
-				const newNode: SlotTNode = { type: 'slot', name: n.name, parent };
+				const newNode: SlotTNode = { type: 'slot', name: n.name };
 				if (n.loc) newNode.loc = n.loc;
 				result.push(newNode);
 				break;
 			}
 			case 'for': {
 				const n = node as ForTNode;
-				const newNode: ForTNode = { type: 'for', iterable: n.iterable, valName: n.valName, tnodes: [], parent };
+				const newNode: ForTNode = { type: 'for', iterable: n.iterable, valName: n.valName, tnodes: [] };
 				if (n.loc) newNode.loc = n.loc;
-				newNode.tnodes = resolveTNodes(n.tnodes, newNode, assetMap);
+				newNode.tnodes = resolveTNodes(n.tnodes, assetMap);
 				result.push(newNode);
 				break;
 			}
 			case 'if': {
 				const n = node as IfTNode;
-				const newNode: IfTNode = { type: 'if', branches: [], parent };
+				const newNode: IfTNode = { type: 'if', branches: [] };
 				for (const branch of n.branches) {
-					const newBranch: IfBranch = { condition: branch.condition, tnodes: [], ifNode: newNode };
+					const newBranch: IfBranch = { condition: branch.condition, tnodes: [] };
 					if (branch.loc) newBranch.loc = branch.loc;
-					newBranch.tnodes = resolveTNodes(branch.tnodes, newBranch, assetMap);
+					newBranch.tnodes = resolveTNodes(branch.tnodes, assetMap);
 					newNode.branches.push(newBranch);
 				}
 				result.push(newNode);
@@ -772,8 +771,7 @@ function resolveTNodes(tnodes: TNode[], parent: ParentTNode, assetMap: Map<strin
 				const n = node as PartialRefTNode;
 				const newSlots: { [slotName: string]: TNode[] } = {};
 				for (const [slotName, slotTnodes] of Object.entries(n.slots)) {
-					// Slot tnodes have the partial-ref's parent as their parent
-					newSlots[slotName] = resolveTNodes(slotTnodes, parent, assetMap);
+					newSlots[slotName] = resolveTNodes(slotTnodes, assetMap);
 				}
 				const newNode: PartialRefTNode = n.kind === 'custom-element'
 					? {
@@ -783,7 +781,6 @@ function resolveTNodes(tnodes: TNode[], parent: ParentTNode, assetMap: Map<strin
 						partialName: n.partialName,
 						slots: newSlots,
 						bindings: n.bindings,
-						parent,
 					}
 					: {
 						type: 'partial-ref',
@@ -793,7 +790,6 @@ function resolveTNodes(tnodes: TNode[], parent: ParentTNode, assetMap: Map<strin
 						wrapper: n.wrapper,
 						slots: newSlots,
 						bindings: n.bindings,
-						parent,
 					};
 				if (n.slotLocs) newNode.slotLocs = n.slotLocs;
 				if (n.loc) newNode.loc = n.loc;
@@ -802,7 +798,7 @@ function resolveTNodes(tnodes: TNode[], parent: ParentTNode, assetMap: Map<strin
 					if (n.callerAttrNames) newNode.callerAttrNames = n.callerAttrNames;
 					if (n.callerAttrInfos) newNode.callerAttrInfos = n.callerAttrInfos;
 					if (n.unresolvedRaw) newNode.unresolvedRaw = n.unresolvedRaw;
-					if (n.callerOpenTag) newNode.callerOpenTag = resolveTNodes(n.callerOpenTag, parent, assetMap);
+					if (n.callerOpenTag) newNode.callerOpenTag = resolveTNodes(n.callerOpenTag, assetMap);
 				}
 				result.push(newNode);
 				break;
@@ -810,7 +806,7 @@ function resolveTNodes(tnodes: TNode[], parent: ParentTNode, assetMap: Map<strin
 			case 'attr-bind': {
 				const n = node as AttrBindTNode;
 				const newParts: AttrPart[] = resolveAttrParts(n.parts, assetMap);
-				const newNode: AttrBindTNode = { type: 'attr-bind', tagOpen: n.tagOpen, parts: newParts, parent };
+				const newNode: AttrBindTNode = { type: 'attr-bind', tagOpen: n.tagOpen, parts: newParts };
 				if (n.selfClosing) newNode.selfClosing = true;
 				if (n.attrsOnly) newNode.attrsOnly = true;
 				result.push(newNode);
