@@ -1061,8 +1061,8 @@ Deno.test("compileDirectory - synthesized binding: bool bare → literal:true", 
     if (!ref) throw new Error("no partial-ref");
     const b = ref.bindings.find(b => b.name === 'premium');
     if (!b) throw new Error("no premium binding");
-    assertEquals(b.literal, true);
-    assertEquals(b.data, undefined);
+    assertEquals(b.kind, 'literal');
+    if (b.kind === 'literal') assertEquals(b.value, true);
 });
 
 Deno.test("compileDirectory - synthesized binding: non-bool plain → literal:string", async () => {
@@ -1081,8 +1081,8 @@ Deno.test("compileDirectory - synthesized binding: non-bool plain → literal:st
     if (!ref) throw new Error("no partial-ref");
     const b = ref.bindings.find(b => b.name === 'premium');
     if (!b) throw new Error("no premium binding");
-    assertEquals(b.literal, "gold");
-    assertEquals(b.data, undefined);
+    assertEquals(b.kind, 'literal');
+    if (b.kind === 'literal') assertEquals(b.value, "gold");
 });
 
 Deno.test("compileDirectory - synthesized binding: bool :expr → data + cast:bool", async () => {
@@ -1101,9 +1101,11 @@ Deno.test("compileDirectory - synthesized binding: bool :expr → data + cast:bo
     if (!ref) throw new Error("no partial-ref");
     const b = ref.bindings.find(b => b.name === 'premium');
     if (!b) throw new Error("no premium binding");
-    assertEquals(b.cast, 'bool');
-    assertEquals(typeof b.data, 'object');
-    assertEquals(b.literal, undefined);
+    assertEquals(b.kind, 'expr');
+    if (b.kind === 'expr') {
+        assertEquals(b.cast, 'bool');
+        assertEquals(typeof b.data, 'object');
+    }
 });
 
 Deno.test("compileDirectory - synthesized binding: non-bool :expr → data + cast:string", async () => {
@@ -1122,9 +1124,11 @@ Deno.test("compileDirectory - synthesized binding: non-bool :expr → data + cas
     if (!ref) throw new Error("no partial-ref");
     const b = ref.bindings.find(b => b.name === 'premium');
     if (!b) throw new Error("no premium binding");
-    assertEquals(b.cast, 'string');
-    assertEquals(typeof b.data, 'object');
-    assertEquals(b.literal, undefined);
+    assertEquals(b.kind, 'expr');
+    if (b.kind === 'expr') {
+        assertEquals(b.cast, 'string');
+        assertEquals(typeof b.data, 'object');
+    }
 });
 
 Deno.test("compileDirectory - bool b-attr called as :expr patches AttrPart.isBoolean", async () => {
@@ -1140,7 +1144,7 @@ Deno.test("compileDirectory - bool b-attr called as :expr patches AttrPart.isBoo
     assertEquals(fatal.length, 0, `unexpected fatals: ${JSON.stringify(fatal.map(e => e.message))}`);
     const post = directory.files.get("page.html")!.partials.get("post")!;
     const ref = findFirstPartialRef(post.tnodes);
-    if (!ref || !ref.callerOpenTag) throw new Error("no callerOpenTag");
+    if (!ref || ref.kind !== 'custom-element' || !ref.callerOpenTag) throw new Error("no callerOpenTag");
     let found = false;
     for (const n of ref.callerOpenTag) {
         if (n.type !== 'attr-bind') continue;
@@ -1176,11 +1180,15 @@ Deno.test("compileDirectory - cross-file: b-attr validation and synthesis works 
     if (!ref) throw new Error("no partial-ref");
     const premium = ref.bindings.find(b => b.name === 'premium');
     if (!premium) throw new Error("missing premium binding");
-    assertEquals(premium.literal, "gold");
+    assertEquals(premium.kind, 'literal');
+    if (premium.kind === 'literal') assertEquals(premium.value, "gold");
     const checked = ref.bindings.find(b => b.name === 'checked');
     if (!checked) throw new Error("missing checked binding");
-    assertEquals(checked.cast, 'bool');
-    assertEquals(typeof checked.data, 'object');
+    assertEquals(checked.kind, 'expr');
+    if (checked.kind === 'expr') {
+        assertEquals(checked.cast, 'bool');
+        assertEquals(typeof checked.data, 'object');
+    }
 });
 
 Deno.test("compileDirectory - cross-file: missing required b-attr reports error", async () => {
@@ -1243,8 +1251,11 @@ Deno.test("compileDirectory - b-bind:NAME long form behaves like :NAME", async (
     if (!ref) throw new Error("no partial-ref");
     const b = ref.bindings.find(b => b.name === 'premium');
     if (!b) throw new Error("no premium binding");
-    assertEquals(b.cast, 'bool');
-    assertEquals(typeof b.data, 'object');
+    assertEquals(b.kind, 'expr');
+    if (b.kind === 'expr') {
+        assertEquals(b.cast, 'bool');
+        assertEquals(typeof b.data, 'object');
+    }
 });
 
 // --- Stage 3: b-attr usage validation in partial body ---

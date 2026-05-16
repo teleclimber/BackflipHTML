@@ -6,8 +6,8 @@ import type { Parsed } from './backcode.js';
 import { BackflipError } from './errors.js';
 import type {
 	SourceLoc, TNode, RawTNode, PrintTNode, ForTNode, IfTNode, IfBranch,
-	SlotTNode, PartialRefTNode, ParentTNode,
-	RootTNode, CompiledFile, CompileOptions, PartialDef, PartialBinding,
+	SlotTNode, PartialRefTNode, BPartCallTNode, CustomElementCallTNode, ParentTNode,
+	RootTNode, NamedPartialRoot, CustomElementPartialRoot, CompiledFile, CompileOptions, PartialDef, PartialBinding,
 } from './types.js';
 import {
 	attrLoc, tagLoc, errorLoc, attrErrorLoc, bDataNameLoc, interpolationLoc,
@@ -254,7 +254,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			for (const attr of tag.attrs) {
 				if (attr.name.startsWith('b-data:')) {
 					const bindingName = attr.name.slice('b-data:'.length);
-					const binding: PartialBinding = { name: bindingName, data: interpretBackcode(attr.value) };
+					const binding: PartialBinding = { kind: 'expr', name: bindingName, data: interpretBackcode(attr.value) };
 					const nameLoc = bDataNameLoc(tag, attr.name, bindingName);
 					if (nameLoc) binding.nameLoc = nameLoc;
 					bindings.push(binding);
@@ -267,7 +267,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			// In the non-flow call path they're absent anyway, so the extra excludes are no-ops.
 			const callerOpenTag = makeAttrsOnlyNodes(tag, ['b-export', 'b-if', 'b-for', 'b-else', 'b-else-if'], parent);
 
-			const callerAttrInfos: NonNullable<PartialRefTNode['callerAttrInfos']> = [];
+			const callerAttrInfos: NonNullable<CustomElementCallTNode['callerAttrInfos']> = [];
 			for (const attr of tag.attrs) {
 				const n = attr.name;
 				if (n === 'b-name' || n === 'b-export') continue;
@@ -299,16 +299,15 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				}
 			}
 
-			const partialRef: PartialRefTNode = {
+			const partialRef: CustomElementCallTNode = {
 				type: 'partial-ref',
+				kind: 'custom-element',
 				file: null,                        // resolved post-parse via global registry
 				partialName: tag.tagName,
-				wrapper: null,                     // built at codegen time from callerOpenTag + definition's open tag
 				slots: { 'default': [] },
 				slotLocs: {},
 				bindings,
 				parent,
-				customElement: true,
 				callerOpenTag,
 				callerTagName: tag.tagName,
 				callerAttrNames: effectiveAttrNames(tag.attrs),
@@ -369,7 +368,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 
 			const partialName = bNameAttr.value;
 			const tagSrcLoc = tag.sourceCodeLocation as { startOffset?: number; startLine?: number; startCol?: number } | null | undefined;
-			const partialRoot: RootTNode = { type: 'root', tnodes: [], meta: {
+			const partialRoot: NamedPartialRoot = { type: 'root', kind: 'named', tnodes: [], meta: {
 				startOffset: tagSrcLoc?.startOffset ?? 0,
 				endOffset: tagSrcLoc?.startOffset ?? 0, // updated on close
 				startLine: tagSrcLoc?.startLine ?? 1,
@@ -418,7 +417,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 
 			const partialName = tag.tagName;
 			const tagSrcLoc = tag.sourceCodeLocation as { startOffset?: number; endOffset?: number; startLine?: number; startCol?: number; endLine?: number; endCol?: number } | null | undefined;
-			const partialRoot: RootTNode = { type: 'root', tnodes: [], meta: {
+			const partialRoot: CustomElementPartialRoot = { type: 'root', kind: 'custom-element', tnodes: [], meta: {
 				startOffset: tagSrcLoc?.startOffset ?? 0,
 				endOffset: tagSrcLoc?.startOffset ?? 0, // updated on close
 				startLine: tagSrcLoc?.startLine ?? 1,
@@ -436,7 +435,6 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				};
 			}
 			partialRoot.exported = tag.attrs.some(a => a.name === 'b-export');
-			partialRoot.customElement = true;
 
 			// Parse b-attr:* declarations on the custom element definition tag.
 			const bAttrs: { name: string; isBool: boolean; loc?: SourceLoc }[] = [];
@@ -589,7 +587,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			for (const attr of tag.attrs) {
 				if (attr.name.startsWith('b-data:')) {
 					const bindingName = attr.name.slice('b-data:'.length);
-					const binding: PartialBinding = { name: bindingName, data: interpretBackcode(attr.value) };
+					const binding: PartialBinding = { kind: 'expr', name: bindingName, data: interpretBackcode(attr.value) };
 					const nameLoc = bDataNameLoc(tag, attr.name, bindingName);
 					if (nameLoc) binding.nameLoc = nameLoc;
 					bindings.push(binding);
@@ -606,8 +604,9 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 
 			const parent: ParentTNode = cur_tnode ? cur_tnode.parent : currentPartialRoot!;
 
-			const partialRef: PartialRefTNode = {
+			const partialRef: BPartCallTNode = {
 				type: 'partial-ref',
+				kind: 'b-part',
 				file,
 				partialName,
 				wrapper,
@@ -829,7 +828,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			if (tag_stack.length === 0 && currentPartialRoot !== null) {
 				// Custom element partials don't include the wrapping tag in the body —
 				// the open and close tags are reconstructed at the call site.
-				if (tag.tagName !== 'b-unwrap' && !currentPartialRoot.customElement) {
+				if (tag.tagName !== 'b-unwrap' && currentPartialRoot.kind !== 'custom-element') {
 					pushRawHere(raw);
 				}
 				// Record end offset of the partial
@@ -968,7 +967,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				));
 				return;
 			}
-			const isCustom = found.customElement === true;
+			const isCustom = found.kind === 'custom-element';
 			if (isCustom !== partialDef.customElement) {
 				reject(new Error(
 					`compilePartial: partial "${partialDef.name}" customElement flag mismatch `

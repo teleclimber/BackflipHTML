@@ -20,17 +20,23 @@ export interface PartialMeta {
 export interface ChildTNode {
 	parent: ParentTNode
 }
-export interface RootTNode {
+interface BaseRoot {
 	type: 'root',
 	tnodes: TNode[],
 	loc?: SourceLoc,
 	exported?: boolean,
-	customElement?: boolean,
-	definitionAttrNames?: string[],  // effective attribute names on the definition's wrapping tag (custom element partials only)
-	definitionAttrNodes?: TNode[],   // attrs-only TNodes for the definition's wrapping tag (custom element partials only). Excludes the leading `<tagName` and trailing `>`. Renders the definition's attrs in childCtx at call sites.
-	bAttrs?: { name: string; isBool: boolean; loc?: SourceLoc }[],  // declared b-attr:* directives on the custom element definition tag (custom element partials only)
-	meta?: PartialMeta
+	meta?: PartialMeta,
 }
+export interface NamedPartialRoot extends BaseRoot {
+	kind: 'named',
+}
+export interface CustomElementPartialRoot extends BaseRoot {
+	kind: 'custom-element',
+	definitionAttrNames?: string[],  // effective attribute names on the definition's wrapping tag
+	definitionAttrNodes?: TNode[],   // attrs-only TNodes for the definition's wrapping tag. Excludes the leading `<tagName` and trailing `>`. Renders the definition's attrs in childCtx at call sites.
+	bAttrs?: { name: string; isBool: boolean; loc?: SourceLoc }[],  // declared b-attr:* directives on the custom element definition tag
+}
+export type RootTNode = NamedPartialRoot | CustomElementPartialRoot;
 export interface RawTNode extends ChildTNode {
 	type: 'raw',
 	raw: string
@@ -63,35 +69,40 @@ export interface SlotTNode extends ChildTNode {
 	name: string | undefined,   // undefined = default slot
 	loc?: SourceLoc
 }
-export interface PartialBinding {
-	name: string,
-	data?: Parsed,                  // present for expression bindings (b-data, or b-attr expression form)
-	literal?: string | boolean,     // present for literal-value bindings (b-attr plain attribute or bare boolean)
-	cast?: 'bool' | 'string',       // applied at runtime to evaluated `data` (for b-attr expression bindings)
-	nameLoc?: SourceLoc,             // location of just the NAME portion in `b-data:NAME` (excludes the `b-data:` prefix)
-}
-export interface PartialRefTNode extends ChildTNode {
+export type PartialBinding =
+	| { kind: 'expr'; name: string; data: Parsed; cast?: 'bool' | 'string'; nameLoc?: SourceLoc }
+	| { kind: 'literal'; name: string; value: string | boolean; nameLoc?: SourceLoc };
+interface BasePartialCall extends ChildTNode {
 	type: 'partial-ref',
 	file: string | null,        // null = same-file reference (b-part="#name")
 	partialName: string,
-	wrapper: { open: string, close: string } | null,  // null if <b-unwrap b-part>
 	slots: { [slotName: string]: TNode[] },            // 'default' for unnamed
 	slotLocs?: { [slotName: string]: SourceLoc },       // source locations for b-in attributes
 	bindings: PartialBinding[],
 	loc?: SourceLoc,
-	customElement?: boolean,    // true when this came from a custom element call site (e.g. <my-card>)
-	callerOpenTag?: TNode[],    // for customElement calls: the call-site opening tag broken into TNodes (rendered in caller ctx).
-	callerTagName?: string,     // for customElement calls: the call-site tag name (= the partial name, but kept explicit for symmetry)
-	callerAttrNames?: string[], // for customElement calls: effective attribute names on the call-site tag (used for conflict validation)
+}
+
+export interface BPartCallTNode extends BasePartialCall {
+	kind: 'b-part',
+	wrapper: { open: string, close: string } | null,  // null if <b-unwrap b-part>
+}
+
+export interface CustomElementCallTNode extends BasePartialCall {
+	kind: 'custom-element',
+	callerOpenTag?: TNode[],    // the call-site opening tag broken into TNodes (rendered in caller ctx).
+	callerTagName?: string,     // the call-site tag name (= the partial name, but kept explicit for symmetry)
+	callerAttrNames?: string[], // effective attribute names on the call-site tag (used for conflict validation)
 	callerAttrInfos?: {
 		name: string;             // effective attr name (after stripping b-bind: / : / trailing ~)
 		kind: 'plain' | 'expr';   // plain = static HTML attr (bare or with literal value); expr = b-bind:/: with backcode
 		value: string;            // raw value from the source ('' for bare boolean)
 		expr?: Parsed;            // parsed backcode for kind='expr'
 		loc?: SourceLoc;
-	}[],                          // for customElement calls: rich per-attribute info used for b-attr resolution and conflict checks
-	unresolvedRaw?: string      // for customElement calls: the raw text of the call-site open tag, used as fallback if the partial can't be resolved
+	}[],                          // rich per-attribute info used for b-attr resolution and conflict checks
+	unresolvedRaw?: string,     // raw text of the call-site open tag, used as fallback if the partial can't be resolved
 }
+
+export type PartialRefTNode = BPartCallTNode | CustomElementCallTNode;
 
 export interface CompiledFile {
 	partials: Map<string, RootTNode>  // partialName → compiled tree

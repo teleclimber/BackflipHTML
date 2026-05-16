@@ -175,7 +175,7 @@ Deno.test("effectiveAttrNames: mixed attrs preserve order and apply all rules", 
 // ---- pushRaw unit tests ----
 
 Deno.test("pushRaw: appends to existing raw node", () => {
-	const root :RootTNode = { type: 'root', tnodes: [] };
+	const root :RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
 	const child_node :RawTNode = { type: 'raw', raw: 'hello', parent: root	};
 	root.tnodes.push(child_node);
 
@@ -187,7 +187,7 @@ Deno.test("pushRaw: appends to existing raw node", () => {
 // ---- onText unit tests ----
 
 Deno.test("onText: plain text appended to raw node", () => {
-	const root :RootTNode = { type: 'root', tnodes: [] };
+	const root :RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
 	const child_node :RawTNode = { type: 'raw', raw: '', parent: root	};
 	root.tnodes.push(child_node);
 
@@ -195,6 +195,7 @@ Deno.test("onText: plain text appended to raw node", () => {
 
 	assertEquals(root, {
 		type: 'root',
+		kind: 'named',
 		tnodes: [{
 			type: 'raw',
 			raw: 'world',
@@ -204,7 +205,7 @@ Deno.test("onText: plain text appended to raw node", () => {
 });
 
 Deno.test("onText: single interpolation", () => {
-	const root :RootTNode = { type: 'root', tnodes: [] };
+	const root :RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
 	const child_node :RawTNode = { type: 'raw', raw: '', parent: root	};
 	root.tnodes.push(child_node);
 
@@ -212,6 +213,7 @@ Deno.test("onText: single interpolation", () => {
 
 	assertEquals(root, {
 		type: 'root',
+		kind: 'named',
 		tnodes: [{
 			type: 'raw',
 			raw: '',
@@ -225,7 +227,7 @@ Deno.test("onText: single interpolation", () => {
 });
 
 Deno.test("onText: text before interpolation", () => {
-	const root :RootTNode = { type: 'root', tnodes: [] };
+	const root :RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
 	const child_node :RawTNode = { type: 'raw', raw: '', parent: root	};
 	root.tnodes.push(child_node);
 
@@ -233,6 +235,7 @@ Deno.test("onText: text before interpolation", () => {
 
 	assertEquals(root, {
 		type: 'root',
+		kind: 'named',
 		tnodes: [{
 			type: 'raw',
 			raw: 'hello ',
@@ -246,7 +249,7 @@ Deno.test("onText: text before interpolation", () => {
 });
 
 Deno.test("onText: text around interpolation", () => {
-	const root :RootTNode = { type: 'root', tnodes: [] };
+	const root :RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
 	const child_node :RawTNode = { type: 'raw', raw: '', parent: root	};
 	root.tnodes.push(child_node);
 
@@ -254,6 +257,7 @@ Deno.test("onText: text around interpolation", () => {
 
 	assertEquals(root, {
 		type: 'root',
+		kind: 'named',
 		tnodes: [{
 			type: 'raw',
 			raw: 'hello ',
@@ -271,7 +275,7 @@ Deno.test("onText: text around interpolation", () => {
 });
 
 Deno.test("onText: two interpolations with surrounding text", () => {
-	const root :RootTNode = { type: 'root', tnodes: [] };
+	const root :RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
 	const child_node :RawTNode = { type: 'raw', raw: '', parent: root	};
 	root.tnodes.push(child_node);
 
@@ -279,6 +283,7 @@ Deno.test("onText: two interpolations with surrounding text", () => {
 
 	assertEquals(root, {
 		type: 'root',
+		kind: 'named',
 		tnodes: [{
 			type: 'raw',
 			raw: 'hello ',
@@ -300,7 +305,7 @@ Deno.test("onText: two interpolations with surrounding text", () => {
 });
 
 Deno.test("onText: parentheses in expression", () => {
-	const root :RootTNode = { type: 'root', tnodes: [] };
+	const root :RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
 	const child_node :RawTNode = { type: 'raw', raw: '', parent: root	};
 	root.tnodes.push(child_node);
 
@@ -311,7 +316,7 @@ Deno.test("onText: parentheses in expression", () => {
 });
 
 Deno.test("onText: empty braces skipped", () => {
-	const root :RootTNode = { type: 'root', tnodes: [] };
+	const root :RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
 	const child_node :RawTNode = { type: 'raw', raw: '', parent: root	};
 	root.tnodes.push(child_node);
 

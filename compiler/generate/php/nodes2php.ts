@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, PartialBinding, AttrBindTNode, AttrPart, CompiledFile } from '../../types.js';
+import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, CustomElementCallTNode, PartialBinding, AttrBindTNode, AttrPart, CompiledFile } from '../../types.js';
 import type { Parsed } from '../../backcode.js';
 import { generatePhpFunction } from './generatephp.js';
 
@@ -46,7 +46,7 @@ export function nodeToPhp(n: TNode | RootTNode, assetMap?: Map<string, string>):
 
 function rootToPhp(n: RootTNode, assetMap?: Map<string, string>): string {
 	const nodes = n.tnodes.map(nn => nodeToPhp(nn, assetMap)).join(',\n    ');
-	if (n.customElement && n.definitionAttrNodes) {
+	if (n.kind === 'custom-element' && n.definitionAttrNodes) {
 		const defAttrs = n.definitionAttrNodes.map(nn => nodeToPhp(nn, assetMap)).join(',\n    ');
 		return `['type' => 'root', 'customElement' => true, 'definitionAttrNodes' => [\n    ${defAttrs}\n], 'nodes' => [\n    ${nodes}\n]]`;
 	}
@@ -97,24 +97,21 @@ function slotToPhp(n: SlotTNode): string {
 
 function bindingToPhp(b: PartialBinding): string {
 	const parts: string[] = [`'name' => '${escapeStr(b.name)}'`];
-	if (b.data !== undefined) {
+	if (b.kind === 'expr') {
 		parts.push(`'data' => ${backcodeToPhp(b.data)}`);
-	}
-	if (b.literal !== undefined) {
-		if (typeof b.literal === 'boolean') {
-			parts.push(`'literal' => ${b.literal ? 'true' : 'false'}`);
+		if (b.cast !== undefined) parts.push(`'cast' => '${b.cast}'`);
+	} else {
+		if (typeof b.value === 'boolean') {
+			parts.push(`'literal' => ${b.value ? 'true' : 'false'}`);
 		} else {
-			parts.push(`'literal' => '${escapeStr(b.literal)}'`);
+			parts.push(`'literal' => '${escapeStr(b.value)}'`);
 		}
-	}
-	if (b.cast !== undefined) {
-		parts.push(`'cast' => '${b.cast}'`);
 	}
 	return `[${parts.join(', ')}]`;
 }
 
 function partialRefToPhp(n: PartialRefTNode, assetMap?: Map<string, string>): string {
-	if (n.customElement) {
+	if (n.kind === 'custom-element') {
 		return customElementRefToPhp(n, assetMap);
 	}
 
@@ -140,7 +137,7 @@ function partialRefToPhp(n: PartialRefTNode, assetMap?: Map<string, string>): st
 ]`;
 }
 
-function customElementRefToPhp(n: PartialRefTNode, assetMap?: Map<string, string>): string {
+function customElementRefToPhp(n: CustomElementCallTNode, assetMap?: Map<string, string>): string {
 	const tagName = n.callerTagName ?? n.partialName;
 	const callerOpenTag = (n.callerOpenTag ?? []).map(t => nodeToPhp(t, assetMap)).join(',\n        ');
 	const slots = Object.entries(n.slots)

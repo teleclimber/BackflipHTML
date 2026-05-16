@@ -42,8 +42,8 @@ export function buildIndex(directory: CompiledDirectory): ProjectIndex {
 				slots,
 				freeVars: inferFreeVars(root),
 				dataShape: inferDataShape(root),
-				customElement: root.customElement ?? false,
-				bAttrs: root.bAttrs?.map(a => ({ name: a.name, isBool: a.isBool })),
+				customElement: root.kind === 'custom-element',
+				bAttrs: root.kind === 'custom-element' ? root.bAttrs?.map(a => ({ name: a.name, isBool: a.isBool })) : undefined,
 			};
 			const existing = partialDefs.get(name);
 			if (existing) {

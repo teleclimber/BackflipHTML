@@ -9,7 +9,7 @@ function makeParsed(code: string) {
 }
 
 function makeRoot(...tnodes: any[]): RootTNode {
-	return { type: 'root', tnodes };
+	return { type: 'root', kind: 'named' as const, tnodes };
 }
 
 Deno.test("raw node", () => {
@@ -110,7 +110,7 @@ Deno.test("if node with else branch (no condition) emits null", () => {
 });
 
 Deno.test("root node with children", () => {
-	const root: RootTNode = { type: 'root', tnodes: [] };
+	const root: RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
 	const raw: RawTNode = { type: 'raw', raw: 'hello', parent: root };
 	const parsed = makeParsed('x');
 	const print: PrintTNode = { type: 'print', data: parsed, parent: root };
@@ -148,6 +148,7 @@ Deno.test("partial-ref node with same-file reference", () => {
 	const root = makeRoot();
 	const node: PartialRefTNode = {
 		type: 'partial-ref',
+		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
 		wrapper: null,
@@ -165,6 +166,7 @@ Deno.test("partial-ref node with cross-file reference uses variable alias", () =
 	const root = makeRoot();
 	const node: PartialRefTNode = {
 		type: 'partial-ref',
+		kind: 'b-part' as const,
 		file: 'graphics/charts.html',
 		partialName: 'pie-chart',
 		wrapper: null,
@@ -180,6 +182,7 @@ Deno.test("partial-ref node with wrapper", () => {
 	const root = makeRoot();
 	const node: PartialRefTNode = {
 		type: 'partial-ref',
+		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
 		wrapper: { open: '<div class="x">', close: '</div>' },
@@ -197,6 +200,7 @@ Deno.test("partial-ref node with default slot content", () => {
 	const slotRaw: RawTNode = { type: 'raw', raw: 'slot content', parent: root };
 	const node: PartialRefTNode = {
 		type: 'partial-ref',
+		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
 		wrapper: null,
@@ -214,11 +218,12 @@ Deno.test("partial-ref node with binding", () => {
 	const root = makeRoot();
 	const node: PartialRefTNode = {
 		type: 'partial-ref',
+		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
 		wrapper: null,
 		slots: {},
-		bindings: [{ name: 'mood', data: makeParsed('user.mood') }],
+		bindings: [{ kind: 'expr', name: 'mood', data: makeParsed('user.mood') }],
 		parent: root
 	};
 	const php = nodeToPhp(node);
@@ -231,11 +236,12 @@ Deno.test("partial-ref binding with literal true (bare boolean)", () => {
 	const root = makeRoot();
 	const node: PartialRefTNode = {
 		type: 'partial-ref',
+		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
 		wrapper: null,
 		slots: {},
-		bindings: [{ name: 'premium', literal: true }],
+		bindings: [{ kind: 'literal', name: 'premium', value: true }],
 		parent: root
 	};
 	const php = nodeToPhp(node);
@@ -249,11 +255,12 @@ Deno.test("partial-ref binding with literal false", () => {
 	const root = makeRoot();
 	const node: PartialRefTNode = {
 		type: 'partial-ref',
+		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
 		wrapper: null,
 		slots: {},
-		bindings: [{ name: 'premium', literal: false }],
+		bindings: [{ kind: 'literal', name: 'premium', value: false }],
 		parent: root
 	};
 	const php = nodeToPhp(node);
@@ -265,11 +272,12 @@ Deno.test("partial-ref binding with literal string value", () => {
 	const root = makeRoot();
 	const node: PartialRefTNode = {
 		type: 'partial-ref',
+		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
 		wrapper: null,
 		slots: {},
-		bindings: [{ name: 'label', literal: 'hello' }],
+		bindings: [{ kind: 'literal', name: 'label', value: 'hello' }],
 		parent: root
 	};
 	const php = nodeToPhp(node);
@@ -281,11 +289,12 @@ Deno.test("partial-ref binding with literal string escapes single quotes", () =>
 	const root = makeRoot();
 	const node: PartialRefTNode = {
 		type: 'partial-ref',
+		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
 		wrapper: null,
 		slots: {},
-		bindings: [{ name: 'label', literal: "it's" }],
+		bindings: [{ kind: 'literal', name: 'label', value: "it's" }],
 		parent: root
 	};
 	const php = nodeToPhp(node);
@@ -296,11 +305,12 @@ Deno.test("partial-ref binding with cast=bool", () => {
 	const root = makeRoot();
 	const node: PartialRefTNode = {
 		type: 'partial-ref',
+		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
 		wrapper: null,
 		slots: {},
-		bindings: [{ name: 'premium', data: makeParsed('user.isPro'), cast: 'bool' }],
+		bindings: [{ kind: 'expr', name: 'premium', data: makeParsed('user.isPro'), cast: 'bool' }],
 		parent: root
 	};
 	const php = nodeToPhp(node);
@@ -313,11 +323,12 @@ Deno.test("partial-ref binding with cast=string", () => {
 	const root = makeRoot();
 	const node: PartialRefTNode = {
 		type: 'partial-ref',
+		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
 		wrapper: null,
 		slots: {},
-		bindings: [{ name: 'label', data: makeParsed('count'), cast: 'string' }],
+		bindings: [{ kind: 'expr', name: 'label', data: makeParsed('count'), cast: 'string' }],
 		parent: root
 	};
 	const php = nodeToPhp(node);
@@ -330,18 +341,17 @@ Deno.test("custom-element partial-ref binding shapes coexist", () => {
 	const root = makeRoot();
 	const node: PartialRefTNode = {
 		type: 'partial-ref',
+		kind: 'custom-element' as const,
 		file: null,
 		partialName: 'my-card',
-		wrapper: null,
 		slots: {},
 		bindings: [
-			{ name: 'title', data: makeParsed('heading') },
-			{ name: 'premium', literal: true },
-			{ name: 'badge', literal: 'gold' },
-			{ name: 'active', data: makeParsed('isOn'), cast: 'bool' },
-			{ name: 'count', data: makeParsed('n'), cast: 'string' }
+			{ kind: 'expr', name: 'title', data: makeParsed('heading') },
+			{ kind: 'literal', name: 'premium', value: true },
+			{ kind: 'literal', name: 'badge', value: 'gold' },
+			{ kind: 'expr', name: 'active', data: makeParsed('isOn'), cast: 'bool' },
+			{ kind: 'expr', name: 'count', data: makeParsed('n'), cast: 'string' }
 		],
-		customElement: true,
 		callerTagName: 'my-card',
 		callerOpenTag: [],
 		parent: root
@@ -363,7 +373,7 @@ Deno.test("sanitizeName replaces hyphens and dots", () => {
 });
 
 Deno.test("fileToPhpFile starts with <?php and ends with return compact(", () => {
-	const root: RootTNode = { type: 'root', tnodes: [] };
+	const root: RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
 	root.tnodes.push({ type: 'raw', raw: '<p>hello</p>', parent: root });
 	const file: CompiledFile = {
 		partials: new Map([['notice', root]])
@@ -375,9 +385,9 @@ Deno.test("fileToPhpFile starts with <?php and ends with return compact(", () =>
 });
 
 Deno.test("fileToPhpFile contains all partial names", () => {
-	const root1: RootTNode = { type: 'root', tnodes: [] };
+	const root1: RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
 	root1.tnodes.push({ type: 'raw', raw: '<p>notice</p>', parent: root1 });
-	const root2: RootTNode = { type: 'root', tnodes: [] };
+	const root2: RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
 	root2.tnodes.push({ type: 'raw', raw: '<article>post</article>', parent: root2 });
 	const file: CompiledFile = {
 		partials: new Map([['notice', root1], ['post', root2]])
@@ -389,9 +399,10 @@ Deno.test("fileToPhpFile contains all partial names", () => {
 });
 
 Deno.test("fileToPhpFile emits backflip_require for cross-file partial-ref", () => {
-	const root: RootTNode = { type: 'root', tnodes: [] };
+	const root: RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
 	const ref: PartialRefTNode = {
 		type: 'partial-ref',
+		kind: 'b-part' as const,
 		file: 'graphics/charts.html',
 		partialName: 'pie-chart',
 		wrapper: null,
@@ -410,12 +421,12 @@ Deno.test("fileToPhpFile emits backflip_require for cross-file partial-ref", () 
 });
 
 Deno.test("fileToPhpFile same-file dep comes before dependent", () => {
-	const noticeRoot: RootTNode = { type: 'root', tnodes: [] };
+	const noticeRoot: RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
 	noticeRoot.tnodes.push({ type: 'raw', raw: 'notice', parent: noticeRoot });
 
-	const postRoot: RootTNode = { type: 'root', tnodes: [] };
+	const postRoot: RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
 	const ref: PartialRefTNode = {
-		type: 'partial-ref', file: null, partialName: 'notice',
+		type: 'partial-ref', kind: 'b-part', file: null, partialName: 'notice',
 		wrapper: null, slots: {}, bindings: [], parent: postRoot
 	};
 	postRoot.tnodes.push(ref);

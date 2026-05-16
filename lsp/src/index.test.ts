@@ -15,9 +15,10 @@ function makeSlot(name?: string): SlotTNode {
 	return { type: 'slot', name, parent: {} as any } as SlotTNode;
 }
 
-function makePartialRef(partialName: string, file: string | null, loc?: SourceLoc, opts?: { bindings?: { name: string, data: any }[], slots?: Record<string, any[]> }): PartialRefTNode {
+function makePartialRef(partialName: string, file: string | null, loc?: SourceLoc, opts?: { bindings?: { kind: 'expr', name: string, data: any }[], slots?: Record<string, any[]> }): PartialRefTNode {
 	return {
 		type: 'partial-ref',
+		kind: 'b-part',
 		partialName,
 		file,
 		wrapper: null,
@@ -141,8 +142,8 @@ describe('buildIndex', () => {
 	it('collects dataBindings and slotsFilled from refs', () => {
 		const ref = makePartialRef('card', null, makeLoc(5, 10, 5, 30), {
 			bindings: [
-				{ name: 'title', data: { vars: [], errs: [], expr: undefined } },
-				{ name: 'items', data: { vars: [], errs: [], expr: undefined } },
+				{ kind: 'expr', name: 'title', data: { vars: [], errs: [], expr: undefined } },
+				{ kind: 'expr', name: 'items', data: { vars: [], errs: [], expr: undefined } },
 			],
 			slots: { 'default': [], 'header': [] },
 		});

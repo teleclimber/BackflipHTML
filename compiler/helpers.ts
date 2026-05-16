@@ -17,6 +17,7 @@ import type {
 	AttrPart,
 	ParentTNode,
 	RootTNode,
+	CustomElementPartialRoot,
 	CompiledFile,
 } from './types.js';
 
@@ -677,19 +678,28 @@ function walkForSlots(tnodes: TNode[], slots: string[]): void {
 export function resolveAssetRefs(compiled: CompiledFile, assetMap: Map<string, string>): CompiledFile {
 	const newPartials = new Map<string, RootTNode>();
 	for (const [name, root] of compiled.partials) {
-		const newRoot: RootTNode = {
-			type: 'root',
-			tnodes: [],
-			...(root.loc ? { loc: root.loc } : {}),
-			...(root.exported !== undefined ? { exported: root.exported } : {}),
-			...(root.customElement !== undefined ? { customElement: root.customElement } : {}),
-			...(root.definitionAttrNames ? { definitionAttrNames: root.definitionAttrNames } : {}),
-			...(root.bAttrs ? { bAttrs: root.bAttrs } : {}),
-			...(root.meta ? { meta: root.meta } : {}),
-		};
+		const newRoot: RootTNode = root.kind === 'custom-element'
+			? {
+				type: 'root',
+				kind: 'custom-element',
+				tnodes: [],
+				...(root.loc ? { loc: root.loc } : {}),
+				...(root.exported !== undefined ? { exported: root.exported } : {}),
+				...(root.definitionAttrNames ? { definitionAttrNames: root.definitionAttrNames } : {}),
+				...(root.bAttrs ? { bAttrs: root.bAttrs } : {}),
+				...(root.meta ? { meta: root.meta } : {}),
+			}
+			: {
+				type: 'root',
+				kind: 'named',
+				tnodes: [],
+				...(root.loc ? { loc: root.loc } : {}),
+				...(root.exported !== undefined ? { exported: root.exported } : {}),
+				...(root.meta ? { meta: root.meta } : {}),
+			};
 		newRoot.tnodes = resolveTNodes(root.tnodes, newRoot, assetMap);
-		if (root.definitionAttrNodes) {
-			newRoot.definitionAttrNodes = resolveTNodes(root.definitionAttrNodes, newRoot, assetMap);
+		if (root.kind === 'custom-element' && root.definitionAttrNodes) {
+			(newRoot as CustomElementPartialRoot).definitionAttrNodes = resolveTNodes(root.definitionAttrNodes, newRoot, assetMap);
 		}
 		newPartials.set(name, newRoot);
 	}
@@ -765,23 +775,35 @@ function resolveTNodes(tnodes: TNode[], parent: ParentTNode, assetMap: Map<strin
 					// Slot tnodes have the partial-ref's parent as their parent
 					newSlots[slotName] = resolveTNodes(slotTnodes, parent, assetMap);
 				}
-				const newNode: PartialRefTNode = {
-					type: 'partial-ref',
-					file: n.file,
-					partialName: n.partialName,
-					wrapper: n.wrapper,
-					slots: newSlots,
-					bindings: n.bindings,
-					parent,
-				};
+				const newNode: PartialRefTNode = n.kind === 'custom-element'
+					? {
+						type: 'partial-ref',
+						kind: 'custom-element',
+						file: n.file,
+						partialName: n.partialName,
+						slots: newSlots,
+						bindings: n.bindings,
+						parent,
+					}
+					: {
+						type: 'partial-ref',
+						kind: 'b-part',
+						file: n.file,
+						partialName: n.partialName,
+						wrapper: n.wrapper,
+						slots: newSlots,
+						bindings: n.bindings,
+						parent,
+					};
 				if (n.slotLocs) newNode.slotLocs = n.slotLocs;
 				if (n.loc) newNode.loc = n.loc;
-				if (n.customElement) newNode.customElement = true;
-				if (n.callerTagName) newNode.callerTagName = n.callerTagName;
-				if (n.callerAttrNames) newNode.callerAttrNames = n.callerAttrNames;
-				if (n.callerAttrInfos) newNode.callerAttrInfos = n.callerAttrInfos;
-				if (n.unresolvedRaw) newNode.unresolvedRaw = n.unresolvedRaw;
-				if (n.callerOpenTag) newNode.callerOpenTag = resolveTNodes(n.callerOpenTag, parent, assetMap);
+				if (n.kind === 'custom-element' && newNode.kind === 'custom-element') {
+					if (n.callerTagName) newNode.callerTagName = n.callerTagName;
+					if (n.callerAttrNames) newNode.callerAttrNames = n.callerAttrNames;
+					if (n.callerAttrInfos) newNode.callerAttrInfos = n.callerAttrInfos;
+					if (n.unresolvedRaw) newNode.unresolvedRaw = n.unresolvedRaw;
+					if (n.callerOpenTag) newNode.callerOpenTag = resolveTNodes(n.callerOpenTag, parent, assetMap);
+				}
 				result.push(newNode);
 				break;
 			}

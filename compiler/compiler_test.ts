@@ -282,7 +282,7 @@ Deno.test("compileFile: top-level custom element is treated as a partial definit
 	assertEquals(compiled.partials.size, 1);
 	const root = compiled.partials.get('my-card');
 	assertExists(root);
-	assertEquals(root.customElement, true);
+	assertEquals(root.kind, 'custom-element');
 	assertEquals(root.exported, false);
 });
 
@@ -292,7 +292,7 @@ Deno.test("compileFile: top-level custom element with b-export is exported", asy
 	const root = compiled.partials.get('my-card');
 	assertExists(root);
 	assertEquals(root.exported, true);
-	assertEquals(root.customElement, true);
+	assertEquals(root.kind, 'custom-element');
 });
 
 Deno.test("compileFile: top-level custom element with b-if reports error", async () => {
@@ -321,7 +321,7 @@ Deno.test("compileFile: b-* directive tag (e.g. b-unwrap) is not a custom elemen
 	const { compiled, errors } = await compileFile('<b-unwrap b-name="x">y</b-unwrap>');
 	assertEquals(errors.length, 0);
 	assertEquals(compiled.partials.size, 1);
-	assertEquals(compiled.partials.get('x')?.customElement, undefined);
+	assertEquals(compiled.partials.get('x')?.kind, 'named');
 });
 
 Deno.test("compileFile: nested custom element creates a partial-ref call site", async () => {
@@ -333,7 +333,7 @@ Deno.test("compileFile: nested custom element creates a partial-ref call site", 
 		if (n.type === 'partial-ref') { found = n as PartialRefTNode; break; }
 	}
 	assertExists(found);
-	assertEquals(found.customElement, true);
+	if (found.kind !== 'custom-element') throw new Error("expected custom-element call");
 	assertEquals(found.partialName, 'my-card');
 	assertEquals(found.callerTagName, 'my-card');
 });
@@ -395,6 +395,7 @@ Deno.test("compileFile: custom element partial stores definitionAttrNodes for at
 	const { compiled, errors } = await compileFile('<my-card class="card" id="main">body</my-card>');
 	assertEquals(errors.length, 0);
 	const root = compiled.partials.get('my-card')!;
+	if (root.kind !== 'custom-element') throw new Error("expected custom-element root");
 	assertExists(root.definitionAttrNodes);
 	const rendered = root.definitionAttrNodes.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
 	assertStringIncludes(rendered, 'class="card"');
@@ -412,6 +413,7 @@ Deno.test("compileFile: custom element call site stores callerOpenTag in attrs-o
 		if (n.type === 'partial-ref') { found = n as PartialRefTNode; break; }
 	}
 	assertExists(found);
+	if (found.kind !== 'custom-element') throw new Error("expected custom-element call");
 	assertExists(found.callerOpenTag);
 	const rendered = found.callerOpenTag.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
 	assertStringIncludes(rendered, 'data-x="1"');
@@ -426,6 +428,7 @@ Deno.test("compileFile: b-attr declarations populate partialRoot.bAttrs", async 
 	assertEquals(errors.length, 0);
 	const root = compiled.partials.get('my-widget');
 	assertExists(root);
+	if (root.kind !== 'custom-element') throw new Error("expected custom-element root");
 	assertExists(root.bAttrs);
 	assertEquals(root.bAttrs.length, 2);
 	assertEquals(root.bAttrs[0].name, 'premium');
@@ -525,6 +528,7 @@ Deno.test("compileFile: b-attr declared name is excluded from definitionAttrName
 	assertEquals(errors.length, 0);
 	const root = compiled.partials.get('my-widget');
 	assertExists(root);
+	if (root.kind !== 'custom-element') throw new Error("expected custom-element root");
 	assertExists(root.definitionAttrNames);
 	assertEquals(root.definitionAttrNames.includes('premium'), false);
 	assertEquals(root.definitionAttrNames.includes('class'), true);
@@ -541,6 +545,7 @@ Deno.test("compileFile: call site captures callerAttrInfos for plain and bind at
 		if (n.type === 'partial-ref') { found = n as PartialRefTNode; break; }
 	}
 	assertExists(found);
+	if (found.kind !== 'custom-element') throw new Error("expected custom-element call");
 	assertExists(found.callerAttrInfos);
 	const premium = found.callerAttrInfos.find(a => a.name === 'premium');
 	const foo = found.callerAttrInfos.find(a => a.name === 'foo');
@@ -565,6 +570,7 @@ Deno.test("compileFile: call site captures bare attribute as plain with empty va
 		if (n.type === 'partial-ref') { found = n as PartialRefTNode; break; }
 	}
 	assertExists(found);
+	if (found.kind !== 'custom-element') throw new Error("expected custom-element call");
 	assertExists(found.callerAttrInfos);
 	const premium = found.callerAttrInfos.find(a => a.name === 'premium');
 	assertExists(premium);
@@ -578,6 +584,7 @@ Deno.test("compileFile: b-attr declarations are not rendered on definition open 
 	);
 	assertEquals(errors.length, 0);
 	const root = compiled.partials.get('my-widget')!;
+	if (root.kind !== 'custom-element') throw new Error("expected custom-element root");
 	assertExists(root.definitionAttrNodes);
 	const rendered = root.definitionAttrNodes.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
 	assertEquals(rendered.includes('b-attr'), false);
@@ -600,6 +607,7 @@ Deno.test("compileFile: b-attr declarations are not rendered on call-site open t
 		if (n.type === 'partial-ref') { found = n as PartialRefTNode; break; }
 	}
 	assertExists(found);
+	if (found.kind !== 'custom-element') throw new Error("expected custom-element call");
 	assertExists(found.callerOpenTag);
 	const rendered = found.callerOpenTag.filter(n => n.type === 'raw').map(n => (n as RawTNode).raw).join('');
 	assertEquals(rendered.includes('b-attr'), false);
@@ -631,6 +639,7 @@ Deno.test("compileFile: b-part with b-unwrap creates wrapper=null", async () => 
 		if (n.type === 'partial-ref') { found = n as PartialRefTNode; break; }
 	}
 	assertEquals(found !== undefined, true);
+	if (found!.kind !== 'b-part') throw new Error("expected b-part call");
 	assertEquals(found!.wrapper, null);
 });
 
@@ -642,6 +651,7 @@ Deno.test("compileFile: b-part with regular element creates wrapper with open/cl
 		if (n.type === 'partial-ref') { found = n as PartialRefTNode; break; }
 	}
 	assertEquals(found !== undefined, true);
+	if (found!.kind !== 'b-part') throw new Error("expected b-part call");
 	assertEquals(found!.wrapper !== null, true);
 	assertEquals(found!.wrapper!.open.includes('<section'), true);
 	assertEquals(found!.wrapper!.close, '</section>');
@@ -659,7 +669,9 @@ Deno.test("compileFile: b-data: creates bindings on PartialRefTNode", async () =
 	assertEquals(ref !== undefined, true);
 	assertEquals(ref!.bindings.length, 1);
 	assertEquals(ref!.bindings[0].name, "title");
-	assertEquals(ref!.bindings[0].data!.vars.includes("item"), true);
+	const titleBinding = ref!.bindings[0];
+	if (titleBinding.kind !== 'expr') throw new Error("expected expr binding");
+	assertEquals(titleBinding.data.vars.includes("item"), true);
 });
 
 // ---- compileFile: slots ----
@@ -1424,7 +1436,7 @@ Deno.test("custom element call: b-for wraps the call in a ForTNode", async () =>
 	const ref = for_node.tnodes.find(n => n.type === 'partial-ref') as PartialRefTNode | undefined;
 	assertExists(ref);
 	assertEquals(ref.partialName, 'my-card');
-	assertEquals(ref.customElement, true);
+	assertEquals(ref.kind, 'custom-element');
 	// partial-ref.parent must be the ForTNode (so siblings logic stays sane downstream)
 	assertEquals(ref.parent, for_node);
 });
@@ -1454,7 +1466,9 @@ Deno.test("custom element call: b-for with b-data:* still captures the binding",
 	const ref = for_node.tnodes.find(n => n.type === 'partial-ref') as PartialRefTNode;
 	assertEquals(ref.bindings.length, 1);
 	assertEquals(ref.bindings[0].name, 'title');
-	assertEquals(ref.bindings[0].data, interpretBackcode('item.title'));
+	const titleBinding2 = ref.bindings[0];
+	if (titleBinding2.kind !== 'expr') throw new Error("expected expr binding");
+	assertEquals(titleBinding2.data, interpretBackcode('item.title'));
 });
 
 Deno.test("custom element call: b-if wraps the call in an IfTNode", async () => {

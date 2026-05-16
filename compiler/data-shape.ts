@@ -29,7 +29,7 @@ export function inferDataShape(root: RootTNode): Map<string, DataShape> {
 	// Pre-seed b-attr-declared variables with their scalar marker so that the
 	// resulting map always has an entry for every b-attr (even unused ones), and
 	// so downstream tooling sees that they're scalars.
-	if (root.bAttrs) {
+	if (root.kind === 'custom-element' && root.bAttrs) {
 		for (const a of root.bAttrs) {
 			const shape = getOrCreateShape(shapes, a.name);
 			shape.scalar = a.isBool ? 'bool' : 'string';
@@ -353,7 +353,7 @@ function walkNodesForShape(
 			case 'partial-ref': {
 				const n = node as PartialRefTNode;
 				for (const binding of n.bindings) {
-					if (!binding.data) continue;
+					if (binding.kind !== 'expr') continue;
 					const passedInfo = { partial: n.partialName, as: binding.name };
 					collectFromParsed(binding.data, 'passed', undefined, scoped, shapes, passedInfo);
 				}
@@ -392,7 +392,7 @@ function walkNodesForShape(
  */
 export function validateBAttrUsage(root: RootTNode, sourceRelPath: string): BackflipError[] {
 	const errors: BackflipError[] = [];
-	if (!root.bAttrs || root.bAttrs.length === 0) return errors;
+	if (root.kind !== 'custom-element' || !root.bAttrs || root.bAttrs.length === 0) return errors;
 
 	const shapes = inferDataShape(root);
 

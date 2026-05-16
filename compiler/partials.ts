@@ -295,9 +295,9 @@ function validateTNode(
         // Custom element calls are resolved by resolveCustomElementCalls; the existence
         // check has already happened (and a warning was emitted if unresolved). Skip the
         // b-part existence check for these refs, but still validate slots below.
-        const isUnresolvedCustom = ref.customElement && ref.file === '__unresolved_custom_element__';
+        const isUnresolvedCustom = ref.kind === 'custom-element' && ref.file === '__unresolved_custom_element__';
 
-        if (!ref.customElement) {
+        if (ref.kind !== 'custom-element') {
             // --- Validate partial existence (b-part) ---
             if (ref.file === null) {
                 // Same-file reference
@@ -348,9 +348,9 @@ function validateTNode(
         }
 
         // --- Validate attribute conflicts for custom element calls ---
-        if (ref.customElement && ref.file !== '__unresolved_custom_element__') {
+        if (ref.kind === 'custom-element' && ref.file !== '__unresolved_custom_element__') {
             const targetForAttrs = resolvePartial(ref, ctx);
-            if (targetForAttrs && targetForAttrs.customElement && targetForAttrs.definitionAttrNames && ref.callerAttrNames) {
+            if (targetForAttrs && targetForAttrs.kind === 'custom-element' && targetForAttrs.definitionAttrNames && ref.callerAttrNames) {
                 const defNames = new Set(targetForAttrs.definitionAttrNames);
                 for (const callerName of ref.callerAttrNames) {
                     if (defNames.has(callerName)) {
@@ -363,7 +363,7 @@ function validateTNode(
             }
 
             // --- Validate b-attr declarations against caller-side attributes ---
-            if (targetForAttrs && targetForAttrs.customElement && targetForAttrs.bAttrs && targetForAttrs.bAttrs.length > 0) {
+            if (targetForAttrs && targetForAttrs.kind === 'custom-element' && targetForAttrs.bAttrs && targetForAttrs.bAttrs.length > 0) {
                 const bAttrs = targetForAttrs.bAttrs;
                 const bAttrNameSet = new Set(bAttrs.map(b => b.name));
                 const callerInfos = ref.callerAttrInfos ?? [];
@@ -412,10 +412,10 @@ function validateTNode(
                         }
                         // Synthesize binding
                         if (caller.kind === 'plain') {
-                            synthesized.push({ name: bAttr.name, literal: caller.value });
+                            synthesized.push({ kind: 'literal', name: bAttr.name, value: caller.value });
                         } else {
                             // expr
-                            synthesized.push({ name: bAttr.name, data: caller.expr!, cast: 'string' });
+                            synthesized.push({ kind: 'expr', name: bAttr.name, data: caller.expr!, cast: 'string' });
                         }
                     } else {
                         // Bool b-attr
@@ -425,13 +425,13 @@ function validateTNode(
                                 `attribute "${bAttr.name}" on <${ref.callerTagName}> has a string value but the partial definition declares it as bool; the value will be coerced to true`,
                                 { ...(errorLoc(ctx.sourceRelPath, caller.loc ?? ref.loc) ?? { filename: ctx.sourceRelPath }), severity: 'warning' }
                             ));
-                            synthesized.push({ name: bAttr.name, literal: true });
+                            synthesized.push({ kind: 'literal', name: bAttr.name, value: true });
                         } else if (caller.kind === 'plain') {
                             // bare attribute — premium
-                            synthesized.push({ name: bAttr.name, literal: true });
+                            synthesized.push({ kind: 'literal', name: bAttr.name, value: true });
                         } else {
                             // expr — :premium="..."
-                            synthesized.push({ name: bAttr.name, data: caller.expr!, cast: 'bool' });
+                            synthesized.push({ kind: 'expr', name: bAttr.name, data: caller.expr!, cast: 'bool' });
                         }
                     }
                 }
@@ -575,11 +575,11 @@ function resolveCustomElementCalls(
     for (const [filePath, compiled] of files) {
         for (const [, root] of compiled.partials) {
             visitPartialRefs(root.tnodes, (ref) => {
-                if (!ref.customElement) return;
+                if (ref.kind !== 'custom-element') return;
                 if (ref.file !== null) return; // already resolved (shouldn't happen at this stage)
 
                 const sameFilePartial = compiled.partials.get(ref.partialName);
-                if (sameFilePartial && sameFilePartial.customElement) {
+                if (sameFilePartial && sameFilePartial.kind === 'custom-element') {
                     // Resolves to same-file definition; keep file = null
                     return;
                 }
@@ -754,7 +754,7 @@ export async function compileDirectory(dir: string, options?: CompileOptions): P
         // the other compile-time diagnostics — same channel as the unresolved
         // custom-element warnings emitted earlier.
         for (const [, root] of compiled.partials) {
-            if (root.customElement === true) {
+            if (root.kind === 'custom-element') {
                 allErrors.push(...validateBAttrUsage(root, relPath));
             }
         }

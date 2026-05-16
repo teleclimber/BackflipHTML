@@ -1,7 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import { inferFreeVars, inferDataShape, validateBAttrUsage, type DataShape } from './data-shape.ts';
 import { interpretBackcode } from './backcode.ts';
-import type { RootTNode, TNode, ForTNode, IfTNode, PrintTNode, AttrBindTNode, PartialRefTNode, SlotTNode, RawTNode, ParentTNode } from './types.ts';
+import type { RootTNode, CustomElementPartialRoot, TNode, ForTNode, IfTNode, PrintTNode, AttrBindTNode, PartialRefTNode, SlotTNode, RawTNode, ParentTNode } from './types.ts';
 import type { Parsed } from './backcode.ts';
 
 // Helper to create a Parsed object with given vars (no AST — for inferFreeVars tests)
@@ -15,9 +15,14 @@ function realParsed(code: string): Parsed {
 }
 
 function makeRoot(tnodes: TNode[]): RootTNode {
-	const root: RootTNode = { type: 'root', tnodes: [] };
+	const root: RootTNode = { type: 'root', kind: 'named', tnodes: [] };
 	root.tnodes = tnodes;
 	return root;
+}
+
+function asBAttrRoot(root: RootTNode): CustomElementPartialRoot {
+	(root as { kind: 'named' | 'custom-element' }).kind = 'custom-element';
+	return root as CustomElementPartialRoot;
 }
 
 function makePrint(vars: string[]): PrintTNode {
@@ -55,11 +60,12 @@ function makeAttrBind(dynamicParts: { name: string, vars: string[] }[]): AttrBin
 function makePartialRef(bindingVars: { name: string, vars: string[] }[], slotContents?: Record<string, TNode[]>): PartialRefTNode {
 	return {
 		type: 'partial-ref',
+		kind: 'b-part' as const,
 		file: null,
 		partialName: 'test',
 		wrapper: null,
 		slots: slotContents ?? { 'default': [] },
-		bindings: bindingVars.map(b => ({ name: b.name, data: parsed(b.vars) })),
+		bindings: bindingVars.map(b => ({ kind: 'expr' as const, name: b.name, data: parsed(b.vars) })),
 		parent: {} as ParentTNode,
 		loc: undefined,
 	};
@@ -244,11 +250,12 @@ function makeAttrBindReal(parts: { name: string, code: string }[]): AttrBindTNod
 function makePartialRefReal(partialName: string, bindings: { name: string, code: string }[], slotContents?: Record<string, TNode[]>): PartialRefTNode {
 	return {
 		type: 'partial-ref',
+		kind: 'b-part' as const,
 		file: null,
 		partialName,
 		wrapper: null,
 		slots: slotContents ?? { 'default': [] },
-		bindings: bindings.map(b => ({ name: b.name, data: realParsed(b.code) })),
+		bindings: bindings.map(b => ({ kind: 'expr' as const, name: b.name, data: realParsed(b.code) })),
 		parent: {} as ParentTNode,
 		loc: undefined,
 	};
@@ -558,7 +565,7 @@ Deno.test("inferDataShape: b-if condition + body vars tracked separately", () =>
 
 Deno.test("inferDataShape: pre-seeds b-attr non-bool variable as scalar 'string'", () => {
 	const root = makeRoot([makePrintReal('premium')]);
-	root.bAttrs = [{ name: 'premium', isBool: false }];
+	asBAttrRoot(root).bAttrs =[{ name: 'premium', isBool: false }];
 	const shapes = inferDataShape(root);
 	const s = shapes.get('premium')!;
 	assertEquals(s.scalar, 'string');
@@ -567,7 +574,7 @@ Deno.test("inferDataShape: pre-seeds b-attr non-bool variable as scalar 'string'
 
 Deno.test("inferDataShape: pre-seeds b-attr bool variable as scalar 'bool'", () => {
 	const root = makeRoot([makePrintReal('premium')]);
-	root.bAttrs = [{ name: 'premium', isBool: true }];
+	asBAttrRoot(root).bAttrs =[{ name: 'premium', isBool: true }];
 	const shapes = inferDataShape(root);
 	const s = shapes.get('premium')!;
 	assertEquals(s.scalar, 'bool');
@@ -577,7 +584,7 @@ Deno.test("inferDataShape: unused b-attr variable still appears in shape map", (
 	const root = makeRoot([
 		{ type: 'raw', raw: '<p>static</p>', parent: {} as ParentTNode } as RawTNode,
 	]);
-	root.bAttrs = [{ name: 'premium', isBool: true }, { name: 'label', isBool: false }];
+	asBAttrRoot(root).bAttrs =[{ name: 'premium', isBool: true }, { name: 'label', isBool: false }];
 	const shapes = inferDataShape(root);
 	assertEquals(shapes.has('premium'), true);
 	assertEquals(shapes.get('premium')!.scalar, 'bool');
@@ -586,7 +593,7 @@ Deno.test("inferDataShape: unused b-attr variable still appears in shape map", (
 
 Deno.test("inferDataShape: pre-seeds multiple b-attrs with mixed bool/string", () => {
 	const root = makeRoot([]);
-	root.bAttrs = [
+	asBAttrRoot(root).bAttrs =[
 		{ name: 'premium', isBool: true },
 		{ name: 'label', isBool: false },
 		{ name: 'checked', isBool: true },
@@ -609,7 +616,7 @@ Deno.test("validateBAttrUsage: error when b-attr used as iterable (b-for)", () =
 	const root = makeRoot([
 		makeForReal('item', 'items', [makePrintReal('item')]),
 	]);
-	root.bAttrs = [{ name: 'items', isBool: false }];
+	asBAttrRoot(root).bAttrs =[{ name: 'items', isBool: false }];
 	const errors = validateBAttrUsage(root, 'test.html');
 	assertEquals(errors.length, 1);
 	assertEquals(errors[0].severity, 'fatal');
@@ -619,7 +626,7 @@ Deno.test("validateBAttrUsage: error when b-attr used as iterable (b-for)", () =
 
 Deno.test("validateBAttrUsage: error when b-attr used as object (member access)", () => {
 	const root = makeRoot([makePrintReal('user.name')]);
-	root.bAttrs = [{ name: 'user', isBool: false }];
+	asBAttrRoot(root).bAttrs =[{ name: 'user', isBool: false }];
 	const errors = validateBAttrUsage(root, 'test.html');
 	assertEquals(errors.length, 1);
 	assertEquals(errors[0].message.includes('user'), true);
@@ -627,14 +634,14 @@ Deno.test("validateBAttrUsage: error when b-attr used as object (member access)"
 
 Deno.test("validateBAttrUsage: error when b-attr is indexed", () => {
 	const root = makeRoot([makePrintReal('items[0]')]);
-	root.bAttrs = [{ name: 'items', isBool: false }];
+	asBAttrRoot(root).bAttrs =[{ name: 'items', isBool: false }];
 	const errors = validateBAttrUsage(root, 'test.html');
 	assertEquals(errors.length, 1);
 });
 
 Deno.test("validateBAttrUsage: warning when bool b-attr is printed", () => {
 	const root = makeRoot([makePrintReal('premium')]);
-	root.bAttrs = [{ name: 'premium', isBool: true }];
+	asBAttrRoot(root).bAttrs =[{ name: 'premium', isBool: true }];
 	const errors = validateBAttrUsage(root, 'test.html');
 	assertEquals(errors.length, 1);
 	assertEquals(errors[0].severity, 'warning');
@@ -643,7 +650,7 @@ Deno.test("validateBAttrUsage: warning when bool b-attr is printed", () => {
 
 Deno.test("validateBAttrUsage: no warning when string b-attr is printed", () => {
 	const root = makeRoot([makePrintReal('label')]);
-	root.bAttrs = [{ name: 'label', isBool: false }];
+	asBAttrRoot(root).bAttrs =[{ name: 'label', isBool: false }];
 	const errors = validateBAttrUsage(root, 'test.html');
 	assertEquals(errors.length, 0);
 });
@@ -652,7 +659,7 @@ Deno.test("validateBAttrUsage: no warning when string b-attr is used as boolean"
 	const root = makeRoot([
 		makeIfReal([{ conditionCode: 'premium', children: [] }]),
 	]);
-	root.bAttrs = [{ name: 'premium', isBool: false }];
+	asBAttrRoot(root).bAttrs =[{ name: 'premium', isBool: false }];
 	const errors = validateBAttrUsage(root, 'test.html');
 	assertEquals(errors.length, 0);
 });
@@ -661,7 +668,7 @@ Deno.test("validateBAttrUsage: no warning when bool b-attr is used as boolean (c
 	const root = makeRoot([
 		makeIfReal([{ conditionCode: 'premium', children: [] }]),
 	]);
-	root.bAttrs = [{ name: 'premium', isBool: true }];
+	asBAttrRoot(root).bAttrs =[{ name: 'premium', isBool: true }];
 	const errors = validateBAttrUsage(root, 'test.html');
 	assertEquals(errors.length, 0);
 });
@@ -670,7 +677,7 @@ Deno.test("validateBAttrUsage: no error/warning when b-attr passed to sub-partia
 	const root = makeRoot([
 		makePartialRefReal('card', [{ name: 'title', code: 'label' }]),
 	]);
-	root.bAttrs = [{ name: 'label', isBool: false }];
+	asBAttrRoot(root).bAttrs =[{ name: 'label', isBool: false }];
 	const errors = validateBAttrUsage(root, 'test.html');
 	assertEquals(errors.length, 0);
 });
@@ -679,7 +686,7 @@ Deno.test("validateBAttrUsage: no warning when bool b-attr is used in attribute 
 	const root = makeRoot([
 		makeAttrBindReal([{ name: 'title', code: 'premium' }]),
 	]);
-	root.bAttrs = [{ name: 'premium', isBool: true }];
+	asBAttrRoot(root).bAttrs =[{ name: 'premium', isBool: true }];
 	const errors = validateBAttrUsage(root, 'test.html');
 	// Only 'attribute' usage (not 'printed'), so no warning per spec.
 	assertEquals(errors.length, 0);
@@ -687,7 +694,7 @@ Deno.test("validateBAttrUsage: no warning when bool b-attr is used in attribute 
 
 Deno.test("validateBAttrUsage: error includes filename in loc", () => {
 	const root = makeRoot([makePrintReal('user.name')]);
-	root.bAttrs = [{ name: 'user', isBool: false }];
+	asBAttrRoot(root).bAttrs =[{ name: 'user', isBool: false }];
 	const errors = validateBAttrUsage(root, 'pages/index.html');
 	assertEquals(errors.length, 1);
 	assertEquals(errors[0].filename, 'pages/index.html');

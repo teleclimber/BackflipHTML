@@ -4,7 +4,7 @@ import type { TNode, RootTNode } from '../compiler/types.ts';
 
 /** Helper: create a minimal parent for ChildTNodes. */
 function dummyRoot(): RootTNode {
-	return { type: 'root', tnodes: [], exported: false };
+	return { type: 'root', kind: 'named', tnodes: [], exported: false };
 }
 
 /** Create a slot TNode. */
