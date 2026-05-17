@@ -135,7 +135,18 @@ export interface ElementTNode {
 	closeTagLoc?: SourceLoc,   // location of just `</tagName>` (absent for void/self-closing)
 }
 
-export type TNode = RawTNode | PrintTNode | ForTNode | IfTNode | SlotTNode | PartialRefTNode | ElementTNode;
+// Produced by flattenStatics when an ElementTNode has dynamic attrs but its
+// children are otherwise leaf-flat (raw / attr-bind). Represents just the
+// attribute slot of an open tag — the surrounding `<tagName`, `>`/` />`, and
+// `</tagName>` are emitted as separate RawTNode siblings, letting the parent's
+// flattening coalesce static structure across the element boundary.
+export interface AttrBindTNode {
+	type: 'attr-bind',
+	attrs: AttrPart[],   // both static and dynamic, rendered in order
+	loc?: SourceLoc,
+}
+
+export type TNode = RawTNode | PrintTNode | ForTNode | IfTNode | SlotTNode | PartialRefTNode | ElementTNode | AttrBindTNode;
 export type ParentTNode = RootTNode | ForTNode | IfBranch | ElementTNode;
 
 export interface AssetRef {

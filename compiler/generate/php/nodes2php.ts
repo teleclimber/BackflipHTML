@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, CustomElementCallTNode, PartialBinding, ElementTNode, AttrPart, CompiledFile } from '../../types.js';
+import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, CustomElementCallTNode, PartialBinding, ElementTNode, AttrBindTNode, AttrPart, CompiledFile } from '../../types.js';
 import type { Parsed } from '../../backcode.js';
 import { generatePhpFunction } from './generatephp.js';
 
@@ -34,6 +34,9 @@ export function nodeToPhp(n: TNode | RootTNode, assetMap?: Map<string, string>):
 			break;
 		case 'element':
 			out = elementToPhp(n, assetMap);
+			break;
+		case 'attr-bind':
+			out = attrPartsToAttrsOnlyRNodePhp(n.attrs, assetMap);
 			break;
 		default:
 			throw new Error("unhandled node type");

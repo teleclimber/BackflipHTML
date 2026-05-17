@@ -2,7 +2,7 @@ import { assertEquals } from "jsr:@std/assert";
 
 import type {
 	RootTNode, TNode, RawTNode, ElementTNode, ForTNode, IfTNode,
-	PrintTNode, PartialRefTNode, AttrPart,
+	PrintTNode, PartialRefTNode, AttrBindTNode, AttrPart,
 } from "./types.ts";
 import { interpretBackcode } from "./backcode.ts";
 import { flattenStatics } from "./flatten.ts";
@@ -44,16 +44,79 @@ Deno.test("flatten: fully-static element becomes a single raw", () => {
 	assertEquals(out.tnodes[0], { type: 'raw', raw: '<div class="foo">hello</div>' });
 });
 
-Deno.test("flatten: element with dynamic attr is not flattened", () => {
+Deno.test("flatten: element with dynamic attr decomposes around an AttrBindTNode", () => {
 	const tree = root([
 		el('div', [staticAttr(' '), dynamicAttr('class', 'cls')], [raw('hello')]),
+	]);
+	const out = flattenStatics(tree);
+	assertEquals(out.tnodes.length, 3);
+	assertEquals(out.tnodes[0], { type: 'raw', raw: '<div' });
+	assertEquals(out.tnodes[1].type, 'attr-bind');
+	const ab = out.tnodes[1] as AttrBindTNode;
+	assertEquals(ab.attrs.length, 2);
+	assertEquals(ab.attrs[0], { type: 'static', raw: ' ' });
+	assertEquals(ab.attrs[1].type, 'dynamic');
+	assertEquals(out.tnodes[2], { type: 'raw', raw: '>hello</div>' });
+});
+
+Deno.test("flatten: dynamic attr deep in a static wrapper still flattens outer raws", () => {
+	// <div><p :class="cls">blahs</p></div>
+	const tree = root([
+		el('div', [], [
+			el('p', [dynamicAttr('class', 'cls')], [raw('blahs')]),
+		]),
+	]);
+	const out = flattenStatics(tree);
+	assertEquals(out.tnodes.length, 3);
+	assertEquals(out.tnodes[0], { type: 'raw', raw: '<div><p' });
+	assertEquals(out.tnodes[1].type, 'attr-bind');
+	assertEquals((out.tnodes[1] as AttrBindTNode).attrs.length, 1);
+	assertEquals((out.tnodes[1] as AttrBindTNode).attrs[0].type, 'dynamic');
+	assertEquals(out.tnodes[2], { type: 'raw', raw: '>blahs</p></div>' });
+});
+
+Deno.test("flatten: dynamic attr on self-closing element uses ' />' closer", () => {
+	const tree = root([
+		el('input', [dynamicAttr('value', 'v')], [], { isVoid: true, selfClosing: true }),
+	]);
+	const out = flattenStatics(tree);
+	assertEquals(out.tnodes.length, 3);
+	assertEquals(out.tnodes[0], { type: 'raw', raw: '<input' });
+	assertEquals(out.tnodes[1].type, 'attr-bind');
+	assertEquals(out.tnodes[2], { type: 'raw', raw: ' />' });
+});
+
+Deno.test("flatten: dynamic attr on void element uses '>' closer and no end tag", () => {
+	const tree = root([
+		el('img', [dynamicAttr('src', 's')], [], { isVoid: true }),
+	]);
+	const out = flattenStatics(tree);
+	assertEquals(out.tnodes.length, 3);
+	assertEquals(out.tnodes[0], { type: 'raw', raw: '<img' });
+	assertEquals(out.tnodes[1].type, 'attr-bind');
+	assertEquals(out.tnodes[2], { type: 'raw', raw: '>' });
+});
+
+Deno.test("flatten: element with dynamic attr and dynamic child stays an element", () => {
+	// Children include a print, so the element isn't leaf-flat — keep as ElementTNode.
+	const tree = root([
+		el('div', [dynamicAttr('class', 'cls')], [print('name')]),
 	]);
 	const out = flattenStatics(tree);
 	assertEquals(out.tnodes.length, 1);
 	assertEquals(out.tnodes[0].type, 'element');
 });
 
-Deno.test("flatten: element with dynamic child is not flattened", () => {
+Deno.test("flatten: AttrBindTNode passes through unchanged on a second pass", () => {
+	const tree = root([
+		el('div', [dynamicAttr('class', 'cls')], [raw('hi')]),
+	]);
+	const once = flattenStatics(tree);
+	const twice = flattenStatics(once);
+	assertEquals(twice, once);
+});
+
+Deno.test("flatten: element with dynamic child is kept as an element", () => {
 	const tree = root([
 		el('div', [], [print('name')]),
 	]);
