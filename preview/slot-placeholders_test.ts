@@ -17,9 +17,9 @@ function rawNode(raw: string): TNode {
 	return { type: 'raw', raw } as TNode;
 }
 
-/** Create an attr-bind TNode. */
-function attrBindNode(tagOpen: string): TNode {
-	return { type: 'attr-bind', tagOpen, parts: [] } as TNode;
+/** Create an element TNode wrapping the given children — used to model a `<head>` boundary. */
+function elementNode(tagName: string, children: TNode[]): TNode {
+	return { type: 'element', tagName, attrs: [], tnodes: children } as TNode;
 }
 
 Deno.test("generates placeholder for default slot", () => {
@@ -86,21 +86,17 @@ Deno.test("slot after </head> gets placeholder", () => {
 	assertStringIncludes((slotMap['body-slot'].nodes[0] as any).raw, 'slot: body-slot');
 });
 
-Deno.test("slot inside <head> via attr-bind tnode gets empty nodes", () => {
+Deno.test("slot inside <head> ElementTNode gets empty nodes", () => {
 	const tnodes: TNode[] = [
-		attrBindNode('<head'),
-		slotNode('meta'),
-		rawNode('</head>'),
+		elementNode('head', [slotNode('meta')]),
 	];
 	const slotMap = generateSlotPlaceholders(tnodes);
 	assertEquals(slotMap.meta.nodes.length, 0);
 });
 
-Deno.test("slot outside head is not affected by attr-bind head", () => {
+Deno.test("slot outside head is not affected by a sibling head ElementTNode", () => {
 	const tnodes: TNode[] = [
-		attrBindNode('<head'),
-		slotNode('meta'),
-		rawNode('</head>'),
+		elementNode('head', [slotNode('meta')]),
 		slotNode('content'),
 	];
 	const slotMap = generateSlotPlaceholders(tnodes);

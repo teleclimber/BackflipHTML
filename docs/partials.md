@@ -60,6 +60,16 @@ The `<div>` wrapper is kept in the output. To include without a wrapper, use `<b
 
 If the referenced partial does not exist, that is a compilation error.
 
+### Dynamic attributes on the b-part wrapper
+
+Attributes on the carrying tag (including `:bind`/`b-bind:` dynamic attrs and `~` asset attrs) are rendered on the wrapping element of the partial call.
+
+```html
+<div b-part="#notice" :class="alertCls"></div>
+```
+
+Renders the `<div>` wrapper with `class="..."` evaluated from `alertCls` at render time. Falsy values (null, undefined, false) omit the attribute, matching the standard `b-bind` rule. Use `<b-unwrap b-part="#notice">` if you do not want a wrapping element.
+
 ---
 
 ## Including partials from other files

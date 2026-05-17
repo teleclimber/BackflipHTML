@@ -12,8 +12,7 @@ import type {
 	IfBranch,
 	SlotTNode,
 	PartialRefTNode,
-	AttrBindTNode,
-	AssetRefTNode,
+	ElementTNode,
 	AttrPart,
 	ParentTNode,
 	RootTNode,
@@ -37,7 +36,8 @@ export const BOOLEAN_ATTRS = new Set([
 export type TagMatcher = {
 	tag: string,
 	tnode?: TNode,
-	parent?: ParentTNode,   // cur_parent to restore on close (and the container of tnode)
+	parent?: ParentTNode | null,   // cur_parent to restore on close (the value at open time, may be null)
+	hasParent?: boolean,           // true when `parent` was explicitly saved (distinguishes "no entry" from "saved null")
 	slotCollection?: {
 		partialRef: PartialRefTNode,
 		partialRefParent: ParentTNode,   // container of the partialRef (replaces the dropped node.parent field)
@@ -381,21 +381,9 @@ export function validateStaticAssetAttr(
 
 // --- tag reconstruction ---
 
-// Helper: build tag prefix (no closing >) excluding certain attrs, b-data:*, b-attr:*, bind attrs, and asset~ attrs
-export function buildTagPrefix(tag: {tagName:string, attrs:{name:string,value:string}[], sourceCodeLocation?: unknown}, excludeAttrs: string[]): string {
-	let tag_str = `<${tag.tagName}`;
-	const processed: string[] = [];
-	for (const attr of tag.attrs) {
-		if (excludeAttrs.includes(attr.name) || attr.name.startsWith('b-data:') || attr.name.startsWith('b-attr:') || isBindAttr(attr.name) || isAssetAttr(attr.name)) continue;
-		processed.push(`${attr.name}="${attr.value}"`);
-	}
-	if (processed.length > 0) tag_str += ' ' + processed.join(' ');
-	return tag_str;
-}
-
 /**
- * Build the `data-loc="file#partial:line:col"` attribute appended to raw HTML when
- * source-location tracking is on. Returns '' when locations are disabled, when no
+ * Build the `data-loc="file#partial:line:col"` attribute appended to rendered open tags
+ * when source-location tracking is on. Returns '' when locations are disabled, when no
  * partial is currently being compiled, or when the parser didn't provide a location.
  */
 export function dataLocAttr(
@@ -482,42 +470,12 @@ export function classifyOpenTagAttrs(
 }
 
 /**
- * Assemble a Raw + AssetRefTNode interleaved sequence. Used when there are
- * no bind attrs. `prefix` is prepended to the first raw chunk and `suffix`
- * appended to the final one (callers pass `<tagName` / `>` for full open
- * tags, and empty strings for attrs-only).
+ * Convert a normalized `AttrSegment[]` (from classifyOpenTagAttrs) into an `AttrPart[]`
+ * suitable for `ElementTNode.attrs` (or `definitionAttrs` / `callerAttrs` on custom-element
+ * roots/calls). `trailingStatic` is appended into the final static part (used to inject
+ * the `data-loc=...` attribute when source-location tracking is on).
  */
-export function buildRawAttrSequence(segments: AttrSegment[], prefix: string, suffix: string): TNode[] {
-	const nodes: TNode[] = [];
-	let buf = prefix;
-	for (const seg of segments) {
-		if (seg.kind === 'static') {
-			buf += seg.text;
-		} else if (seg.kind === 'asset') {
-			if (buf) { nodes.push({ type: 'raw', raw: buf } as RawTNode); buf = ''; }
-			nodes.push({ type: 'asset-ref', attrName: seg.attrName, originalValue: seg.originalValue, refs: seg.refs, loc: seg.loc } as AssetRefTNode);
-		}
-		// 'bind' segments don't appear when hasBind is false
-	}
-	buf += suffix;
-	if (buf) nodes.push({ type: 'raw', raw: buf } as RawTNode);
-	if (nodes.length === 0) nodes.push({ type: 'raw', raw: '' } as RawTNode);
-	return nodes;
-}
-
-/**
- * Assemble a single AttrBindTNode from a segment stream that includes at
- * least one bind. `trailingStatic` (typically the data-loc attr) is appended
- * into the final static AttrPart. `attrsOnly` sets the flag so the renderer
- * suppresses `tagOpen` and the trailing `>`.
- */
-export function buildAttrBindNode(
-	segments: AttrSegment[],
-	tagOpen: string,
-	trailingStatic: string,
-	selfClosing: boolean,
-	attrsOnly: boolean,
-): AttrBindTNode {
+export function buildAttrParts(segments: AttrSegment[], trailingStatic: string = ''): AttrPart[] {
 	const parts: AttrPart[] = [];
 	let staticBuf = '';
 	for (const seg of segments) {
@@ -534,12 +492,9 @@ export function buildAttrBindNode(
 			}
 		}
 	}
-	staticBuf += trailingStatic;
+	if (trailingStatic) staticBuf += trailingStatic;
 	if (staticBuf) parts.push({ type: 'static', raw: staticBuf });
-	const node: AttrBindTNode = { type: 'attr-bind', tagOpen, parts };
-	if (selfClosing) node.selfClosing = true;
-	if (attrsOnly) node.attrsOnly = true;
-	return node;
+	return parts;
 }
 
 // --- if-branch lookup ---
@@ -662,6 +617,8 @@ function walkForSlots(tnodes: TNode[], slots: string[]): void {
 			for (const branch of (tnode as IfTNode).branches) {
 				walkForSlots(branch.tnodes, slots);
 			}
+		} else if (tnode.type === 'element') {
+			walkForSlots((tnode as ElementTNode).tnodes, slots);
 		}
 	}
 }
@@ -669,10 +626,9 @@ function walkForSlots(tnodes: TNode[], slots: string[]): void {
 // --- asset resolution (stage 2) ---
 
 /**
- * Stage 2: Resolve AssetRefTNode nodes in a compiled AST using an asset map.
- * Returns a new CompiledFile with AssetRefTNodes replaced by RawTNodes
- * and 'asset' AttrParts replaced by 'static' AttrParts.
- * The input CompiledFile is not mutated.
+ * Stage 2: Resolve `asset` AttrParts in a compiled AST using an asset map.
+ * Returns a new CompiledFile with `asset` parts replaced by `static` parts
+ * (their fully-resolved URLs). The input CompiledFile is not mutated.
  */
 export function resolveAssetRefs(compiled: CompiledFile, assetMap: Map<string, string>): CompiledFile {
 	const newPartials = new Map<string, RootTNode>();
@@ -697,8 +653,8 @@ export function resolveAssetRefs(compiled: CompiledFile, assetMap: Map<string, s
 				...(root.meta ? { meta: root.meta } : {}),
 			};
 		newRoot.tnodes = resolveTNodes(root.tnodes, assetMap);
-		if (root.kind === 'custom-element' && root.definitionAttrNodes) {
-			(newRoot as CustomElementPartialRoot).definitionAttrNodes = resolveTNodes(root.definitionAttrNodes, assetMap);
+		if (root.kind === 'custom-element' && root.definitionAttrs) {
+			(newRoot as CustomElementPartialRoot).definitionAttrs = resolveAttrParts(root.definitionAttrs, assetMap);
 		}
 		newPartials.set(name, newRoot);
 	}
@@ -709,19 +665,6 @@ function resolveTNodes(tnodes: TNode[], assetMap: Map<string, string>): TNode[] 
 	const result: TNode[] = [];
 	for (const node of tnodes) {
 		switch (node.type) {
-			case 'asset-ref': {
-				const n = node as AssetRefTNode;
-				const resolved = replaceAssetRef(n.originalValue, assetMap);
-				const raw = ` ${n.attrName}="${resolved}"`;
-				// Merge into preceding RawTNode if possible
-				const prev = result[result.length - 1];
-				if (prev && prev.type === 'raw') {
-					(prev as RawTNode).raw += raw;
-				} else {
-					result.push({ type: 'raw', raw } as RawTNode);
-				}
-				break;
-			}
 			case 'raw': {
 				const n = node as RawTNode;
 				// Merge into preceding RawTNode if possible
@@ -787,7 +730,6 @@ function resolveTNodes(tnodes: TNode[], assetMap: Map<string, string>): TNode[] 
 						kind: 'b-part',
 						file: n.file,
 						partialName: n.partialName,
-						wrapper: n.wrapper,
 						slots: newSlots,
 						bindings: n.bindings,
 					};
@@ -798,17 +740,24 @@ function resolveTNodes(tnodes: TNode[], assetMap: Map<string, string>): TNode[] 
 					if (n.callerAttrNames) newNode.callerAttrNames = n.callerAttrNames;
 					if (n.callerAttrInfos) newNode.callerAttrInfos = n.callerAttrInfos;
 					if (n.unresolvedRaw) newNode.unresolvedRaw = n.unresolvedRaw;
-					if (n.callerOpenTag) newNode.callerOpenTag = resolveTNodes(n.callerOpenTag, assetMap);
+					if (n.callerAttrs) newNode.callerAttrs = resolveAttrParts(n.callerAttrs, assetMap);
 				}
 				result.push(newNode);
 				break;
 			}
-			case 'attr-bind': {
-				const n = node as AttrBindTNode;
-				const newParts: AttrPart[] = resolveAttrParts(n.parts, assetMap);
-				const newNode: AttrBindTNode = { type: 'attr-bind', tagOpen: n.tagOpen, parts: newParts };
-				if (n.selfClosing) newNode.selfClosing = true;
-				if (n.attrsOnly) newNode.attrsOnly = true;
+			case 'element': {
+				const n = node as ElementTNode;
+				const newNode: ElementTNode = {
+					type: 'element',
+					tagName: n.tagName,
+					attrs: resolveAttrParts(n.attrs, assetMap),
+					tnodes: resolveTNodes(n.tnodes, assetMap),
+				};
+				if (n.selfClosing) newNode.selfClosing = n.selfClosing;
+				if (n.isVoid) newNode.isVoid = n.isVoid;
+				if (n.loc) newNode.loc = n.loc;
+				if (n.openTagLoc) newNode.openTagLoc = n.openTagLoc;
+				if (n.closeTagLoc) newNode.closeTagLoc = n.closeTagLoc;
 				result.push(newNode);
 				break;
 			}
@@ -817,7 +766,7 @@ function resolveTNodes(tnodes: TNode[], assetMap: Map<string, string>): TNode[] 
 	return result;
 }
 
-function resolveAttrParts(parts: AttrPart[], assetMap: Map<string, string>): AttrPart[] {
+export function resolveAttrParts(parts: AttrPart[], assetMap: Map<string, string>): AttrPart[] {
 	const result: AttrPart[] = [];
 	for (const part of parts) {
 		if (part.type === 'asset') {

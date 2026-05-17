@@ -238,6 +238,20 @@ Deno.test("wrapped_caller: b-slot on a regular element rendered through b-part",
     );
 });
 
+Deno.test("dyn_attr_on_wrapper: :class on a b-part wrapper renders the dynamic value", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("ui.html").dyn_attr_on_wrapper, { cls: "primary" })),
+        '<div class="primary"><button>Click me</button></div>'
+    );
+});
+
+Deno.test("dyn_attr_on_wrapper: falsy :class on a b-part wrapper omits the attribute", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("ui.html").dyn_attr_on_wrapper, { cls: null })),
+        '<div><button>Click me</button></div>'
+    );
+});
+
 // ---------------------------------------------------------------------------
 // ui.html — slot_interp: interpolation inside nested element in slot content
 //

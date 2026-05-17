@@ -1,5 +1,5 @@
 import * as acorn from 'acorn';
-import type { RootTNode, TNode, ForTNode, IfTNode, PrintTNode, AttrBindTNode, PartialRefTNode } from './types.js';
+import type { RootTNode, TNode, ForTNode, IfTNode, PrintTNode, ElementTNode, PartialRefTNode } from './types.js';
 import type { Parsed } from './backcode.js';
 import { BackflipError } from './errors.js';
 
@@ -341,13 +341,14 @@ function walkNodesForShape(
 				}
 				break;
 			}
-			case 'attr-bind': {
-				const n = node as AttrBindTNode;
-				for (const part of n.parts) {
+			case 'element': {
+				const n = node as ElementTNode;
+				for (const part of n.attrs) {
 					if (part.type === 'dynamic') {
 						collectFromParsed(part.expr, 'attribute', part.name, scoped, shapes);
 					}
 				}
+				walkNodesForShape(n.tnodes, scoped, shapes);
 				break;
 			}
 			case 'partial-ref': {

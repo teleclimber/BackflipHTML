@@ -1,4 +1,4 @@
-import type { CompiledFile, TNode, AssetRefTNode, AttrBindTNode } from '@backflip/html';
+import type { CompiledFile, TNode, ElementTNode, AttrPart, CustomElementCallTNode, RootTNode, CustomElementPartialRoot } from '@backflip/html';
 import type { AssetReference } from './types.js';
 import { collectCssAssetReferences } from './css-references.js';
 
@@ -11,14 +11,14 @@ export function collectAllAssetReferences(
 ): AssetReference[] {
 	const templateRefs = collectAssetReferences(files);
 	if (!assetDirs) return templateRefs;
-	
+
 	const cssRefs = collectCssAssetReferences(assetDirs);
 	return [...templateRefs, ...cssRefs];
 }
 
 /**
  * Walk Phase 1 (unresolved) compiled files and collect all static asset references.
- * Reads AssetRefTNode nodes and { type: 'asset' } AttrParts from the AST.
+ * Reads `asset` AttrParts from ElementTNode.attrs, custom-element callerAttrs/definitionAttrs.
  */
 export function collectAssetReferences(
 	files: Map<string, CompiledFile>,
@@ -26,10 +26,18 @@ export function collectAssetReferences(
 	const refs: AssetReference[] = [];
 	for (const [filePath, compiled] of files) {
 		for (const [partialName, root] of compiled.partials) {
-			walkTNodes(root.tnodes, filePath, partialName, refs);
+			walkRoot(root, filePath, partialName, refs);
 		}
 	}
 	return refs;
+}
+
+function walkRoot(root: RootTNode, sourceFile: string, partialName: string, out: AssetReference[]): void {
+	walkTNodes(root.tnodes, sourceFile, partialName, out);
+	if (root.kind === 'custom-element') {
+		const cer = root as CustomElementPartialRoot;
+		if (cer.definitionAttrs) collectFromAttrParts(cer.definitionAttrs, sourceFile, partialName, out);
+	}
 }
 
 function walkTNodes(
@@ -40,11 +48,9 @@ function walkTNodes(
 ): void {
 	for (const node of tnodes) {
 		switch (node.type) {
-			case 'asset-ref':
-				collectFromAssetRef(node, sourceFile, partialName, out);
-				break;
-			case 'attr-bind':
-				collectFromAttrBind(node, sourceFile, partialName, out);
+			case 'element':
+				collectFromAttrParts((node as ElementTNode).attrs, sourceFile, partialName, out);
+				walkTNodes((node as ElementTNode).tnodes, sourceFile, partialName, out);
 				break;
 			case 'for':
 				walkTNodes(node.tnodes, sourceFile, partialName, out);
@@ -55,6 +61,10 @@ function walkTNodes(
 				}
 				break;
 			case 'partial-ref':
+				if (node.kind === 'custom-element') {
+					const cec = node as CustomElementCallTNode;
+					if (cec.callerAttrs) collectFromAttrParts(cec.callerAttrs, sourceFile, partialName, out);
+				}
 				for (const slotTNodes of Object.values(node.slots)) {
 					walkTNodes(slotTNodes, sourceFile, partialName, out);
 				}
@@ -63,37 +73,13 @@ function walkTNodes(
 	}
 }
 
-function collectFromAssetRef(
-	node: AssetRefTNode,
+function collectFromAttrParts(
+	parts: AttrPart[],
 	sourceFile: string,
 	partialName: string,
 	out: AssetReference[],
 ): void {
-	for (const ref of node.refs) {
-		out.push({
-			sourceFile,
-			partialName,
-			line: ref.loc?.startLine ?? node.loc?.startLine ?? 0,
-			column: ref.loc?.startCol ?? node.loc?.startCol ?? 0,
-			endLine: ref.loc?.endLine,
-			endColumn: ref.loc?.endCol,
-			subpathLine: ref.subpathLoc?.startLine,
-			subpathColumn: ref.subpathLoc?.startCol,
-			subpathEndLine: ref.subpathLoc?.endLine,
-			subpathEndColumn: ref.subpathLoc?.endCol,
-			assetName: ref.name,
-			assetSubpath: ref.subpath,
-		});
-	}
-}
-
-function collectFromAttrBind(
-	node: AttrBindTNode,
-	sourceFile: string,
-	partialName: string,
-	out: AssetReference[],
-): void {
-	for (const part of node.parts) {
+	for (const part of parts) {
 		if (part.type === 'asset') {
 			for (const ref of part.refs) {
 				out.push({

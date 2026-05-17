@@ -6,7 +6,7 @@ import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { compileDirectory, scanPartials, validateCustomElementUniqueness } from './partials.ts';
-import type { PartialRegistry, PartialRefTNode, AttrBindTNode, TNode } from './types.ts';
+import type { PartialRegistry, PartialRefTNode, TNode } from './types.ts';
 
 // Use /tmp/claude-1000/ as the writable temp dir in this sandbox environment.
 // Deno.env.get('TMPDIR') may point to a read-only path; /tmp/claude-1000/ is always writable.
@@ -961,6 +961,9 @@ function findFirstPartialRef(tnodes: TNode[]): PartialRefTNode | null {
                 const r = findFirstPartialRef(branch.tnodes);
                 if (r) return r;
             }
+        } else if (n.type === 'element') {
+            const r = findFirstPartialRef((n as { tnodes: TNode[] }).tnodes);
+            if (r) return r;
         }
     }
     return null;
@@ -1144,16 +1147,12 @@ Deno.test("compileDirectory - bool b-attr called as :expr patches AttrPart.isBoo
     assertEquals(fatal.length, 0, `unexpected fatals: ${JSON.stringify(fatal.map(e => e.message))}`);
     const post = directory.files.get("page.html")!.partials.get("post")!;
     const ref = findFirstPartialRef(post.tnodes);
-    if (!ref || ref.kind !== 'custom-element' || !ref.callerOpenTag) throw new Error("no callerOpenTag");
+    if (!ref || ref.kind !== 'custom-element' || !ref.callerAttrs) throw new Error("no callerAttrs");
     let found = false;
-    for (const n of ref.callerOpenTag) {
-        if (n.type !== 'attr-bind') continue;
-        const ab = n as AttrBindTNode;
-        for (const part of ab.parts) {
-            if (part.type === 'dynamic' && part.name === 'premium') {
-                assertEquals(part.isBoolean, true);
-                found = true;
-            }
+    for (const part of ref.callerAttrs) {
+        if (part.type === 'dynamic' && part.name === 'premium') {
+            assertEquals(part.isBoolean, true);
+            found = true;
         }
     }
     assertEquals(found, true, "expected dynamic AttrPart for premium with isBoolean=true");

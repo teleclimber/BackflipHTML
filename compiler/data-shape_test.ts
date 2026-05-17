@@ -1,7 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import { inferFreeVars, inferDataShape, validateBAttrUsage, type DataShape } from './data-shape.ts';
 import { interpretBackcode } from './backcode.ts';
-import type { RootTNode, CustomElementPartialRoot, TNode, ForTNode, IfTNode, PrintTNode, AttrBindTNode, PartialRefTNode, SlotTNode, RawTNode, ParentTNode } from './types.ts';
+import type { RootTNode, CustomElementPartialRoot, TNode, ForTNode, IfTNode, PrintTNode, ElementTNode, PartialRefTNode, SlotTNode, RawTNode, ParentTNode } from './types.ts';
 import type { Parsed } from './backcode.ts';
 
 // Helper to create a Parsed object with given vars (no AST — for inferFreeVars tests)
@@ -43,16 +43,17 @@ function makeIf(branches: { conditionVars?: string[], children: TNode[] }[]): If
 	return ifNode;
 }
 
-function makeAttrBind(dynamicParts: { name: string, vars: string[] }[]): AttrBindTNode {
+function makeAttrBind(dynamicParts: { name: string, vars: string[] }[]): ElementTNode {
 	return {
-		type: 'attr-bind',
-		tagOpen: '<div',
-		parts: dynamicParts.map(p => ({
+		type: 'element',
+		tagName: 'div',
+		attrs: dynamicParts.map(p => ({
 			type: 'dynamic' as const,
 			name: p.name,
 			expr: parsed(p.vars),
 			isBoolean: false,
 		})),
+		tnodes: [],
 	};
 }
 
@@ -62,7 +63,6 @@ function makePartialRef(bindingVars: { name: string, vars: string[] }[], slotCon
 		kind: 'b-part' as const,
 		file: null,
 		partialName: 'test',
-		wrapper: null,
 		slots: slotContents ?? { 'default': [] },
 		bindings: bindingVars.map(b => ({ kind: 'expr' as const, name: b.name, data: parsed(b.vars) })),
 		loc: undefined,
@@ -231,16 +231,17 @@ function makeIfReal(branches: { conditionCode?: string, children: TNode[] }[]): 
 	return ifNode;
 }
 
-function makeAttrBindReal(parts: { name: string, code: string }[]): AttrBindTNode {
+function makeAttrBindReal(parts: { name: string, code: string }[]): ElementTNode {
 	return {
-		type: 'attr-bind',
-		tagOpen: '<div',
-		parts: parts.map(p => ({
+		type: 'element',
+		tagName: 'div',
+		attrs: parts.map(p => ({
 			type: 'dynamic' as const,
 			name: p.name,
 			expr: realParsed(p.code),
 			isBoolean: false,
 		})),
+		tnodes: [],
 	};
 }
 
@@ -250,7 +251,6 @@ function makePartialRefReal(partialName: string, bindings: { name: string, code:
 		kind: 'b-part' as const,
 		file: null,
 		partialName,
-		wrapper: null,
 		slots: slotContents ?? { 'default': [] },
 		bindings: bindings.map(b => ({ kind: 'expr' as const, name: b.name, data: realParsed(b.code) })),
 		loc: undefined,

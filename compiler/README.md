@@ -12,6 +12,19 @@ Key function:
 
 - `compilePartial()` — compiles a single partial's HTML slice (paired with its `PartialDef`) into a `RootTNode`. The file-level pipeline lives in `partials.ts` (`scanPartials` → slice per def → `compilePartial`).
 
+### TNode taxonomy (`types.ts`)
+
+The AST is a tree of `TNode`s under a `RootTNode`. Each variant models one structural concern:
+
+- `RawTNode` — pre-rendered HTML text (escaped at parse time as needed).
+- `PrintTNode` — `{{ expr }}` interpolation (escaped at render time).
+- `ElementTNode` — an HTML element: `tagName`, `attrs: AttrPart[]` (mixed `static` / `dynamic` / `asset`), and `tnodes` (body content). Carries source locations (`openTagLoc`, `closeTagLoc`, `loc`) for LSP and Phase 5 flatten.
+- `ForTNode` / `IfTNode` (with `IfBranch`) — flow control, holding nested `tnodes`.
+- `SlotTNode` — slot insertion point.
+- `PartialRefTNode` — discriminated by `kind: 'b-part' | 'custom-element'`. The `BPartCallTNode` variant references another partial; its wrapping element (if any) is an enclosing `ElementTNode` in the tree. The `CustomElementCallTNode` variant carries `callerAttrs: AttrPart[]` for the call-site attrs that the runtime merges with the definition's `definitionAttrs`.
+
+`AttrPart` itself is `static` (literal text), `dynamic` (runtime-evaluated expression), or `asset` (compile-time-resolved `@name/...` URL). The `resolveAssetRefs()` pass replaces `asset` parts with `static` parts after compilation.
+
 ### Expression language (`backcode.ts`)
 
 Handles expressions used in directives and `{{ }}` interpolations. Uses `acorn` to parse expressions as a safe subset of JavaScript (identifiers, literals, member access, unary operators). Validates that only allowed constructs are used and extracts the list of variable names each expression depends on.

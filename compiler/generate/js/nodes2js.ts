@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, CustomElementCallTNode, PartialBinding, AttrBindTNode, AttrPart, CompiledFile } from '../../types.js';
+import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, CustomElementCallTNode, PartialBinding, ElementTNode, AttrPart, CompiledFile } from '../../types.js';
 import type { Parsed } from '../../backcode.js';
 import { generateFunction } from './generatejs.js';
 
@@ -36,11 +36,9 @@ export function nodeToJS(n :TNode|RootTNode, assetMap?: Map<string, string>) :st
 		case 'partial-ref':
 			out = partialRefToJS(n, assetMap);
 			break;
-		case 'attr-bind':
-			out = attrBindToJS(n, assetMap);
+		case 'element':
+			out = elementToJS(n, assetMap);
 			break;
-		case 'asset-ref':
-			throw new Error("unresolved asset-ref node — call resolveAssetRefs() before code generation");
 		default:
 			throw new Error("unhandled node type");
 	}
@@ -50,9 +48,12 @@ export function nodeToJS(n :TNode|RootTNode, assetMap?: Map<string, string>) :st
 
 function rootToJS(n: RootTNode, assetMap?: Map<string, string>): string {
 	const body = n.tnodes!.map(nn => nodeToJS(nn, assetMap)).join(',\n');
-	if (n.kind === 'custom-element' && n.definitionAttrNodes) {
-		const defAttrs = n.definitionAttrNodes.map(nn => nodeToJS(nn, assetMap)).join(',\n');
+	if (n.kind === 'custom-element' && n.definitionAttrs && n.definitionAttrs.length > 0) {
+		const defAttrs = attrPartsToAttrsOnlyRNodeJS(n.definitionAttrs, assetMap);
 		return `{ type:"root", customElement: true, definitionAttrNodes: [\n${defAttrs}\n], nodes: [\n${body}\n] }`;
+	}
+	if (n.kind === 'custom-element') {
+		return `{ type:"root", customElement: true, definitionAttrNodes: [], nodes: [\n${body}\n] }`;
 	}
 	return `{ type:"root", nodes: [\n${body}\n] }`;
 }
@@ -120,10 +121,6 @@ function partialRefToJS(n: PartialRefTNode, assetMap?: Map<string, string>) :str
 		? sanitizeName(n.partialName)
 		: importAliasFor(n.file, n.partialName);
 
-	const wrapper = n.wrapper === null
-		? 'null'
-		: `{ open: '${escapeStr(n.wrapper.open)}', close: '${escapeStr(n.wrapper.close)}' }`;
-
 	const slots = Object.entries(n.slots)
 		.map(([name, tnodes]) => `'${name}': [\n${tnodes.map(t => nodeToJS(t, assetMap)).join(',\n')}\n]`)
 		.join(',\n');
@@ -132,7 +129,6 @@ function partialRefToJS(n: PartialRefTNode, assetMap?: Map<string, string>) :str
 
 	return `{ type: 'partial-ref',
 	partial: ${partialIdent},
-	wrapper: ${wrapper},
 	slots: { ${slots} },
 	bindings: [ ${bindings} ]
 }`;
@@ -140,7 +136,9 @@ function partialRefToJS(n: PartialRefTNode, assetMap?: Map<string, string>) :str
 
 function customElementRefToJS(n: CustomElementCallTNode, assetMap?: Map<string, string>): string {
 	const tagName = n.callerTagName ?? n.partialName;
-	const callerOpenTag = (n.callerOpenTag ?? []).map(t => nodeToJS(t, assetMap)).join(',\n');
+	const callerAttrsExpr = (n.callerAttrs && n.callerAttrs.length > 0)
+		? attrPartsToAttrsOnlyRNodeJS(n.callerAttrs, assetMap)
+		: '';
 	const slots = Object.entries(n.slots)
 		.map(([name, tnodes]) => `'${name}': [\n${tnodes.map(t => nodeToJS(t, assetMap)).join(',\n')}\n]`)
 		.join(',\n');
@@ -152,7 +150,7 @@ function customElementRefToJS(n: CustomElementCallTNode, assetMap?: Map<string, 
 	customElement: true,
 	unresolved: true,
 	callerTagName: '${escapeStr(tagName)}',
-	callerOpenTag: [\n${callerOpenTag}\n],
+	callerOpenTag: [${callerAttrsExpr}],
 	slots: { ${slots} },
 	bindings: [ ${bindings} ]
 }`;
@@ -166,22 +164,50 @@ function customElementRefToJS(n: CustomElementCallTNode, assetMap?: Map<string, 
 	customElement: true,
 	partial: ${partialIdent},
 	callerTagName: '${escapeStr(tagName)}',
-	callerOpenTag: [\n${callerOpenTag}\n],
+	callerOpenTag: [${callerAttrsExpr}],
 	slots: { ${slots} },
 	bindings: [ ${bindings} ]
 }`;
 }
 
-function attrBindToJS(n: AttrBindTNode, assetMap?: Map<string, string>): string {
-	if (n.parts.some(p => p.type === 'asset')) {
+// Emit an ElementTNode as a comma-separated sequence of RNode expressions that the
+// caller splices into its parent array literal. The element renders as:
+//   <openTag>[body RNodes]</closeTag>   (close omitted for void / selfClosing)
+// If the open tag has no dynamic attrs, all static parts collapse into a single rawRNode;
+// otherwise an attrBindRNode renders the open tag dynamically at runtime.
+function elementToJS(n: ElementTNode, assetMap?: Map<string, string>): string {
+	const parts: string[] = [];
+	parts.push(openTagRNodeJS(n, assetMap));
+	for (const child of n.tnodes) {
+		parts.push(nodeToJS(child, assetMap));
+	}
+	if (!n.isVoid && !n.selfClosing) {
+		parts.push(`{ type: 'raw', raw: '${escapeStr(`</${n.tagName}>`)}' }`);
+	}
+	return parts.join(',\n');
+}
+
+function openTagRNodeJS(n: ElementTNode, assetMap?: Map<string, string>): string {
+	if (n.attrs.some(p => p.type === 'asset')) {
 		throw new Error("unresolved asset AttrPart — call resolveAssetRefs() before code generation");
 	}
-	const resolvedParts = n.parts as Exclude<AttrPart, { type: 'asset' }>[];
-	const hasAsset = resolvedParts.some(p => p.type === 'dynamic' && p.isAsset);
-	const parts = resolvedParts.map(p =>
+	const hasDynamic = n.attrs.some(p => p.type === 'dynamic');
+	const openCloser = n.selfClosing ? ' />' : '>';
+	if (!hasDynamic) {
+		let raw = `<${n.tagName}`;
+		for (const p of n.attrs) {
+			if (p.type === 'static') raw += p.raw;
+		}
+		raw += openCloser;
+		return `{ type: 'raw', raw: '${escapeStr(raw)}' }`;
+	}
+	const hasAsset = n.attrs.some(p => p.type === 'dynamic' && p.isAsset);
+	const partsExpr = n.attrs.map(p =>
 		p.type === 'static'
 			? `{ type: 'static', raw: '${escapeStr(p.raw)}' }`
-			: `{ type: 'dynamic', name: '${p.name}', expr: ${backcodeToJS(p.expr)}, isBoolean: ${p.isBoolean}${p.isAsset ? ', isAsset: true' : ''} }`
+			: p.type === 'dynamic'
+				? `{ type: 'dynamic', name: '${p.name}', expr: ${backcodeToJS(p.expr)}, isBoolean: ${p.isBoolean}${p.isAsset ? ', isAsset: true' : ''} }`
+				: `/* unreachable: resolved asset */`
 	).join(',\n');
 	let assetMapStr = '';
 	if (hasAsset && assetMap && assetMap.size > 0) {
@@ -189,8 +215,38 @@ function attrBindToJS(n: AttrBindTNode, assetMap?: Map<string, string>): string 
 		assetMapStr = `, assetMap: { ${entries} }`;
 	}
 	const selfClosingStr = n.selfClosing ? ', selfClosing: true' : '';
-	const attrsOnlyStr = n.attrsOnly ? ', attrsOnly: true' : '';
-	return `{ type: 'attr-bind', tagOpen: '${escapeStr(n.tagOpen)}'${assetMapStr}${selfClosingStr}${attrsOnlyStr}, parts: [\n${parts}\n] }`;
+	return `{ type: 'attr-bind', tagOpen: '<${n.tagName}'${assetMapStr}${selfClosingStr}, parts: [\n${partsExpr}\n] }`;
+}
+
+// Build a single RNode expression (either rawRNode or attrBindRNode with attrsOnly:true)
+// representing an AttrPart[] rendered into a tag's open-tag attribute slot. Used for
+// custom-element callerAttrs and definitionAttrs (which the runtime merges into one tag).
+function attrPartsToAttrsOnlyRNodeJS(parts: AttrPart[], assetMap?: Map<string, string>): string {
+	if (parts.some(p => p.type === 'asset')) {
+		throw new Error("unresolved asset AttrPart — call resolveAssetRefs() before code generation");
+	}
+	const hasDynamic = parts.some(p => p.type === 'dynamic');
+	if (!hasDynamic) {
+		let raw = '';
+		for (const p of parts) {
+			if (p.type === 'static') raw += p.raw;
+		}
+		return `{ type: 'raw', raw: '${escapeStr(raw)}' }`;
+	}
+	const hasAsset = parts.some(p => p.type === 'dynamic' && p.isAsset);
+	const partsExpr = parts.map(p =>
+		p.type === 'static'
+			? `{ type: 'static', raw: '${escapeStr(p.raw)}' }`
+			: p.type === 'dynamic'
+				? `{ type: 'dynamic', name: '${p.name}', expr: ${backcodeToJS(p.expr)}, isBoolean: ${p.isBoolean}${p.isAsset ? ', isAsset: true' : ''} }`
+				: `/* unreachable: resolved asset */`
+	).join(',\n');
+	let assetMapStr = '';
+	if (hasAsset && assetMap && assetMap.size > 0) {
+		const entries = Array.from(assetMap).map(([k, v]) => `'${escapeStr(k)}': '${escapeStr(v)}'`).join(', ');
+		assetMapStr = `, assetMap: { ${entries} }`;
+	}
+	return `{ type: 'attr-bind', tagOpen: ''${assetMapStr}, attrsOnly: true, parts: [\n${partsExpr}\n] }`;
 }
 
 function escapeStr(s: string): string {
@@ -219,6 +275,8 @@ function collectPartialRefs(root: RootTNode): PartialRefTNode[] {
 				walk(n.tnodes);
 			} else if (n.type === 'if') {
 				for (const b of n.branches) walk(b.tnodes);
+			} else if (n.type === 'element') {
+				walk(n.tnodes);
 			}
 		}
 	}

@@ -21,7 +21,6 @@ function makePartialRef(partialName: string, file: string | null, loc?: SourceLo
 		kind: 'b-part',
 		partialName,
 		file,
-		wrapper: null,
 		slots: opts?.slots ?? {},
 		bindings: opts?.bindings ?? [],
 		loc,

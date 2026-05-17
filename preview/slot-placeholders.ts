@@ -1,5 +1,5 @@
 import type { SlotMap, RawRNode } from '../runtime/js/render.js';
-import type { TNode, RawTNode, SlotTNode, ForTNode, IfTNode, AttrBindTNode } from '../compiler/types.js';
+import type { TNode, RawTNode, SlotTNode, ForTNode, IfTNode, ElementTNode } from '../compiler/types.js';
 
 const PLACEHOLDER_STYLE = 'background:#e0e0e0;padding:16px;border:1px dashed #999;border-radius:4px;text-align:center;color:#666;font-style:italic;';
 
@@ -42,20 +42,26 @@ function walkSlots(tnodes: TNode[], fn: (name: string) => void): void {
 			for (const branch of (tnode as IfTNode).branches) {
 				walkSlots(branch.tnodes, fn);
 			}
+		} else if (tnode.type === 'element') {
+			walkSlots((tnode as ElementTNode).tnodes, fn);
 		}
 	}
 }
 
 /**
  * Walk tnodes tracking whether we are inside a <head> element.
- * Detects <head> opens/closes in both RawTNode.raw and AttrBindTNode.tagOpen.
+ * Recognizes ElementTNode whose tagName is 'head' as well as legacy raw HTML
+ * with <head>/</head> markers (still possible inside imported / pre-rendered content).
  */
 function findHeadSlots(tnodes: TNode[], inHead: boolean, out: Set<string>): boolean {
 	for (const tnode of tnodes) {
 		if (tnode.type === 'raw') {
 			inHead = updateHeadState((tnode as RawTNode).raw, inHead);
-		} else if (tnode.type === 'attr-bind') {
-			inHead = updateHeadState((tnode as AttrBindTNode).tagOpen, inHead);
+		} else if (tnode.type === 'element') {
+			const el = tnode as ElementTNode;
+			const isHead = el.tagName === 'head';
+			inHead = findHeadSlots(el.tnodes, inHead || isHead, out);
+			if (isHead) inHead = false;
 		} else if (tnode.type === 'slot') {
 			if (inHead) out.add((tnode as SlotTNode).name ?? 'default');
 		} else if (tnode.type === 'for') {

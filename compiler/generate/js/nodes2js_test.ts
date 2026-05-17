@@ -188,30 +188,26 @@ Deno.test("partial-ref node with same-file reference", () => {
 		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
-		wrapper: null,
 		slots: {},
 		bindings: [],
 	};
 	const js = nodeToJS(node);
 	assertMatch(js, /type:\s*'partial-ref'/);
 	assertMatch(js, /partial:\s*notice/);
-	assertMatch(js, /wrapper:\s*null/);
+	assertEquals(/wrapper:/.test(js), false);
 });
 
-Deno.test("partial-ref node with wrapper", () => {
-	const root = makeRoot();
+Deno.test("partial-ref no longer emits a wrapper field", () => {
 	const node: PartialRefTNode = {
 		type: 'partial-ref',
 		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
-		wrapper: { open: '<div class="x">', close: '</div>' },
 		slots: {},
 		bindings: [],
 	};
 	const js = nodeToJS(node);
-	assertMatch(js, /open:/);
-	assertMatch(js, /close:/);
+	assertEquals(/wrapper:/.test(js), false);
 });
 
 Deno.test("partial-ref node with default slot content", () => {
@@ -222,7 +218,6 @@ Deno.test("partial-ref node with default slot content", () => {
 		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
-		wrapper: null,
 		slots: { default: [slotRaw] },
 		bindings: [],
 	};
@@ -239,7 +234,6 @@ Deno.test("partial-ref node with binding", () => {
 		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
-		wrapper: null,
 		slots: {},
 		bindings: [{ kind: 'expr', name: 'mood', data: makeParsed('user.mood') }],
 	};
@@ -256,7 +250,6 @@ Deno.test("partial-ref binding with literal true (bare boolean)", () => {
 		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
-		wrapper: null,
 		slots: {},
 		bindings: [{ kind: 'literal', name: 'premium', value: true }],
 	};
@@ -274,7 +267,6 @@ Deno.test("partial-ref binding with literal false", () => {
 		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
-		wrapper: null,
 		slots: {},
 		bindings: [{ kind: 'literal', name: 'premium', value: false }],
 	};
@@ -290,7 +282,6 @@ Deno.test("partial-ref binding with literal string value", () => {
 		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
-		wrapper: null,
 		slots: {},
 		bindings: [{ kind: 'literal', name: 'label', value: "hello" }],
 	};
@@ -306,7 +297,6 @@ Deno.test("partial-ref binding with literal string escapes single quotes", () =>
 		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
-		wrapper: null,
 		slots: {},
 		bindings: [{ kind: 'literal', name: 'label', value: "it's" }],
 	};
@@ -321,7 +311,6 @@ Deno.test("partial-ref binding with cast=bool", () => {
 		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
-		wrapper: null,
 		slots: {},
 		bindings: [{ kind: 'expr', name: 'premium', data: makeParsed('user.isPro'), cast: 'bool' }],
 	};
@@ -338,7 +327,6 @@ Deno.test("partial-ref binding with cast=string", () => {
 		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
-		wrapper: null,
 		slots: {},
 		bindings: [{ kind: 'expr', name: 'label', data: makeParsed('count'), cast: 'string' }],
 	};
@@ -364,7 +352,7 @@ Deno.test("custom-element partial-ref binding shapes coexist", () => {
 			{ kind: 'expr', name: 'count', data: makeParsed('n'), cast: 'string' }
 		],
 		callerTagName: 'my-card',
-		callerOpenTag: [],
+		callerAttrs: [],
 	};
 	const js = nodeToJS(node);
 	assertMatch(js, /name:\s*'title'/);
@@ -383,7 +371,6 @@ Deno.test("partial-ref with cross-file reference uses import alias", () => {
 		kind: 'b-part' as const,
 		file: 'graphics/charts.html',
 		partialName: 'pie-chart',
-		wrapper: null,
 		slots: {},
 		bindings: [],
 	};
@@ -409,7 +396,6 @@ Deno.test("fileToJsModule emits import for cross-file partial-ref", () => {
 		kind: 'b-part' as const,
 		file: 'graphics/charts.html',
 		partialName: 'pie-chart',
-		wrapper: null,
 		slots: {},
 		bindings: [],
 	};
@@ -430,7 +416,7 @@ Deno.test("fileToJsModule same-file dep comes before dependent", () => {
 	const postRoot: RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
 	const ref: PartialRefTNode = {
 		type: 'partial-ref', kind: 'b-part', file: null, partialName: 'notice',
-		wrapper: null, slots: {}, bindings: []
+		slots: {}, bindings: []
 	};
 	postRoot.tnodes.push(ref);
 

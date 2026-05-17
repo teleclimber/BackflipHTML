@@ -147,14 +147,13 @@ Deno.test("partial-ref node with same-file reference", () => {
 		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
-		wrapper: null,
 		slots: {},
 		bindings: [],
 	};
 	const php = nodeToPhp(node);
 	assertMatch(php, /'type' => 'partial-ref'/);
 	assertMatch(php, /'partial' => \$notice/);
-	assertMatch(php, /'wrapper' => null/);
+	assertEquals(/'wrapper' =>/.test(php), false);
 });
 
 Deno.test("partial-ref node with cross-file reference uses variable alias", () => {
@@ -164,7 +163,6 @@ Deno.test("partial-ref node with cross-file reference uses variable alias", () =
 		kind: 'b-part' as const,
 		file: 'graphics/charts.html',
 		partialName: 'pie-chart',
-		wrapper: null,
 		slots: {},
 		bindings: [],
 	};
@@ -172,20 +170,17 @@ Deno.test("partial-ref node with cross-file reference uses variable alias", () =
 	assertMatch(php, /\$graphics_charts__pie_chart/);
 });
 
-Deno.test("partial-ref node with wrapper", () => {
-	const root = makeRoot();
+Deno.test("partial-ref no longer emits a wrapper field", () => {
 	const node: PartialRefTNode = {
 		type: 'partial-ref',
 		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
-		wrapper: { open: '<div class="x">', close: '</div>' },
 		slots: {},
 		bindings: [],
 	};
 	const php = nodeToPhp(node);
-	assertMatch(php, /'open' =>/);
-	assertMatch(php, /'close' =>/);
+	assertEquals(/'wrapper' =>/.test(php), false);
 });
 
 Deno.test("partial-ref node with default slot content", () => {
@@ -196,7 +191,6 @@ Deno.test("partial-ref node with default slot content", () => {
 		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
-		wrapper: null,
 		slots: { default: [slotRaw] },
 		bindings: [],
 	};
@@ -213,7 +207,6 @@ Deno.test("partial-ref node with binding", () => {
 		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
-		wrapper: null,
 		slots: {},
 		bindings: [{ kind: 'expr', name: 'mood', data: makeParsed('user.mood') }],
 	};
@@ -230,7 +223,6 @@ Deno.test("partial-ref binding with literal true (bare boolean)", () => {
 		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
-		wrapper: null,
 		slots: {},
 		bindings: [{ kind: 'literal', name: 'premium', value: true }],
 	};
@@ -248,7 +240,6 @@ Deno.test("partial-ref binding with literal false", () => {
 		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
-		wrapper: null,
 		slots: {},
 		bindings: [{ kind: 'literal', name: 'premium', value: false }],
 	};
@@ -264,7 +255,6 @@ Deno.test("partial-ref binding with literal string value", () => {
 		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
-		wrapper: null,
 		slots: {},
 		bindings: [{ kind: 'literal', name: 'label', value: 'hello' }],
 	};
@@ -280,7 +270,6 @@ Deno.test("partial-ref binding with literal string escapes single quotes", () =>
 		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
-		wrapper: null,
 		slots: {},
 		bindings: [{ kind: 'literal', name: 'label', value: "it's" }],
 	};
@@ -295,7 +284,6 @@ Deno.test("partial-ref binding with cast=bool", () => {
 		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
-		wrapper: null,
 		slots: {},
 		bindings: [{ kind: 'expr', name: 'premium', data: makeParsed('user.isPro'), cast: 'bool' }],
 	};
@@ -312,7 +300,6 @@ Deno.test("partial-ref binding with cast=string", () => {
 		kind: 'b-part' as const,
 		file: null,
 		partialName: 'notice',
-		wrapper: null,
 		slots: {},
 		bindings: [{ kind: 'expr', name: 'label', data: makeParsed('count'), cast: 'string' }],
 	};
@@ -338,7 +325,7 @@ Deno.test("custom-element partial-ref binding shapes coexist", () => {
 			{ kind: 'expr', name: 'count', data: makeParsed('n'), cast: 'string' }
 		],
 		callerTagName: 'my-card',
-		callerOpenTag: [],
+		callerAttrs: [],
 	};
 	const php = nodeToPhp(node);
 	assertMatch(php, /'name' => 'title'/);
@@ -389,7 +376,6 @@ Deno.test("fileToPhpFile emits backflip_require for cross-file partial-ref", () 
 		kind: 'b-part' as const,
 		file: 'graphics/charts.html',
 		partialName: 'pie-chart',
-		wrapper: null,
 		slots: {},
 		bindings: [],
 	};
@@ -410,7 +396,7 @@ Deno.test("fileToPhpFile same-file dep comes before dependent", () => {
 	const postRoot: RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
 	const ref: PartialRefTNode = {
 		type: 'partial-ref', kind: 'b-part', file: null, partialName: 'notice',
-		wrapper: null, slots: {}, bindings: []
+		slots: {}, bindings: []
 	};
 	postRoot.tnodes.push(ref);
 

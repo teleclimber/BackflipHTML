@@ -30,7 +30,7 @@ export interface NamedPartialRoot extends BaseRoot {
 export interface CustomElementPartialRoot extends BaseRoot {
 	kind: 'custom-element',
 	definitionAttrNames?: string[],  // effective attribute names on the definition's wrapping tag
-	definitionAttrNodes?: TNode[],   // attrs-only TNodes for the definition's wrapping tag. Excludes the leading `<tagName` and trailing `>`. Renders the definition's attrs in childCtx at call sites.
+	definitionAttrs?: AttrPart[],    // attr-parts for the definition's wrapping tag. Renders the definition's attrs in childCtx at call sites.
 	bAttrs?: { name: string; isBool: boolean; loc?: SourceLoc }[],  // declared b-attr:* directives on the custom element definition tag
 }
 export type RootTNode = NamedPartialRoot | CustomElementPartialRoot;
@@ -80,12 +80,11 @@ interface BasePartialCall {
 
 export interface BPartCallTNode extends BasePartialCall {
 	kind: 'b-part',
-	wrapper: { open: string, close: string } | null,  // null if <b-unwrap b-part>
 }
 
 export interface CustomElementCallTNode extends BasePartialCall {
 	kind: 'custom-element',
-	callerOpenTag?: TNode[],    // the call-site opening tag broken into TNodes (rendered in caller ctx).
+	callerAttrs?: AttrPart[],   // the call-site attrs (rendered in caller ctx, merged with the definition's attrs into one tag)
 	callerTagName?: string,     // the call-site tag name (= the partial name, but kept explicit for symmetry)
 	callerAttrNames?: string[], // effective attribute names on the call-site tag (used for conflict validation)
 	callerAttrInfos?: {
@@ -124,24 +123,20 @@ export type AttrPart =
 	| { type: 'dynamic'; name: string; expr: Parsed; isBoolean: boolean; isAsset?: boolean; loc?: SourceLoc }
 	| { type: 'asset'; attrName: string; originalValue: string; refs: AssetRef[]; loc?: SourceLoc }
 
-export interface AttrBindTNode {
-	type: 'attr-bind'
-	tagOpen: string   // e.g. `<a`
-	parts: AttrPart[]
-	selfClosing?: boolean
-	attrsOnly?: boolean   // when true, suppress tagOpen prefix and the trailing `>`/` />`. Used by custom element partials so their open-tag attrs can be merged into a single rendered tag.
+export interface ElementTNode {
+	type: 'element',
+	tagName: string,           // e.g. 'div'. Lowercase per HTML.
+	attrs: AttrPart[],         // unified static + dynamic + asset
+	tnodes: TNode[],           // body content (empty for void/self-closing)
+	selfClosing?: boolean,     // emitted as ` />` when set on a void or XHTML self-close
+	isVoid?: boolean,          // 'area', 'br', 'img', etc. (no close tag in output)
+	loc?: SourceLoc,           // location of the full element (open through close)
+	openTagLoc?: SourceLoc,    // location of just `<tagName ...>` for LSP
+	closeTagLoc?: SourceLoc,   // location of just `</tagName>` (absent for void/self-closing)
 }
 
-export interface AssetRefTNode {
-	type: 'asset-ref'
-	attrName: string          // e.g. "src", "srcset"
-	originalValue: string     // e.g. "@images/photo.jpg"
-	refs: AssetRef[]          // parsed refs (1 for src~, N for srcset~)
-	loc?: SourceLoc
-}
-
-export type TNode = RawTNode | PrintTNode | ForTNode | IfTNode | SlotTNode | PartialRefTNode | AttrBindTNode | AssetRefTNode;
-export type ParentTNode = RootTNode | ForTNode | IfBranch;
+export type TNode = RawTNode | PrintTNode | ForTNode | IfTNode | SlotTNode | PartialRefTNode | ElementTNode;
+export type ParentTNode = RootTNode | ForTNode | IfBranch | ElementTNode;
 
 export interface AssetRef {
 	name: string;    // the @name part

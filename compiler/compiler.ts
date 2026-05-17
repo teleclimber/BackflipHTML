@@ -8,15 +8,15 @@ import type {
 	SourceLoc, TNode, RawTNode, PrintTNode, ForTNode, IfTNode, IfBranch,
 	SlotTNode, PartialRefTNode, BPartCallTNode, CustomElementCallTNode, ParentTNode,
 	RootTNode, NamedPartialRoot, CustomElementPartialRoot, CompiledFile, CompileOptions, PartialDef, PartialBinding,
+	ElementTNode, AttrPart,
 } from './types.js';
 import {
 	attrLoc, tagLoc, errorLoc, attrErrorLoc, bDataNameLoc, interpolationLoc,
-	isBindAttr, isAssetAttr,
-	buildTagPrefix, LineMap,
+	LineMap,
 	isCustomElementTagName, effectiveAttrNames, parseBPartValue, parseBForValue,
 	dataLocAttr as dataLocAttrPure,
 	getSlotCollection as getSlotCollectionPure,
-	classifyOpenTagAttrs, buildRawAttrSequence, buildAttrBindNode,
+	classifyOpenTagAttrs, buildAttrParts,
 	findPrecedingIfInFile, findPrecedingIfInSlot,
 	pushRaw, onText,
 	DOCUMENT_LEVEL_TAGS,
@@ -72,10 +72,19 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			dataLocAttrPure(tag, { includeLocs, currentPartialName, filename });
 		const getSlotCollection = () => getSlotCollectionPure(tag_stack);
 
-		// Helper: push a raw string into the right place (slot or normal)
+		// Routing rule: when cur_parent is null OR is the currentPartialRoot, the
+		// parser is at a "slot-routable" boundary — content goes into the innermost
+		// slot collection if one exists. Once the parser has descended into an
+		// explicit container (ElementTNode / ForTNode / IfBranch), cur_parent points
+		// to it and content nests inside that container regardless of slot context.
+		function isAtSlotBoundary(): boolean {
+			return cur_parent === null || cur_parent === currentPartialRoot;
+		}
+
+		// Helper: push a raw string into the right place (slot or normal).
 		function pushRawHere(raw: string): TNode | null {
 			const sc = getSlotCollection();
-			if (sc) {
+			if (sc && isAtSlotBoundary()) {
 				const slotName = sc.currentSlot;
 				if (!sc.partialRef.slots[slotName]) {
 					sc.partialRef.slots[slotName] = [];
@@ -90,35 +99,34 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 					arr.push(raw_node);
 					return raw_node;
 				}
-			} else {
-				if (cur_tnode === null) {
-					if (currentPartialRoot === null) return null;
-					const raw_node: RawTNode = { type: 'raw', raw };
-					currentPartialRoot.tnodes.push(raw_node);
-					cur_tnode = raw_node;
-					cur_parent = currentPartialRoot;
-					return raw_node;
-				}
-				if (cur_parent === null) throw new BackflipError("pushRawHere: cur_parent unset");
-				return pushRaw(cur_tnode, cur_parent, raw);
 			}
+			const container: ParentTNode | null = cur_parent ?? currentPartialRoot;
+			if (container === null) return null;
+			if (cur_tnode === null) {
+				const raw_node: RawTNode = { type: 'raw', raw };
+				container.tnodes!.push(raw_node);
+				cur_tnode = raw_node;
+				if (cur_parent === null) cur_parent = container;
+				return raw_node;
+			}
+			return pushRaw(cur_tnode, container, raw);
 		}
 
 		// Helper: push a TNode into the current parent or slot
 		function pushNodeHere(node: TNode) {
 			const sc = getSlotCollection();
-			if (sc) {
+			if (sc && isAtSlotBoundary()) {
 				const slotName = sc.currentSlot;
 				if (!sc.partialRef.slots[slotName]) {
 					sc.partialRef.slots[slotName] = [];
 				}
 				sc.partialRef.slots[slotName].push(node);
-			} else {
-				if (cur_parent !== null) {
-					cur_parent.tnodes!.push(node);
-				} else if (currentPartialRoot !== null) {
-					currentPartialRoot.tnodes.push(node);
-				}
+				return;
+			}
+			const container: ParentTNode | null = cur_parent ?? currentPartialRoot;
+			if (container !== null) {
+				container.tnodes!.push(node);
+				if (cur_parent === null) cur_parent = container;
 			}
 		}
 
@@ -135,38 +143,60 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			return { segments, hasBind };
 		}
 
-		// Helper: make TNode(s) for a tag's open element.
-		// Returns an array because tags with static asset attrs produce interleaved RawTNode + AssetRefTNode nodes.
-		function makeOpenTagNode(tag: {tagName:string, attrs:{name:string,value:string}[], selfClosing:boolean, sourceCodeLocation?: unknown}, excludeAttrs: string[]): TNode[] {
-			if (tag.tagName === 'b-unwrap') {
-				return [{ type: 'raw', raw: '' } as RawTNode];
-			}
-			const closeBracket = tag.selfClosing ? ' />' : '>';
-			const { segments, hasBind } = classifyAttrs(tag, excludeAttrs);
-			const locStr = dataLocAttr(tag);
-			if (!hasBind) {
-				return buildRawAttrSequence(segments, `<${tag.tagName}`, locStr + closeBracket);
-			}
-			return [buildAttrBindNode(segments, `<${tag.tagName}`, locStr, tag.selfClosing, false)];
-		}
-
-		// Like makeOpenTagNode but without the leading `<tagName` and trailing
-		// `>` / ` />`. Used for custom element partials, where the call site
-		// and definition merge into a single rendered tag and neither side
-		// emits the brackets.
-		function makeAttrsOnlyNodes(tag: {tagName:string, attrs:{name:string,value:string}[], selfClosing:boolean, sourceCodeLocation?: unknown}, excludeAttrs: string[]): TNode[] {
-			if (tag.tagName === 'b-unwrap') {
-				return [{ type: 'raw', raw: '' } as RawTNode];
-			}
-			const { segments, hasBind } = classifyAttrs(tag, excludeAttrs);
-			const locStr = dataLocAttr(tag);
-			if (!hasBind) {
-				return buildRawAttrSequence(segments, '', locStr);
-			}
-			return [buildAttrBindNode(segments, '', locStr, false, true)];
-		}
-
 		const void_elements = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
+
+		type StartTag = { tagName: string, attrs: { name: string, value: string }[], selfClosing: boolean, sourceCodeLocation?: unknown };
+		type Attr = { name: string, value: string };
+
+		// Convert parse5's tag.sourceCodeLocation into our SourceLoc (best effort —
+		// returns undefined if the parser didn't supply line/col info).
+		function tagSrcLoc(tag: { sourceCodeLocation?: unknown }): SourceLoc | undefined {
+			const loc = tag.sourceCodeLocation as { startLine?: number; startCol?: number; startOffset?: number; endLine?: number; endCol?: number; endOffset?: number } | null | undefined;
+			if (!loc || loc.startLine == null) return undefined;
+			return {
+				startLine: loc.startLine,
+				startCol: loc.startCol ?? 1,
+				startOffset: loc.startOffset ?? 0,
+				endLine: loc.endLine ?? loc.startLine,
+				endCol: loc.endCol ?? (loc.startCol ?? 1),
+				endOffset: loc.endOffset ?? (loc.startOffset ?? 0),
+			};
+		}
+
+		// Build an ElementTNode for a regular HTML element. Attrs are produced via
+		// classifyOpenTagAttrs (which already filters b-data:* / b-attr:* and validates
+		// static assets) and converted to AttrPart[]; `excludeAttrs` strips any additional
+		// directives that belong to a wrapping construct (e.g. `b-part`, `b-slot`, `b-if`).
+		// The `data-loc=...` string (when enabled) is appended as a synthesized trailing
+		// static AttrPart so it renders after the source attrs.
+		function buildElement(tag: StartTag, excludeAttrs: string[]): ElementTNode {
+			const { segments } = classifyAttrs(tag, excludeAttrs);
+			const locStr = dataLocAttr(tag);
+			const attrs = buildAttrParts(segments, locStr);
+			const elem: ElementTNode = {
+				type: 'element',
+				tagName: tag.tagName,
+				attrs,
+				tnodes: [],
+			};
+			if (void_elements.has(tag.tagName)) elem.isVoid = true;
+			if (tag.selfClosing) elem.selfClosing = true;
+			const openLoc = tagSrcLoc(tag);
+			if (openLoc) {
+				elem.openTagLoc = openLoc;
+				elem.loc = openLoc;  // updated to span through closeTagLoc when close is matched
+			}
+			return elem;
+		}
+
+		// Like buildElement but returns just the AttrPart[]. Used for custom element
+		// definitions and call sites, where the wrapping tag is merged at render time
+		// (no ElementTNode is constructed for it).
+		function buildAttrPartsFromTag(tag: StartTag, excludeAttrs: string[]): AttrPart[] {
+			const { segments } = classifyAttrs(tag, excludeAttrs);
+			const locStr = dataLocAttr(tag);
+			return buildAttrParts(segments, locStr);
+		}
 
 		// Error-recovery: drop the tag back to a raw string and keep the parser balanced.
 		// Used by flow-directive handlers when they can't construct their structured node.
@@ -272,9 +302,9 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 
 			// Flow directives on the call site are consumed by the wrapping ForTNode /
 			// IfTNode (built in handleCustomElementCallWithFlow) and must never appear in
-			// the rendered tag. They're excluded here so makeAttrsOnlyNodes drops them.
+			// the rendered tag. They're excluded here so the AttrPart[] doesn't contain them.
 			// In the non-flow call path they're absent anyway, so the extra excludes are no-ops.
-			const callerOpenTag = makeAttrsOnlyNodes(tag, ['b-export', 'b-if', 'b-for', 'b-else', 'b-else-if']);
+			const callerAttrs = buildAttrPartsFromTag(tag, ['b-export', 'b-if', 'b-for', 'b-else', 'b-else-if']);
 
 			const callerAttrInfos: NonNullable<CustomElementCallTNode['callerAttrInfos']> = [];
 			for (const attr of tag.attrs) {
@@ -316,7 +346,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				slots: { 'default': [] },
 				slotLocs: {},
 				bindings,
-				callerOpenTag,
+				callerAttrs,
 				callerTagName: tag.tagName,
 				callerAttrNames: effectiveAttrNames(tag.attrs),
 				callerAttrInfos,
@@ -340,9 +370,6 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 
 		// --- startTag directive handlers ---
 		// Each handler is an inner function closing over compiler state (cur_tnode, currentPartialRoot, tag_stack, etc.)
-
-		type StartTag = { tagName: string, attrs: { name: string, value: string }[], selfClosing: boolean, sourceCodeLocation?: unknown };
-		type Attr = { name: string, value: string };
 
 		function handleBName(tag: StartTag, raw: string, bNameAttr: Attr) {
 			if (tag_stack.length > 0) {
@@ -391,22 +418,19 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			currentPartialName = partialName;
 
 			if (tag.tagName === 'b-unwrap') {
-				// Don't emit opening tag; just track for closing
-				const init_raw: RawTNode = { type: 'raw', raw: '' };
-				partialRoot.tnodes.push(init_raw);
-				cur_tnode = init_raw;
+				// Don't emit a wrapping element; body content flows directly into partialRoot.tnodes.
+				cur_tnode = null;
 				cur_parent = partialRoot;
 				if (!tag.selfClosing) {
 					tag_stack.push({ tag: tag.tagName });
 				}
 			} else {
-				const openNodes = makeOpenTagNode(tag, ['b-name', 'b-export']);
-				for (const n of openNodes) partialRoot.tnodes.push(n);
-				const lastOpen = openNodes[openNodes.length - 1];
-				cur_tnode = lastOpen?.type === 'raw' ? lastOpen as RawTNode : null;
-				cur_parent = partialRoot;
+				const elem = buildElement(tag, ['b-name', 'b-export']);
+				partialRoot.tnodes.push(elem);
+				cur_tnode = elem;
+				cur_parent = elem;
 				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-					tag_stack.push({ tag: tag.tagName });
+					tag_stack.push({ tag: tag.tagName, tnode: elem, parent: partialRoot, hasParent: true });
 				} else {
 					// Self-closing or void element: end offset is end of this tag
 					partialRoot.meta!.endOffset = (tagSrcLoc?.startOffset ?? 0) + raw.length;
@@ -525,14 +549,11 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			currentPartialName = partialName;
 
 			// For custom element partials, the open tag is rendered by the call site (merged
-			// with caller-side attrs into one tag), so we keep it OFF of partialRoot.tnodes.
-			// We do still need to compile the open tag's attrs (in attrs-only form) and store
-			// them so the call-site renderer can emit them in childCtx.
-			partialRoot.definitionAttrNodes = makeAttrsOnlyNodes(tag, ['b-export']);
-			// Seed the body with an empty raw sentinel so subsequent text/tags get appended here.
-			const sentinel: RawTNode = { type: 'raw', raw: '' };
-			partialRoot.tnodes.push(sentinel);
-			cur_tnode = sentinel;
+			// with caller-side attrs into one tag), so no wrapping ElementTNode is constructed.
+			// The definition-side attrs are stored as a flat AttrPart[] for the call-site renderer
+			// to emit in childCtx.
+			partialRoot.definitionAttrs = buildAttrPartsFromTag(tag, ['b-export']);
+			cur_tnode = null;
 			cur_parent = partialRoot;
 			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
 				tag_stack.push({ tag: tag.tagName });
@@ -546,18 +567,25 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			// no flow directive on the same tag (see handleCustomElementCallWithFlow for that case).
 			// Inside a partial (cur_tnode or currentPartialRoot must be set; the dispatcher's "skip
 			// outside partial" path runs before this).
-			const parent: ParentTNode = cur_parent ?? currentPartialRoot!;
+			const oldParent: ParentTNode | null = cur_parent;
+			const containerParent: ParentTNode = cur_parent ?? currentPartialRoot!;
 			const partialRef = buildCustomElementPartialRef(tag, raw);
 			pushNodeHere(partialRef);
 
 			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+				// Switch to slot mode: cur_parent = null so body content routes into the
+				// partial-ref's default slot via slot collection (until a child opens a new
+				// container which sets its own cur_parent).
+				cur_parent = null;
+				cur_tnode = null;
 				tag_stack.push({
 					tag: tag.tagName,
 					tnode: partialRef,
-					parent,
+					parent: oldParent,
+					hasParent: true,
 					slotCollection: {
 						partialRef,
-						partialRefParent: parent,
+						partialRefParent: containerParent,
 						currentSlot: 'default'
 					}
 				});
@@ -569,27 +597,34 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 		// The wrapping flow node and the partial-ref are built by shared helpers; this
 		// handler is the glue that sequences them and sets up tag_stack for the close tag.
 		function handleCustomElementCallWithFlow(tag: StartTag, raw: string, flowAttr: Attr) {
+			const oldParent: ParentTNode | null = cur_parent;
 			const fc = setupFlowContainer(tag, raw, flowAttr);
 			if (!fc) return;
 			const partialRef = buildCustomElementPartialRef(tag, raw);
 			fc.container.tnodes!.push(partialRef);
 			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-				// tag_stack entry combines two roles:
-				//   - slotCollection: children of the call site go into the partial-ref's default slot
-				//   - tnode = fc.outer: on endTag, cur_tnode is repositioned as a sibling of the
-				//     outer flow node (so a following b-else can chain to this if_node).
+				// Slot mode for body content (routes into partial-ref.slots.default).
+				// On endTag, cur_tnode is repositioned at fc.outer so that a following
+				// b-else can chain to this if_node among siblings of fc.outerParent.
+				cur_parent = null;
+				cur_tnode = null;
 				tag_stack.push({
 					tag: tag.tagName,
 					tnode: fc.outer,
 					parent: fc.outerParent,
+					hasParent: true,
 					slotCollection: { partialRef, partialRefParent: fc.container, currentSlot: 'default' },
 				});
+			} else {
+				// Self-closing call: restore cur_parent (no body to process).
+				cur_parent = oldParent;
+				cur_tnode = fc.outer;
 			}
 		}
 
 		function handleBPart(tag: StartTag, raw: string, bPartAttr: Attr) {
 			// b-part outside any b-name partial is ignored
-			if (cur_tnode === null && currentPartialRoot === null) {
+			if (currentPartialRoot === null) {
 				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
 					tag_stack.push({ tag: tag.tagName });
 				}
@@ -608,38 +643,46 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				}
 			}
 
-			let wrapper: { open: string, close: string } | null;
-			if (tag.tagName === 'b-unwrap') {
-				wrapper = null;
-			} else {
-				const open = buildTagPrefix(tag, ['b-part']) + dataLocAttr(tag) + (tag.selfClosing ? ' />' : '>');
-				wrapper = { open, close: `</${tag.tagName}>` };
-			}
-
-			const parent: ParentTNode = cur_parent ?? currentPartialRoot!;
-
 			const partialRef: BPartCallTNode = {
 				type: 'partial-ref',
 				kind: 'b-part',
 				file,
 				partialName,
-				wrapper,
 				slots: { 'default': [] },
 				slotLocs: {},
 				bindings,
 			};
 			partialRef.loc = attrLoc(tag, 'b-part');
 
-			pushNodeHere(partialRef);
+			const oldParent: ParentTNode | null = cur_parent;
+			const containerParent: ParentTNode = cur_parent ?? currentPartialRoot!;
 
-			if (!tag.selfClosing && tag.tagName !== 'b-unwrap' || tag.tagName === 'b-unwrap' && !tag.selfClosing) {
+			let outerNode: TNode;
+			if (tag.tagName === 'b-unwrap') {
+				// No wrapping element; the partial-ref is emitted directly into the parent.
+				pushNodeHere(partialRef);
+				outerNode = partialRef;
+			} else {
+				// Build a wrapping ElementTNode whose single child is the partial-ref.
+				// The wrapping element's attrs come from the source tag (excluding b-part / b-data:*).
+				const elem = buildElement(tag, ['b-part']);
+				elem.tnodes.push(partialRef);
+				pushNodeHere(elem);
+				outerNode = elem;
+			}
+
+			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+				// Slot mode: cur_parent = null routes body content into partialRef.slots.default.
+				cur_parent = null;
+				cur_tnode = null;
 				tag_stack.push({
 					tag: tag.tagName,
-					tnode: partialRef,
-					parent,
+					tnode: outerNode,
+					parent: oldParent,
+					hasParent: true,
 					slotCollection: {
 						partialRef,
-						partialRefParent: parent,
+						partialRefParent: containerParent,
 						currentSlot: 'default'
 					}
 				});
@@ -648,39 +691,36 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 
 		function handleBSlot(tag: StartTag, _raw: string, bSlotAttr: Attr) {
 			// b-slot outside any b-name partial is ignored
-			if (cur_tnode === null && currentPartialRoot === null) {
+			if (currentPartialRoot === null) {
 				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
 					tag_stack.push({ tag: tag.tagName });
 				}
 				return;
 			}
 			const slotName = bSlotAttr.value !== '' ? bSlotAttr.value : undefined;
-			const parent: ParentTNode = cur_parent ?? currentPartialRoot!;
-
-			// For non-b-unwrap tags, the carrying element wraps the slot in the output:
-			// emit the open tag before the slot node; the close tag is added after
-			// through the regular endTag path (matched via tnode = slot_node).
-			if (tag.tagName !== 'b-unwrap') {
-				const openNodes = makeOpenTagNode(tag, ['b-slot']);
-				for (const n of openNodes) {
-					parent.tnodes!.push(n);
-				}
-			}
-
 			const slot_node: SlotTNode = { type: 'slot', name: slotName };
 			slot_node.loc = attrLoc(tag, 'b-slot');
 
-			parent.tnodes!.push(slot_node);
-			cur_tnode = slot_node as unknown as TNode;
-			cur_parent = parent;
-
-			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-				// Push to tag_stack so endTag is consumed correctly.
-				// For b-unwrap b-slot, don't store tnode so endTag has no special effect.
-				if (tag.tagName === 'b-unwrap') {
+			if (tag.tagName === 'b-unwrap') {
+				// No wrapping element; the slot insertion point is emitted directly.
+				// Body content (default content of the slot tag) follows as siblings of slot_node.
+				pushNodeHere(slot_node);
+				cur_tnode = slot_node;
+				// cur_parent unchanged.
+				if (!tag.selfClosing) {
 					tag_stack.push({ tag: tag.tagName });
-				} else {
-					tag_stack.push({ tag: tag.tagName, tnode: slot_node as unknown as TNode, parent });
+				}
+			} else {
+				// Build wrapping ElementTNode with the slot insertion point as its first child;
+				// any body content of the b-slot tag follows as later children of the element.
+				const elem = buildElement(tag, ['b-slot']);
+				elem.tnodes.push(slot_node);
+				const oldParent: ParentTNode | null = cur_parent;
+				pushNodeHere(elem);
+				cur_parent = elem;
+				cur_tnode = slot_node;
+				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+					tag_stack.push({ tag: tag.tagName, tnode: elem, parent: oldParent, hasParent: true });
 				}
 			}
 		}
@@ -697,59 +737,88 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				if (!innermost.partialRef.slotLocs) innermost.partialRef.slotLocs = {};
 				innermost.partialRef.slotLocs[slotName] = bInLoc;
 			}
-			tag_stack.push({
-				tag: tag.tagName,
-				slotCollection: {
-					partialRef: innermost.partialRef,
-					partialRefParent: innermost.partialRefParent,
-					currentSlot: slotName
+
+			if (tag.tagName === 'b-unwrap') {
+				// Switch slot context only; no wrapping element. Body content routes into the new slot.
+				tag_stack.push({
+					tag: tag.tagName,
+					slotCollection: {
+						partialRef: innermost.partialRef,
+						partialRefParent: innermost.partialRefParent,
+						currentSlot: slotName
+					}
+				});
+			} else {
+				// Build wrapping ElementTNode for the carrying tag, pushed directly into the target
+				// slot array (the new currentSlot). Body content nests inside that element.
+				const elem = buildElement(tag, ['b-in']);
+				innermost.partialRef.slots[slotName].push(elem);
+				const oldParent: ParentTNode | null = cur_parent;
+				cur_parent = elem;
+				cur_tnode = elem;
+				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+					tag_stack.push({
+						tag: tag.tagName,
+						tnode: elem,
+						parent: oldParent,
+						hasParent: true,
+						// No slotCollection entry — content nests inside elem (which is already in the slot).
+					});
+				} else {
+					cur_parent = oldParent;
+					cur_tnode = elem;
 				}
-			});
-			// For non-b-unwrap elements, emit the opening tag into the slot
-			if (tag.tagName !== 'b-unwrap') {
-				pushRawHere(buildTagPrefix(tag, ['b-in']) + dataLocAttr(tag) + '>');
 			}
 			return true;
 		}
 
 		// Handle a flow directive (b-for, b-if, b-else-if, b-else) on a regular
 		// (non-custom-element) tag. The wrapping ForTNode/IfTNode/IfBranch comes
-		// from setupFlowContainer; then we drop the tag's own open-tag TNodes into
-		// the container so the tag is rendered inside each iteration / branch.
+		// from setupFlowContainer; if the carrying tag isn't b-unwrap, we then nest
+		// an ElementTNode inside that container so the tag is rendered inside each
+		// iteration / branch.
 		function handleFlowOnRegularTag(tag: StartTag, raw: string, flowAttr: Attr) {
+			const oldParent: ParentTNode | null = cur_parent;
 			const fc = setupFlowContainer(tag, raw, flowAttr);
 			if (!fc) return;
-			const inner = makeOpenTagNode(tag, [flowAttr.name]);
-			for (const n of inner) fc.container.tnodes!.push(n);
-			const last = inner[inner.length - 1];
-			cur_tnode = last ?? null;
-			cur_parent = fc.container;
-			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-				// On close, resume at fc.outer (the wrapping if_node/for_node) so that
-				// b-else-if/b-else can chain to it among siblings of fc.outerParent.
-				tag_stack.push({ tag: tag.tagName, tnode: fc.outer, parent: fc.outerParent });
+			if (tag.tagName === 'b-unwrap') {
+				// Body flows directly into fc.container (no wrapping element).
+				cur_parent = fc.container;
+				cur_tnode = null;
+				if (!tag.selfClosing) {
+					tag_stack.push({ tag: tag.tagName, tnode: fc.outer, parent: fc.outerParent, hasParent: true });
+				} else {
+					cur_parent = oldParent;
+					cur_tnode = fc.outer;
+				}
+			} else {
+				const elem = buildElement(tag, [flowAttr.name]);
+				fc.container.tnodes!.push(elem);
+				cur_parent = elem;
+				cur_tnode = elem;
+				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+					// On close, resume at fc.outer (the wrapping if_node/for_node) so that
+					// b-else-if/b-else can chain to it among siblings of fc.outerParent.
+					tag_stack.push({ tag: tag.tagName, tnode: fc.outer, parent: fc.outerParent, hasParent: true });
+				} else {
+					cur_parent = oldParent;
+					cur_tnode = fc.outer;
+				}
 			}
 		}
 
-		function handleRegularTag(tag: StartTag, raw: string) {
-			const hasBindAttrs = tag.attrs.some(attr => isBindAttr(attr.name));
-			const hasAssetAttrs = tag.attrs.some(attr => isAssetAttr(attr.name));
-			if (hasBindAttrs || hasAssetAttrs) {
-				const nodes = makeOpenTagNode(tag, []);
-				for (const n of nodes) pushNodeHere(n);
-				const lastNode = nodes[nodes.length - 1];
-				cur_tnode = lastNode ?? null;
-				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-					tag_stack.push({ tag: tag.tagName });
-				}
+		function handleRegularTag(tag: StartTag, _raw: string) {
+			const elem = buildElement(tag, []);
+			const oldParent: ParentTNode | null = cur_parent;
+			pushNodeHere(elem);
+			cur_parent = elem;
+			cur_tnode = elem;
+			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+				tag_stack.push({ tag: tag.tagName, tnode: elem, parent: oldParent, hasParent: true });
 			} else {
-				const loc = dataLocAttr(tag);
-				const tagRaw = loc ? raw.replace(/(\s*\/?)>$/, loc + '$1>') : raw;  // preserves self-closing />
-				const new_cur = pushRawHere(tagRaw);
-				if (cur_tnode !== null) cur_tnode = new_cur;
-				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
-					tag_stack.push({ tag: tag.tagName });
-				}
+				// Self-closing or void: no body to process; restore.
+				cur_parent = oldParent;
+				cur_tnode = elem;
 			}
 		}
 
@@ -785,7 +854,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			if (bInAttr && handleBIn(tag, raw, bInAttr)) return;
 
 			// Skip everything outside a partial
-			if (cur_tnode === null && currentPartialRoot === null) {
+			if (currentPartialRoot === null) {
 				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
 					tag_stack.push({ tag: tag.tagName });
 				}
@@ -835,17 +904,32 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				return;
 			}
 
+			// Update closeTagLoc / extend element loc through the close tag bounds for
+			// any matchTag.tnode that's an ElementTNode (lets LSP and Phase 5 see the full span).
+			if (matchTag.tnode && matchTag.tnode.type === 'element') {
+				const closeLoc = tagSrcLoc(tag);
+				if (closeLoc) {
+					(matchTag.tnode as ElementTNode).closeTagLoc = closeLoc;
+					const openLoc = (matchTag.tnode as ElementTNode).openTagLoc;
+					if (openLoc) {
+						(matchTag.tnode as ElementTNode).loc = {
+							startLine: openLoc.startLine,
+							startCol: openLoc.startCol,
+							startOffset: openLoc.startOffset,
+							endLine: closeLoc.endLine,
+							endCol: closeLoc.endCol,
+							endOffset: closeLoc.endOffset,
+						};
+					}
+				}
+			}
+
 			// If we just closed the partial's top-level element
 			if (tag_stack.length === 0 && currentPartialRoot !== null) {
-				// Custom element partials don't include the wrapping tag in the body —
-				// the open and close tags are reconstructed at the call site.
-				if (tag.tagName !== 'b-unwrap' && currentPartialRoot.kind !== 'custom-element') {
-					pushRawHere(raw);
-				}
-				// Record end offset of the partial
+				// In the new ElementTNode model the wrapping element (if any) emits its own close
+				// tag at codegen — no need to push raw close-tag text into the partial body.
 				const endTagLoc = tag.sourceCodeLocation as { startOffset?: number } | null | undefined;
 				currentPartialRoot.meta!.endOffset = (endTagLoc?.startOffset ?? 0) + raw.length;
-				// End of this partial
 				currentPartialRoot = null;
 				currentPartialName = null;
 				cur_tnode = null;
@@ -853,68 +937,27 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				return;
 			}
 
-			// If this was a slotCollection entry
-			if (matchTag.slotCollection) {
-				const tnode = matchTag.tnode;
-				// Three shapes land here:
-				//   - tnode.type === 'partial-ref' — plain b-part / custom element call.
-				//   - tnode.type === 'for' | 'if'  — custom element call with a flow directive;
-				//     resume as a SIBLING of the flow node, not inside it.
-				// In all three, the next emit point is a fresh raw node in matchTag.parent.
-				if (tnode && (tnode.type === 'partial-ref' || tnode.type === 'for' || tnode.type === 'if')) {
-					const parent = matchTag.parent!;
-					const new_raw: RawTNode = { type: 'raw', raw: '' };
-					parent.tnodes!.push(new_raw);
-					cur_tnode = new_raw;
-					cur_parent = parent;
-				}
-				// b-in closing - emit closing tag for non-b-unwrap elements
-				else if (matchTag.tag !== 'b-unwrap') {
-					const sc = matchTag.slotCollection!;
-					const slotName = sc.currentSlot;
-					const arr = sc.partialRef.slots[slotName];
-					const lastNode = arr.length > 0 ? arr[arr.length - 1] : null;
-					if (lastNode && lastNode.type === 'raw') {
-						(lastNode as RawTNode).raw += raw;
-					} else {
-						const raw_node: RawTNode = { type: 'raw', raw };
-						arr.push(raw_node);
-					}
-				}
-				return;
-			}
-
-			// Regular closing
-			if (matchTag.tnode) {
-				// Close tag belongs to the structured node (b-for/b-if/b-slot), not the slot
-				if (cur_tnode !== null && cur_parent !== null && tag.tagName !== 'b-unwrap') {
-					cur_tnode = pushRaw(cur_tnode, cur_parent, raw);
-				}
-			} else {
-				const sc = getSlotCollection();
-				if (sc) {
-					pushRawHere(raw);
-				} else if (cur_tnode !== null && cur_parent !== null) {
-					cur_tnode = pushRaw(cur_tnode, cur_parent, raw);
-				}
-			}
-
-			if (matchTag.tnode) {
-				// Resume the cursor at the structural node and its container so that:
-				//   - subsequent pushRaw appends a sibling after the closed node,
-				//   - b-else-if/b-else can chain to a preceding b-if among siblings.
+			// All other closes: restore cur_parent / cur_tnode from the saved tag-stack entry.
+			// The wrapping element (if any) closes itself at codegen, so no raw close-tag text is pushed here.
+			if (matchTag.hasParent) {
+				cur_parent = matchTag.parent ?? null;
+				cur_tnode = matchTag.tnode ?? null;
+			} else if (matchTag.tnode) {
+				// Legacy entry with tnode but no explicit hasParent (e.g. unhandled corner case): fall back to old behavior.
 				cur_tnode = matchTag.tnode;
 				cur_parent = matchTag.parent ?? currentPartialRoot;
 			}
+			// Entries without tnode or hasParent (e.g. b-unwrap b-in, b-unwrap b-slot, error-recovery
+			// fallbacks): leave cur_parent / cur_tnode unchanged. The popped entry just balances the stack.
 		} catch(e) { if (e instanceof BackflipError) { errors.push(e); } else { reject(e); } } });
 
 		rewriteStream.on('text', (textToken: {sourceCodeLocation?: {startLine:number;startCol:number;startOffset:number}|null}, raw: string) => { try {
-			if (cur_tnode === null && currentPartialRoot === null) return; // outside any partial
+			if (currentPartialRoot === null) return; // outside any partial
 
 			const textLoc = textToken.sourceCodeLocation ?? undefined;
 
 			const sc = getSlotCollection();
-			if (sc) {
+			if (sc && isAtSlotBoundary()) {
 				// Insert text (with {{ }} support) into current slot
 				const slotName = sc.currentSlot;
 				if (!sc.partialRef.slots[slotName]) {
@@ -950,8 +993,17 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 					if (last && last.type === 'raw') { (last as RawTNode).raw += sub; }
 					else { arr.push({ type: 'raw', raw: sub }); }
 				}
-			} else if (cur_tnode !== null && cur_parent !== null) {
-				cur_tnode = onText(cur_tnode, cur_parent, raw, textLoc);
+			} else {
+				const container: ParentTNode | null = cur_parent ?? currentPartialRoot;
+				if (container === null) return;
+				if (cur_tnode === null) {
+					// First content in this container — seed with an empty raw so onText has an anchor.
+					const init: RawTNode = { type: 'raw', raw: '' };
+					container.tnodes!.push(init);
+					cur_tnode = init;
+					if (cur_parent === null) cur_parent = container;
+				}
+				cur_tnode = onText(cur_tnode, container, raw, textLoc);
 			}
 		} catch(e) { if (e instanceof BackflipError) { errors.push(e); } else { reject(e); } } });
 

@@ -4,7 +4,7 @@ import stream from 'node:stream';
 import { RewritingStream } from 'parse5-html-rewriting-stream';
 import { compilePartial } from './compiler.js';
 import { collectSlots, isCustomElementTagName, parseBPartValue } from './helpers.js';
-import type { CompiledFile, CompileOptions, PartialRegistry, PartialRefTNode, RootTNode, PartialDef, PartialBinding, AttrBindTNode, TNode, RawTNode, SourceLoc, ForTNode, IfTNode } from './types.js';
+import type { CompiledFile, CompileOptions, PartialRegistry, PartialRefTNode, RootTNode, PartialDef, PartialBinding, TNode, RawTNode, SourceLoc, ForTNode, IfTNode } from './types.js';
 import { BackflipError } from './errors.js';
 import { validateBAttrUsage, inferDataShape } from './data-shape.js';
 
@@ -441,17 +441,13 @@ function validateTNode(
                     ref.bindings.push(...synthesized);
                 }
 
-                // Patch caller-side AttrBind isBoolean for .bool b-attrs so that the
+                // Patch caller-side AttrPart isBoolean for .bool b-attrs so that the
                 // rendered attribute is suppressed when the bound expression is falsy.
                 const boolBAttrNames = new Set(bAttrs.filter(b => b.isBool).map(b => b.name));
-                if (boolBAttrNames.size > 0 && ref.callerOpenTag) {
-                    for (const n of ref.callerOpenTag) {
-                        if (n.type !== 'attr-bind') continue;
-                        const ab = n as AttrBindTNode;
-                        for (const part of ab.parts) {
-                            if (part.type === 'dynamic' && boolBAttrNames.has(part.name)) {
-                                part.isBoolean = true;
-                            }
+                if (boolBAttrNames.size > 0 && ref.callerAttrs) {
+                    for (const part of ref.callerAttrs) {
+                        if (part.type === 'dynamic' && boolBAttrNames.has(part.name)) {
+                            part.isBoolean = true;
                         }
                     }
                 }
@@ -513,6 +509,8 @@ function validateTNode(
         for (const branch of tnode.branches) {
             validateRootTNode(branch, ctx);
         }
+    } else if (tnode.type === 'element') {
+        validateRootTNode(tnode, ctx);
     }
 }
 
@@ -551,6 +549,8 @@ function visitPartialRefs(
             for (const branch of (n as IfTNode).branches) {
                 visitPartialRefs(branch.tnodes, visit);
             }
+        } else if (n.type === 'element') {
+            visitPartialRefs(n.tnodes, visit);
         }
     }
 }
