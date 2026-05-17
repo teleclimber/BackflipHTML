@@ -5,6 +5,7 @@ import { loadConfig, resolveConfigRoot, resolveAssetDirs, type OutputConfig } fr
 import { fileToJsModule } from './compiler/generate/js/nodes2js.ts';
 import { fileToPhpFile } from './compiler/generate/php/nodes2php.ts';
 import { resolveAssetRefs } from './compiler/helpers.ts';
+import { flattenCompiledFile } from './compiler/flatten.ts';
 import { discoverAssetFileInfos, collectAllAssetReferences, validateAssetFiles, buildAssetUsageReport, filterReport } from './assets/src/index.ts';
 
 const HELP = `Usage:
@@ -217,9 +218,10 @@ if (args.check) {
             const outRelPath = relPath.replace(/\.html$/, ext);
             const outPath = join(out.path, outRelPath);
             const resolved = assetMap ? resolveAssetRefs(compiledFile, assetMap) : compiledFile;
+            const flattened = flattenCompiledFile(resolved);
             const generated = out.lang === 'js'
-                ? fileToJsModule(resolved, relPath, assetMap)
-                : fileToPhpFile(resolved, relPath, assetMap);
+                ? fileToJsModule(flattened, relPath, assetMap)
+                : fileToPhpFile(flattened, relPath, assetMap);
             Deno.mkdirSync(dirname(outPath), { recursive: true });
             Deno.writeTextFileSync(outPath, generated);
             count++;

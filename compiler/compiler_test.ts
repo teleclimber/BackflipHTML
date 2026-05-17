@@ -4,6 +4,7 @@ import type { RootTNode, RawTNode, PrintTNode, ForTNode, IfTNode, SlotTNode, Par
 import { resolveAssetRefs } from "./helpers.ts";
 import { compilePartial } from "./compiler.ts";
 import { interpretBackcode } from "./backcode.ts";
+import { flattenStatics } from "./flatten.ts";
 import type { BackflipError } from "./errors.ts";
 
 // ---- test helpers ----
@@ -12,24 +13,19 @@ import type { BackflipError } from "./errors.ts";
  * Serialize a TNode subtree back to its expected rendered HTML for *static* content
  * (i.e. content with no dynamic expressions). Used to keep regression assertions
  * concise; throws if it encounters anything that requires runtime evaluation.
+ *
+ * Delegates to `flattenStatics` — fully-static subtrees collapse to RawTNodes whose
+ * `.raw` is the rendered HTML. Anything that doesn't reduce to raw (print, for, if,
+ * partial-ref, slot, element with dynamic/asset attrs or non-raw children) throws.
  */
 function renderStatic(tnodes: TNode[]): string {
+	const flat = flattenStatics({ type: 'root', kind: 'named', tnodes });
 	let out = '';
-	for (const node of tnodes) {
-		if (node.type === 'raw') out += (node as RawTNode).raw;
-		else if (node.type === 'element') {
-			const el = node as ElementTNode;
-			out += `<${el.tagName}`;
-			for (const p of el.attrs) {
-				if (p.type === 'static') out += p.raw;
-				else throw new Error(`renderStatic: ${el.tagName} has non-static attr (${p.type})`);
-			}
-			out += el.selfClosing ? ' />' : '>';
-			out += renderStatic(el.tnodes);
-			if (!el.isVoid && !el.selfClosing) out += `</${el.tagName}>`;
-		} else {
+	for (const node of flat.tnodes) {
+		if (node.type !== 'raw') {
 			throw new Error(`renderStatic: cannot render ${node.type}`);
 		}
+		out += (node as RawTNode).raw;
 	}
 	return out;
 }

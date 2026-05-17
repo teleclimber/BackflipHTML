@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import type { CompiledFile } from '../compiler/types.js';
 import { resolveAssetRefs } from '../compiler/helpers.js';
+import { flattenCompiledFile } from '../compiler/flatten.js';
 import { fileToJsModule } from '../compiler/generate/js/nodes2js.js';
 import { renderRoot } from '../runtime/js/render.js';
 import type { RootRNode } from '../runtime/js/render.js';
@@ -89,7 +90,8 @@ async function evalPartial(
 	assetMap?: Map<string, string>,
 ): Promise<RootRNode> {
 	const resolvedFile = assetMap ? resolveAssetRefs(compiledFile, assetMap) : compiledFile;
-	const js = fileToJsModule(resolvedFile, fileName, assetMap);
+	const flattenedFile = flattenCompiledFile(resolvedFile);
+	const js = fileToJsModule(flattenedFile, fileName, assetMap);
 	const hasCrossFile = js.includes('import ');
 
 	if (!hasCrossFile) {
@@ -116,7 +118,8 @@ async function evalPartial(
 			const jsPath = path.join(workDir, filePath.replace('.html', '.js'));
 			await fs.mkdir(path.dirname(jsPath), { recursive: true });
 			const resolvedCrossFile = assetMap ? resolveAssetRefs(file, assetMap) : file;
-			await fs.writeFile(jsPath, fileToJsModule(resolvedCrossFile, filePath, assetMap), 'utf-8');
+			const flatCrossFile = flattenCompiledFile(resolvedCrossFile);
+			await fs.writeFile(jsPath, fileToJsModule(flatCrossFile, filePath, assetMap), 'utf-8');
 		}
 		// Also write the current file if not already in allFiles
 		if (!allFiles.has(fileName)) {
