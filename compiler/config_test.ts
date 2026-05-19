@@ -91,7 +91,7 @@ Deno.test("loadConfig - throws on invalid output lang value", async () => {
 	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({
 		root: ".", output: [{ lang: "python", path: "dist" }]
 	}));
-	await assertRejects(() => loadConfig(dir), Error, 'output[0].lang must be "js" or "php"');
+	await assertRejects(() => loadConfig(dir), Error, 'output[0].lang must be "js", "php", or "dom-patch"');
 });
 
 Deno.test("loadConfig - throws when output is not an array", async () => {

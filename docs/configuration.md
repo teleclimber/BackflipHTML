@@ -22,10 +22,16 @@ Create a `backflip.json` file at the root of your project:
 | Field    | Required | Description                                          |
 |----------|----------|------------------------------------------------------|
 | `root`   | Yes      | Relative path to the directory containing `.html` templates |
-| `output` | No       | Array of output entries; each entry has `lang` (`"js"` or `"php"`) and `path` (relative output directory). The CLI compiles for every entry. |
+| `output` | No       | Array of output entries; each entry has `lang` (`"js"`, `"php"`, or `"dom-patch"`) and `path` (relative output directory). The CLI compiles for every entry. |
 | `assets` | No       | Array of asset directory configurations (see [Assets](assets.md)) |
 
 Each output entry produces a separate set of files in its own directory. You can target a single language or multiple at once. Output paths must be unique within the array.
+
+### `lang: "dom-patch"`
+
+Produces a browser-side JavaScript file (`.js`) for each template containing a custom-element partial with reactive ("live") attributes. The generated classes call `querySelector` / `setAttribute` to update specific elements when an attribute on the custom element changes. See [`compiler/generate/dom-patch/`](../compiler/generate/dom-patch/README.md) for what qualifies and the v1 limitations.
+
+When `"dom-patch"` is configured alongside `"js"` or `"php"`, the dom-patch pass runs first and mutates the shared AST so the server-rendered HTML includes the `data-bfid` attributes the runtime queries on. The class output is emitted as a `.js` file mirroring the input file path.
 
 ## CLI
 
@@ -36,7 +42,7 @@ backflip              # compile using config
 backflip --check      # check for errors using config
 ```
 
-CLI arguments override config `output` entries when both are present (the CLI form `<input> <output> --lang <js|php>` defines a single-output run).
+CLI arguments override config `output` entries when both are present (the CLI form `<input> <output> --lang <js|php|dom-patch>` defines a single-output run).
 
 When the output directories come from `backflip.json`, each is automatically emptied before writing. When provided via CLI arguments, the output directory must be empty.
 

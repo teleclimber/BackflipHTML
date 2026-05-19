@@ -31,13 +31,14 @@ alias backflip="deno run --allow-read --allow-write https://raw.githubuserconten
 Compile HTML templates and write output files:
 
 ```sh
-backflip <input-dir> <output-dir> --lang <js|php>
+backflip <input-dir> <output-dir> --lang <js|php|dom-patch>
 ```
 
 - `<input-dir>` — directory of `.html` template files (scanned recursively)
 - `<output-dir>` — must be empty (when provided via CLI); output files mirror the input directory structure
 - `--lang js` — generate JavaScript modules (`.js`)
 - `--lang php` — generate PHP files (`.php`)
+- `--lang dom-patch` — generate browser-side patcher classes (`.js`) for custom-element partials with reactive attributes (see [Configuration → `dom-patch`](configuration.md#lang-dom-patch))
 
 **Examples:**
 
@@ -47,6 +48,9 @@ backflip ./templates ./out --lang js
 
 # Generate PHP files
 backflip ./templates ./out --lang php
+
+# Generate dom-patch classes
+backflip ./templates ./out --lang dom-patch
 ```
 
 When the output directory is specified via CLI arguments, it must be empty before running. When the output directory comes from `backflip.json`, it is automatically emptied before writing. The input hierarchy is preserved, with `.html` extensions replaced by `.js` or `.php`.

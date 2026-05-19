@@ -49,6 +49,7 @@ Convert the language-agnostic AST into target-language source files. Each genera
 
 - **[`generate/js/`](generate/js/README.md)** — produces JavaScript ES modules
 - **[`generate/php/`](generate/php/README.md)** — produces PHP files
+- **[`generate/dom-patch/`](generate/dom-patch/README.md)** — produces browser-side patcher classes for custom-element partials with reactive attributes; mutates the AST so server-rendered HTML carries the matching `data-bfid` markers
 
 ## Usage docs
 

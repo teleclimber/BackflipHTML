@@ -10,7 +10,7 @@ export interface AssetDirConfig {
 }
 
 export interface OutputConfig {
-	lang: 'js' | 'php';
+	lang: 'js' | 'php' | 'dom-patch';
 	path: string;
 }
 
@@ -64,8 +64,8 @@ export async function loadConfig(dir: string): Promise<LoadConfigResult> {
 				throw new Error(`${CONFIG_FILENAME}: output[${i}] must be an object`);
 			}
 			const e = entry as Record<string, unknown>;
-			if (e.lang !== 'js' && e.lang !== 'php') {
-				throw new Error(`${CONFIG_FILENAME}: output[${i}].lang must be "js" or "php"`);
+			if (e.lang !== 'js' && e.lang !== 'php' && e.lang !== 'dom-patch') {
+				throw new Error(`${CONFIG_FILENAME}: output[${i}].lang must be "js", "php", or "dom-patch"`);
 			}
 			if (typeof e.path !== 'string') {
 				throw new Error(`${CONFIG_FILENAME}: output[${i}].path must be a string`);
@@ -74,7 +74,7 @@ export async function loadConfig(dir: string): Promise<LoadConfigResult> {
 				throw new Error(`${CONFIG_FILENAME}: duplicate output path "${e.path}"`);
 			}
 			seenPaths.add(e.path);
-			outputs.push({ lang: e.lang as 'js' | 'php', path: e.path });
+			outputs.push({ lang: e.lang as 'js' | 'php' | 'dom-patch', path: e.path });
 		}
 	}
 
