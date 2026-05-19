@@ -5,15 +5,72 @@ import { BackflipError } from './errors.js';
 
 // --- DataShape types ---
 
+/**
+ * How a variable's value is consumed at a particular usage site.
+ * - `printed`: emitted as text via `{{ ... }}` interpolation.
+ * - `attribute`: used as the value of an HTML attribute (e.g. via `b-bind:` / `:`).
+ * - `boolean`: evaluated in a boolean context (b-if condition, ternary test, `!x`).
+ * - `iterable`: iterated over in a `b-for` loop.
+ * - `passed`: forwarded to another partial via a `b-data:` binding.
+ */
 export type UsageKind = 'printed' | 'attribute' | 'boolean' | 'iterable' | 'passed';
 
+/**
+ * Describes how a free variable (or one of its sub-paths) is used inside a partial's
+ * TNode tree. Produced by `inferDataShape` and consumed by tooling and validation
+ * (e.g. `validateBAttrUsage`).
+ *
+ * A DataShape is recursive: nested objects, indexed access, and loop element types
+ * each carry their own DataShape so the full access pattern of a variable can be
+ * reconstructed from the root down.
+ */
 export interface DataShape {
+	/**
+	 * The set of ways this particular value (the variable, or this sub-path of it)
+	 * is consumed directly. Sub-path usages live on the nested DataShape inside
+	 * `properties` / `elementShape`, not here.
+	 */
 	usages: Set<UsageKind>;
+
+	/**
+	 * Named property accesses on this value. For `user.name` the root `user` shape
+	 * has `properties: { name: <shape with 'printed' in usages> }`. Property chains
+	 * (`user.address.city`) nest DataShapes recursively.
+	 */
 	properties?: Map<string, DataShape>;
+
+	/**
+	 * True when this value is accessed via a computed member expression (e.g.
+	 * `items[i]`), indicating it is treated as an array/indexable collection.
+	 */
 	indexed?: boolean;
+
+	/**
+	 * The shape of each element when this value is iterated in a `b-for`. Built by
+	 * re-walking the loop body with the loop variable unscoped and lifting that
+	 * variable's inferred shape onto the iterable.
+	 * Example b-for="user in users", elementShape is the shape of "user".
+	 */
 	elementShape?: DataShape;
+
+	/**
+	 * When this value appears in an `attribute` usage, the set of HTML attribute
+	 * names it has been bound to (e.g. `class`, `href`).
+	 */
 	attributes?: Set<string>;
+
+	/**
+	 * When this value is `passed` to another partial via `b-data:`, the list of
+	 * `{ partial, as }` records describing which partial received it and under
+	 * which binding name.
+	 */
 	passedTo?: Array<{ partial: string; as: string }>;
+
+	/**
+	 * Set only for variables declared on a custom-element partial via `b-attr:NAME`.
+	 * Records the declared scalar type — `'bool'` for `.bool`-modified b-attrs,
+	 * `'string'` otherwise. Used by `validateBAttrUsage` to flag misuse.
+	 */
 	scalar?: 'string' | 'bool';
 }
 
