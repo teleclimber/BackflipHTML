@@ -27,9 +27,14 @@ export function applyDomPatch(file: CompiledFile, bfidGen?: BfidGen): DomPatchRe
 
 		const withBfids: BfidSite[] = [];
 		for (const site of filtered) {
+			if (site.site.kind === 'definition-root-attr') {
+				// Patches the custom element itself — runtime already has the reference (this.ce).
+				withBfids.push({ target: { kind: 'this-element' }, backcode: site });
+				continue;
+			}
 			const element = elementForSite(site);
 			if (!element) continue;
-			withBfids.push({ bfid: ensureBfid(element, gen), backcode: site });
+			withBfids.push({ target: { kind: 'bfid-element', bfid: ensureBfid(element, gen) }, backcode: site });
 		}
 		if (withBfids.length === 0) continue;
 

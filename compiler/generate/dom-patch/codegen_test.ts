@@ -25,7 +25,7 @@ function attrBfidSite(bfid: string, attr: AttrPart, liveVars: string[]): BfidSit
 		otherVars: [],
 		inForLoop: false,
 	};
-	return { bfid, backcode };
+	return { target: { kind: 'bfid-element', bfid }, backcode };
 }
 
 Deno.test("classNameFor capitalizes parts", () => {
@@ -184,7 +184,7 @@ Deno.test("generated class is parseable JavaScript", () => {
 
 Deno.test("unsupported site kind throws (must be filtered before reaching codegen)", () => {
 	const printSite: BfidSite = {
-		bfid: 'bf0',
+		target: { kind: 'bfid-element', bfid: 'bf0' },
 		backcode: {
 			site: { kind: 'print', node: { type: 'print', data: interpretBackcode('x') } },
 			parsed: interpretBackcode('x'),

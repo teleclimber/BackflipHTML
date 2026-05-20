@@ -1,8 +1,19 @@
 import { generateStatement } from '../js/generatejs.js';
 import type { BackcodeSite } from './collect.js';
 
+/**
+ * Which DOM node a patch site updates.
+ *  - `bfid-element`: an element inside the partial body. Located at runtime via
+ *    `querySelector('[data-bfid="<bfid>"]')`, so it carries the generated bfid.
+ *  - `this-element`: the custom element itself. The runtime already holds a
+ *    direct reference (`this.ce`), so there is no bfid and no querySelector.
+ */
+export type PatchTarget =
+	| { kind: 'bfid-element'; bfid: string }
+	| { kind: 'this-element' };
+
 export interface BfidSite {
-	bfid: string;
+	target: PatchTarget;
 	backcode: BackcodeSite;
 }
 
@@ -25,13 +36,15 @@ export function generateClassForPartial(
 
 	const className = classNameFor(partialName);
 
-	// One sel_ per unique bfid (preserving first-seen order).
+	// One sel_ per unique bfid (preserving first-seen order). Sites that target
+	// the custom element itself have no bfid and no sel_ method.
 	const bfidOrder: string[] = [];
 	const seenBfid = new Set<string>();
 	for (const s of sites) {
-		if (!seenBfid.has(s.bfid)) {
-			seenBfid.add(s.bfid);
-			bfidOrder.push(s.bfid);
+		if (s.target.kind !== 'bfid-element') continue;
+		if (!seenBfid.has(s.target.bfid)) {
+			seenBfid.add(s.target.bfid);
+			bfidOrder.push(s.target.bfid);
 		}
 	}
 
@@ -91,8 +104,21 @@ export function generateFile(classes: (string | null)[]): string {
 function bcFnNameForSite(s: BfidSite): string {
 	const inner = s.backcode.site;
 	switch (inner.kind) {
-		case 'attr':
-			return `bc_${s.bfid}_${sanitizeAttrName(inner.attr.name)}`;
+		case 'attr': {
+			// An 'attr' site always patches a body element (target assigned in nodes2patch.ts).
+			if (s.target.kind !== 'bfid-element') {
+				throw new Error("dom-patch codegen: 'attr' site must target a body element");
+			}
+			return `bc_${s.target.bfid}_${sanitizeAttrName(inner.attr.name)}`;
+		}
+		case 'definition-root-attr':
+			// this-element target: no bfid, so use a fixed 'ce' infix instead.
+			// `bc_ce_<attr>` shares a namespace with bfid-element names `bc_<bfid>_<attr>`
+			// but cannot collide with them: bfids are generated with the 'bf' prefix
+			// (see makeBfidGen in bfid.ts), so a `bc_bf…` name is never a `bc_ce…` name.
+			// The only remaining collision source — two def-root attrs with the same
+			// name — is already rejected by the compiler.
+			return `bc_ce_${sanitizeAttrName(inner.attr.name)}`;
 		default:
 			throw new Error(`dom-patch codegen: unsupported site kind '${inner.kind}' — add a bc-name scheme when wiring this kind in.`);
 	}
@@ -100,6 +126,12 @@ function bcFnNameForSite(s: BfidSite): string {
 
 function selFnName(bfid: string): string {
 	return `sel_${bfid}`;
+}
+
+// Stable grouping key for a patch target. bfid-element keys are namespaced with
+// 'bf:' so they can never equal the this-element key 'ce'.
+function targetKey(t: PatchTarget): string {
+	return t.kind === 'this-element' ? 'ce' : `bf:${t.bfid}`;
 }
 
 function mutateFnName(varName: string): string {
@@ -118,21 +150,25 @@ function genBcMethod(fnName: string, s: BfidSite): string {
 }
 
 function genMutateMethod(varName: string, varSites: BfidSite[]): string {
-	// Group by bfid so sel_<bfid>() is called once per element per mutate fn.
-	const byBfid = new Map<string, BfidSite[]>();
-	const bfidOrder: string[] = [];
+	// Group sites by target element so each `elem = …` lookup is emitted once per
+	// mutate fn. All this-element sites land in one group (there is only one ce).
+	const byTarget = new Map<string, { target: PatchTarget; sites: BfidSite[] }>();
 	for (const s of varSites) {
-		if (!byBfid.has(s.bfid)) {
-			byBfid.set(s.bfid, []);
-			bfidOrder.push(s.bfid);
+		const key = targetKey(s.target);
+		let group = byTarget.get(key);
+		if (!group) {
+			group = { target: s.target, sites: [] };
+			byTarget.set(key, group);
 		}
-		byBfid.get(s.bfid)!.push(s);
+		group.sites.push(s);
 	}
 
 	const body: string[] = ['\t\tlet elem;'];
-	for (const bfid of bfidOrder) {
-		body.push(`\t\telem = this.${selFnName(bfid)}();`);
-		for (const s of byBfid.get(bfid)!) {
+	for (const { target, sites } of byTarget.values()) {
+		body.push(target.kind === 'this-element'
+			? `\t\telem = this.ce;`
+			: `\t\telem = this.${selFnName(target.bfid)}();`);
+		for (const s of sites) {
 			body.push(genSiteUpdate(s));
 		}
 	}
@@ -142,7 +178,8 @@ function genMutateMethod(varName: string, varSites: BfidSite[]): string {
 function genSiteUpdate(s: BfidSite): string {
 	const inner = s.backcode.site;
 	switch (inner.kind) {
-		case 'attr': {
+		case 'attr':
+		case 'definition-root-attr': {
 			const fn = bcFnNameForSite(s);
 			const dom = inner.attr.name;
 			if (inner.attr.isBoolean) {

@@ -18,12 +18,14 @@ export function ensureBfid(element: ElementTNode, bfidGen: BfidGen): string {
 
 /**
  * Return the element to which a `data-bfid` should be attached for this site,
- * or null if the kind doesn't anchor to a single element (or isn't supported yet).
+ * or null if the kind doesn't anchor to a bfid-tagged element (e.g. it targets
+ * the custom element itself, where the runtime already has a direct reference).
  * Extend the switch as new kinds become patchable.
  */
 export function elementForSite(s: BackcodeSite): ElementTNode | null {
 	switch (s.site.kind) {
 		case 'attr': return s.site.element;
+		case 'definition-root-attr': return null;
 		case 'print':
 		case 'if-condition':
 		case 'for-iterable':

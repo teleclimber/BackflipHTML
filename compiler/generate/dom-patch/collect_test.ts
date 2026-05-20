@@ -124,6 +124,23 @@ Deno.test("caller-attr-expr sites collected from custom-element ref", () => {
 	assertEquals(sites[0].liveVars, ['foo']);
 });
 
+Deno.test("collects dynamic attrs on definition's wrapping tag (definition-root-attr)", () => {
+	const r: CustomElementPartialRoot = {
+		type: 'root', kind: 'custom-element',
+		tnodes: [],
+		definitionAttrs: [
+			dyn('class', `flag ? 'yes' : 'no'`),
+			dyn('hidden', 'flag', true),
+		],
+	};
+	const sites = collectBackcodeSites(r, new Set(['flag']));
+	assertEquals(sites.length, 2);
+	assertEquals(sites[0].site.kind, 'definition-root-attr');
+	assertEquals(sites[0].liveVars, ['flag']);
+	assertEquals(sites[0].inForLoop, false);
+	assertEquals(sites[1].site.kind, 'definition-root-attr');
+});
+
 Deno.test("element body content is traversed", () => {
 	const inner = elem('span', [dyn('title', 'foo')]);
 	const outer = elem('div', [], [inner]);

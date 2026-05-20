@@ -7,6 +7,7 @@ import type { Parsed } from '../../backcode.js';
 
 export type BackcodeSiteKind =
 	| { kind: 'attr'; element: ElementTNode; attr: AttrPart & { type: 'dynamic' } }
+	| { kind: 'definition-root-attr'; attr: AttrPart & { type: 'dynamic' } }
 	| { kind: 'print'; node: PrintTNode }
 	| { kind: 'if-condition'; branch: IfBranch }
 	| { kind: 'for-iterable'; node: ForTNode }
@@ -26,6 +27,14 @@ export function collectBackcodeSites(
 	liveVarNames: Set<string>,
 ): BackcodeSite[] {
 	const out: BackcodeSite[] = [];
+	// Dynamic attrs on the definition's wrapping tag (rendered on the custom element itself).
+	if (root.definitionAttrs) {
+		for (const a of root.definitionAttrs) {
+			if (a.type === 'dynamic') {
+				pushSite(out, { kind: 'definition-root-attr', attr: a }, a.expr, liveVarNames, false);
+			}
+		}
+	}
 	walkList(root.tnodes, liveVarNames, false, out);
 	return out;
 }

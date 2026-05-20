@@ -10,7 +10,12 @@ Because of this, the CLI calls `applyDomPatch()` on each `CompiledFile` **before
 
 ## What qualifies (v1)
 
-Only attribute sites are emitted. A site qualifies when **all** of these hold:
+Only attribute sites are emitted, in two flavors:
+
+- **`attr`** — a `b-bind:`/`:` dynamic attribute on an element inside the partial body. The owning element gets a `data-bfid` so the runtime can find it via `querySelector`.
+- **`definition-root-attr`** — a `b-bind:`/`:` dynamic attribute on the partial's own wrapping tag (i.e. the custom element itself). No `data-bfid` is added — the runtime already holds a direct reference to the custom element (`this.ce`).
+
+A site qualifies when **all** of these hold:
 
 - The owning partial is a **custom-element partial** (`b-attr:` declarations are the source of "live" variables).
 - The attribute is a `b-bind:`/`:` dynamic attribute (a `Parsed` expression in `AttrPart.dynamic.expr`).
@@ -34,11 +39,14 @@ class BackflipMyElement {
     constructor(ce) { this.ce = ce; }
     sel_<bfid>() { return this.ce.querySelector('[data-bfid="<bfid>"]'); }
     bc_<bfid>_<attr>(data) { ... }       // expression body, destructured from data
+    bc_ce_<attr>(data) { ... }           // for definition-root attrs (no bfid; target is this.ce)
     mutate_<varName>(data) { ... }       // calls sel + bc + setAttribute / removeAttribute
     collectData() { return { title: ..., flag: ... }; }
     update(varName) { switch(varName) { case '<v>': this.mutate_<v>(this.collectData()); ... } }
 }
 ```
+
+Inside a `mutate_<varName>` body, sites are grouped by element. bfid-element sites use `elem = this.sel_<bfid>();`; definition-root sites use `elem = this.ce;`. Both then run identical `if (elem) elem.setAttribute(...)` / `if (elem) { ... removeAttribute(...) }` updates.
 
 - `collectData()` returns every declared `b-attr` (string → `getAttribute(name) ?? ''`; bool → `hasAttribute(name)`).
 - `update(varName)` only switches over live vars **that have at least one mutate-able site**. Unused live vars still appear in `collectData`, just not in `update`.

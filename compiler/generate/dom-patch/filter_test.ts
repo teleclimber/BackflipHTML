@@ -49,6 +49,16 @@ Deno.test("accepts attr sites with multiple live vars", () => {
 	assertEquals(qualifies(makeAttrSite('foo + bar', ['foo', 'bar'], [])), true);
 });
 
+Deno.test("accepts definition-root-attr sites that are pure-live", () => {
+	const attr: AttrPart = { type: 'dynamic', name: 'class', expr: interpretBackcode('foo'), isBoolean: false };
+	const site: BackcodeSite = {
+		site: { kind: 'definition-root-attr', attr: attr as any },
+		parsed: interpretBackcode('foo'),
+		liveVars: ['foo'], otherVars: [], inForLoop: false,
+	};
+	assertEquals(qualifies(site), true);
+});
+
 Deno.test("composes with Array.prototype.filter for the standard use", () => {
 	const ok = makeAttrSite('foo', ['foo'], []);
 	const inFor = makeAttrSite('foo', ['foo'], [], true);

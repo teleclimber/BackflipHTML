@@ -117,3 +117,45 @@ Deno.test("end-to-end: emits valid JavaScript", async () => {
 	const Cls = fn();
 	assertEquals(typeof Cls, 'function');
 });
+
+Deno.test("end-to-end: dynamic attr on the definition's wrapping tag targets this.ce", async () => {
+	const file = await compileCustomElement(
+		`<my-element b-attr:flag.bool :class="flag ? 'yes' : 'no'">x</my-element>`
+	);
+	const { js } = applyDomPatch(file, makeSequentialBfidGen());
+	if (!js) throw new Error('expected js (dynamic attr on definition root should be patchable)');
+	assertEquals(js.includes('class BackflipMyElement'), true);
+	assertEquals(js.includes('mutate_flag'), true);
+	// No bfid lookup is needed — the patch target is the custom element itself.
+	assertEquals(js.includes('sel_'), false);
+	assertEquals(js.includes('querySelector'), false);
+	assertEquals(js.includes('elem = this.ce;'), true);
+	assertEquals(js.includes("elem.setAttribute('class', String(this.bc_ce_class(data)))"), true);
+	// The def-root attr is a string class expression, not bool, so no removeAttribute.
+	assertEquals(js.includes("removeAttribute('class')"), false);
+	// b-attr:flag.bool is bool → collectData uses hasAttribute.
+	assertEquals(js.includes("flag: this.ce.hasAttribute('flag')"), true);
+});
+
+Deno.test("end-to-end: bool dynamic attr on definition root uses set/remove on elem", async () => {
+	const file = await compileCustomElement(
+		`<my-thing b-attr:on.bool :hidden="!on">x</my-thing>`
+	);
+	const { js } = applyDomPatch(file, makeSequentialBfidGen());
+	if (!js) throw new Error('expected js');
+	assertEquals(js.includes('elem = this.ce;'), true);
+	assertEquals(js.includes("elem.setAttribute('hidden', '')"), true);
+	assertEquals(js.includes("elem.removeAttribute('hidden')"), true);
+});
+
+Deno.test("end-to-end: definition-root attr does NOT cause a data-bfid to be appended", async () => {
+	const file = await compileCustomElement(
+		`<my-element b-attr:flag.bool :class="flag ? 'yes' : 'no'">x</my-element>`
+	);
+	applyDomPatch(file, makeSequentialBfidGen());
+	const root = file.partials.get('my-element')!;
+	if (root.kind !== 'custom-element') throw new Error('expected custom-element root');
+	const defAttrs = root.definitionAttrs ?? [];
+	const anyBfid = defAttrs.some(a => a.type === 'static' && a.raw.includes('data-bfid'));
+	assertEquals(anyBfid, false);
+});

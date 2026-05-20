@@ -16,7 +16,9 @@ export function qualifies(s: BackcodeSite): boolean {
 	if (s.inForLoop) return false;
 	// Per-kind support (extend as new kinds become patchable):
 	switch (s.site.kind) {
-		case 'attr': return true;
+		case 'attr':
+		case 'definition-root-attr':
+			return true;
 		case 'print':
 		case 'if-condition':
 		case 'for-iterable':
