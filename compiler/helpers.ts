@@ -443,10 +443,14 @@ export function classifyOpenTagAttrs(
 				isAsset = true;
 			}
 			hasBind = true;
+			const expr = interpretBackcode(attr.value);
+			for (const err of expr.errs) {
+				errors.push(new BackflipError(err, attrErrorLoc(tag, attr.name, ctx.filename)));
+			}
 			segments.push({
 				kind: 'bind',
 				name: bindName,
-				expr: interpretBackcode(attr.value),
+				expr,
 				isBoolean: BOOLEAN_ATTRS.has(bindName),
 				isAsset,
 				loc: attrLoc(tag, attr.name),
@@ -526,7 +530,7 @@ export function findPrecedingIfInSlot(arr: TNode[], loc?: { filename?: string, l
 
 const text_regex = new RegExp("({{[^{}]*}})", 'g');
 
-export function onText(cur:TNode, parent: ParentTNode, raw :string, textLoc?: {startLine:number;startCol:number;startOffset:number}) :TNode {
+export function onText(cur:TNode, parent: ParentTNode, raw :string, textLoc?: {startLine:number;startCol:number;startOffset:number}, errors?: BackflipError[]) :TNode {
 	// later match string against {{ }}
 	const matches = raw.matchAll(text_regex);
 
@@ -548,7 +552,13 @@ export function onText(cur:TNode, parent: ParentTNode, raw :string, textLoc?: {s
 			type: 'print',
 			data: code_parsed,
 		};
-		if (textLoc) print_node.loc = interpolationLoc(textLoc, raw.substring(0, m.index), m[0]);
+		const printLoc = textLoc ? interpolationLoc(textLoc, raw.substring(0, m.index), m[0]) : undefined;
+		if (printLoc) print_node.loc = printLoc;
+		if (errors) {
+			for (const err of code_parsed.errs) {
+				errors.push(new BackflipError(err, printLoc));
+			}
+		}
 		if( !parent.tnodes ) throw new BackflipError("expected tnodes here");
 		parent.tnodes.push(print_node);
 		cur = print_node;

@@ -72,6 +72,25 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			dataLocAttrPure(tag, { includeLocs, currentPartialName, filename });
 		const getSlotCollection = () => getSlotCollectionPure(tag_stack);
 
+		// Parse an expression and forward any interpretBackcode errors (e.g. unsupported
+		// operator, syntax error) into the run's error accumulator. Without this the
+		// parsed AST would still be embedded into the output and surface at runtime as
+		// a ReferenceError or similar.
+		type ErrLoc = { filename?: string, line?: number, col?: number, endLine?: number, endCol?: number };
+		function interpretBackcodeAt(code: string, loc?: ErrLoc | SourceLoc): Parsed {
+			const parsed = interpretBackcode(code);
+			for (const err of parsed.errs) {
+				errors.push(new BackflipError(err, loc ? toErrLoc(loc) : undefined));
+			}
+			return parsed;
+		}
+		function toErrLoc(loc: ErrLoc | SourceLoc): ErrLoc {
+			if ('startLine' in loc) {
+				return { filename, line: loc.startLine, col: loc.startCol, endLine: loc.endLine, endCol: loc.endCol };
+			}
+			return loc;
+		}
+
 		// Routing rule: when cur_parent is null OR is the currentPartialRoot, the
 		// parser is at a "slot-routable" boundary — content goes into the innermost
 		// slot collection if one exists. Once the parser has descended into an
@@ -233,6 +252,9 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 					fallbackToRawTag(tag, raw);
 					return null;
 				}
+				for (const err of parsed.iterable.errs) {
+					errors.push(new BackflipError(err, attrErrorLoc(tag, 'b-for', filename)));
+				}
 				const for_node: ForTNode = { type: 'for', iterable: parsed.iterable, valName: parsed.valName, tnodes: [] };
 				for_node.loc = attrLoc(tag, 'b-for');
 				if (sc) pushNodeHere(for_node);
@@ -242,7 +264,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 
 			if (flowAttr.name === 'b-if') {
 				const if_node: IfTNode = { type: 'if', branches: [] };
-				const branch: IfBranch = { condition: interpretBackcode(flowAttr.value), tnodes: [] };
+				const branch: IfBranch = { condition: interpretBackcodeAt(flowAttr.value, attrErrorLoc(tag, 'b-if', filename)), tnodes: [] };
 				branch.loc = attrLoc(tag, 'b-if');
 				if_node.branches.push(branch);
 				if (sc) pushNodeHere(if_node);
@@ -277,7 +299,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				errors.push(new BackflipError("b-else should not have a value", attrErrorLoc(tag, 'b-else', filename)));
 				// fall through — branch is still added so parsing state stays correct
 			}
-			const condition = flowAttr.name === 'b-else-if' ? interpretBackcode(flowAttr.value) : undefined;
+			const condition = flowAttr.name === 'b-else-if' ? interpretBackcodeAt(flowAttr.value, attrErrorLoc(tag, 'b-else-if', filename)) : undefined;
 			const branch: IfBranch = { condition, tnodes: [] };
 			branch.loc = attrLoc(tag, flowAttr.name);
 			if_node.branches.push(branch);
@@ -293,7 +315,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			for (const attr of tag.attrs) {
 				if (attr.name.startsWith('b-data:')) {
 					const bindingName = attr.name.slice('b-data:'.length);
-					const binding: PartialBinding = { kind: 'expr', name: bindingName, data: interpretBackcode(attr.value) };
+					const binding: PartialBinding = { kind: 'expr', name: bindingName, data: interpretBackcodeAt(attr.value, attrErrorLoc(tag, attr.name, filename)) };
 					const nameLoc = bDataNameLoc(tag, attr.name, bindingName);
 					if (nameLoc) binding.nameLoc = nameLoc;
 					bindings.push(binding);
@@ -636,7 +658,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			for (const attr of tag.attrs) {
 				if (attr.name.startsWith('b-data:')) {
 					const bindingName = attr.name.slice('b-data:'.length);
-					const binding: PartialBinding = { kind: 'expr', name: bindingName, data: interpretBackcode(attr.value) };
+					const binding: PartialBinding = { kind: 'expr', name: bindingName, data: interpretBackcodeAt(attr.value, attrErrorLoc(tag, attr.name, filename)) };
 					const nameLoc = bDataNameLoc(tag, attr.name, bindingName);
 					if (nameLoc) binding.nameLoc = nameLoc;
 					bindings.push(binding);
@@ -982,8 +1004,9 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 						raw_it = m.index + m[0].length;
 						continue;
 					}
-					const print_node: PrintTNode = { type: 'print', data: interpretBackcode(code_str) };
-					if (textLoc) print_node.loc = interpolationLoc(textLoc, raw.substring(0, m.index), m[0]);
+					const printLoc = textLoc ? interpolationLoc(textLoc, raw.substring(0, m.index), m[0]) : undefined;
+					const print_node: PrintTNode = { type: 'print', data: interpretBackcodeAt(code_str, printLoc) };
+					if (printLoc) print_node.loc = printLoc;
 					arr.push(print_node);
 					raw_it = m.index + m[0].length;
 				}
@@ -1003,7 +1026,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 					cur_tnode = init;
 					if (cur_parent === null) cur_parent = container;
 				}
-				cur_tnode = onText(cur_tnode, container, raw, textLoc);
+				cur_tnode = onText(cur_tnode, container, raw, textLoc, errors);
 			}
 		} catch(e) { if (e instanceof BackflipError) { errors.push(e); } else { reject(e); } } });
 
