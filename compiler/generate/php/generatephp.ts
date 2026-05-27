@@ -22,15 +22,26 @@ function generatePhpNode(node: acorn.AnyNode, computed: boolean): string {
 			return node.raw!;
 		case 'MemberExpression':
 			return generatePhpMemberExpression(node);
-		case 'UnaryExpression':
-			return node.operator + generatePhpNode(node.argument, true);
+		case 'UnaryExpression': {
+			const arg = generatePhpNode(node.argument, true);
+			if (node.operator === '!') {
+				return '!backflip_isTruthy(' + arg + ')';
+			}
+			return node.operator + arg;
+		}
 		case 'ConditionalExpression':
-			return '(' + generatePhpNode(node.test, true) + ' ? ' + generatePhpNode(node.consequent, true) + ' : ' + generatePhpNode(node.alternate, true) + ')';
+			return '(backflip_isTruthy(' + generatePhpNode(node.test, true) + ') ? ' + generatePhpNode(node.consequent, true) + ' : ' + generatePhpNode(node.alternate, true) + ')';
 		case 'BinaryExpression': {
 			const left = generatePhpNode(node.left, true);
 			const right = generatePhpNode(node.right, true);
 			if (node.operator === '+') {
-				return `((is_string(${left}) || is_string(${right})) ? (${left} . ${right}) : (${left} + ${right}))`;
+				return `backflip_jsPlus(${left}, ${right})`;
+			}
+			if (node.operator === '==') {
+				return `backflip_jsLooseEq(${left}, ${right})`;
+			}
+			if (node.operator === '!=') {
+				return `!backflip_jsLooseEq(${left}, ${right})`;
 			}
 			return '(' + left + ' ' + node.operator + ' ' + right + ')';
 		}

@@ -1,6 +1,8 @@
 import { generatePhpFunction } from "../generate/php/generatephp.ts";
 import type { Runtime } from "./backcode_runtime.ts";
 
+const RENDER_PHP_PATH = new URL("../../runtime/php/render.php", import.meta.url).pathname;
+
 /**
  * PHP runtime adapter.
  *
@@ -79,6 +81,7 @@ export const phpRuntime: Runtime = {
 	async evaluate(parsed, args) {
 		const closure = generatePhpFunction("", parsed);
 		const script =
+			`require_once ${JSON.stringify(RENDER_PHP_PATH)};` +
 			PHP_DUMP_FN +
 			` $args = json_decode(getenv('BF_INPUTS'), true);` +
 			` $fn = ${closure};` +

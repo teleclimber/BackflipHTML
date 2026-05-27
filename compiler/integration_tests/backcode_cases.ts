@@ -35,6 +35,7 @@ export const cases: TestCase[] = [
 	{ name: "eq: 'abc' == 0 (JS false)",     code: "a == b", inputs: { a: "abc", b: 0 },      expected: false },
 	{ name: "eq: 'true' == true (JS false)", code: "a == b", inputs: { a: "true", b: true },  expected: false },
 	{ name: "eq: '1' == true",               code: "a == b", inputs: { a: "1", b: true },     expected: true  },
+	{ name: "eq: '5' == 5.0",                code: "a == b", inputs: { a: "5", b: 5.0 },      expected: true  },
 
 	// -----------------------------------------------------------------
 	// + (concat vs add) across primitive pairings
@@ -50,6 +51,8 @@ export const cases: TestCase[] = [
 	{ name: "add: false + 'x' (JS 'falsex')",code: "a + b", inputs: { a: false, b: "x" },     expected: "falsex" },
 	{ name: "add: true + 1 (JS 2)",          code: "a + b", inputs: { a: true, b: 1 },        expected: 2        },
 	{ name: "add: false + 1 (JS 1)",         code: "a + b", inputs: { a: false, b: 1 },       expected: 1        },
+	{ name: "add: null + null (JS 0)",       code: "a + b", inputs: { a: null, b: null },     expected: 0        },
+	{ name: "add: 'abc' + 5 (JS 'abc5')",    code: "a + b", inputs: { a: "abc", b: 5 },       expected: "abc5"   },
 	{ name: "add: literal 'pre' + n",        code: "'pre' + n",     inputs: { n: 5 },         expected: "pre5"   },
 	{ name: "add: literal 'count: ' + n",    code: "'count: ' + n", inputs: { n: 5 },         expected: "count: 5" },
 

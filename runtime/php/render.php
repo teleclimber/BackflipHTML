@@ -56,6 +56,107 @@ function backflip_isTruthy(mixed $val): bool
 }
 
 /**
+ * JS-style ToString conversion. Mirrors ECMAScript ToString for the value
+ * types reachable from backcode (null/bool/number/string).
+ *
+ *   null  -> "null"   (PHP native would give "")
+ *   true  -> "true"   (PHP native would give "1")
+ *   false -> "false"  (PHP native would give "")
+ *   NaN   -> "NaN"
+ *   ±Inf  -> "Infinity" / "-Infinity"
+ */
+function backflip_jsToString(mixed $v): string
+{
+    if ($v === null) return 'null';
+    if ($v === true) return 'true';
+    if ($v === false) return 'false';
+    if (is_float($v)) {
+        if (is_nan($v)) return 'NaN';
+        if (is_infinite($v)) return $v > 0 ? 'Infinity' : '-Infinity';
+    }
+    return (string) $v;
+}
+
+/**
+ * JS-style ToNumber. Returns int when possible (to preserve int vs float
+ * distinction across the wire format used by integration tests). Non-numeric
+ * strings return NaN (mirrors JS `Number('abc')`).
+ */
+function backflip_jsToNumber(mixed $v): int|float
+{
+    if ($v === null) return 0;
+    if ($v === true) return 1;
+    if ($v === false) return 0;
+    if (is_int($v) || is_float($v)) return $v;
+    if (is_string($v)) {
+        $trimmed = trim($v);
+        if ($trimmed === '') return 0;
+        if (is_numeric($trimmed)) {
+            // +0 dispatches to int or float based on the string contents
+            return $trimmed + 0;
+        }
+        return NAN;
+    }
+    return NAN;
+}
+
+/**
+ * JS-style `+` operator. If either operand is a string after ToPrimitive,
+ * concatenate (with JS ToString rules); otherwise add (with JS ToNumber rules).
+ *
+ * PHP's `.` would coerce null→"", true→"1", false→""; JS produces "null",
+ * "true", "false". PHP's `+` would also fail on non-numeric strings under
+ * strict_types. This helper bridges both gaps.
+ */
+function backflip_jsPlus(mixed $a, mixed $b): mixed
+{
+    if (is_string($a) || is_string($b)) {
+        return backflip_jsToString($a) . backflip_jsToString($b);
+    }
+    return backflip_jsToNumber($a) + backflip_jsToNumber($b);
+}
+
+/**
+ * JS-style loose equality (`==`). Simplified ECMAScript Abstract Equality
+ * Comparison for the value set reachable from backcode (no undefined, no
+ * objects beyond plain arrays). Notably divergent from PHP `==`:
+ *   - null only loosely-equals itself (PHP: null == 0, null == '', etc.)
+ *   - 0 == '' is true (PHP 8 made this false)
+ *   - 'true' == true is false (PHP coerces 'true' to true)
+ */
+function backflip_jsLooseEq(mixed $a, mixed $b): bool
+{
+    // Both numbers: PHP == compares int/float symmetrically; NaN != anything.
+    if ((is_int($a) || is_float($a)) && (is_int($b) || is_float($b))) {
+        return $a == $b;
+    }
+    // Same type otherwise: strict equality.
+    if (gettype($a) === gettype($b)) {
+        return $a === $b;
+    }
+    // null is loosely equal only to null (handled above) and undefined (n/a).
+    if ($a === null || $b === null) {
+        return false;
+    }
+    // Booleans coerce to number first (kept above string-vs-number so that
+    // 'true' == true reduces to 'true' == 1 → NaN == 1 → false).
+    if (is_bool($a)) {
+        return backflip_jsLooseEq($a ? 1 : 0, $b);
+    }
+    if (is_bool($b)) {
+        return backflip_jsLooseEq($a, $b ? 1 : 0);
+    }
+    // Number vs String: convert the string to number, then recurse.
+    if ((is_int($a) || is_float($a)) && is_string($b)) {
+        return backflip_jsLooseEq($a, backflip_jsToNumber($b));
+    }
+    if (is_string($a) && (is_int($b) || is_float($b))) {
+        return backflip_jsLooseEq(backflip_jsToNumber($a), $b);
+    }
+    return false;
+}
+
+/**
  * Extract vars from ctx (null for missing keys), then call the closure.
  *
  * $fnData = ['fn' => Closure, 'vars' => ['user', 'post']]
