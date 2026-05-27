@@ -14,5 +14,5 @@
     }
   },
   "include": ["compiler/**/*.ts", "runtime/**/*.ts", "preview/**/*.ts", "mod.ts"],
-  "exclude": ["**/*_test.ts"]
+  "exclude": ["**/*_test.ts", "compiler/integration_tests/**"]
 }
