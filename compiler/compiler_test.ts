@@ -1635,56 +1635,57 @@ Deno.test("custom element call: existing b-unwrap b-for wrap continues to work (
 // ---- interpretBackcode errors propagate (regression: silently dropped → runtime ReferenceError) ----
 
 Deno.test("expression errors: disallowed operator on custom-element definitionAttrs reports compile error", async () => {
-	// The exact bug from demo-attr-meter: `>` in a :class on a custom-element definition
-	// was silently swallowed, producing a runtime ReferenceError instead of a compile error.
+	// Regression: an unsupported binary operator in a :class on a custom-element
+	// definition was once silently swallowed, producing a runtime ReferenceError
+	// instead of a compile error.
 	const { errors } = await compileFile(
-		`<styled-meter b-attr:level :class="level > 80 ? 'high' : ''" b-export></styled-meter>`
+		`<styled-meter b-attr:level :class="level === 80 ? 'high' : ''" b-export></styled-meter>`
 	);
-	assertEquals(errors.length > 0, true, 'expected compile error for disallowed > operator');
+	assertEquals(errors.length > 0, true, 'expected compile error for disallowed === operator');
 	assertStringIncludes(errors.map(e => e.message).join(' | '), 'unsupported binary operator');
 });
 
 Deno.test("expression errors: disallowed operator on b-bind attr reports compile error", async () => {
-	const { errors } = await compileSnippet('<div :data-flag="a > b"></div>');
+	const { errors } = await compileSnippet('<div :data-flag="a === b"></div>');
 	assertEquals(errors.length > 0, true);
 	assertStringIncludes(errors.map(e => e.message).join(' | '), 'unsupported binary operator');
 });
 
 Deno.test("expression errors: disallowed operator in b-if condition reports compile error", async () => {
-	const { errors } = await compileSnippet('<div b-if="a > b">x</div>');
+	const { errors } = await compileSnippet('<div b-if="a === b">x</div>');
 	assertEquals(errors.length > 0, true);
 	assertStringIncludes(errors.map(e => e.message).join(' | '), 'unsupported binary operator');
 });
 
 Deno.test("expression errors: disallowed operator in b-else-if condition reports compile error", async () => {
-	const { errors } = await compileSnippet('<div b-if="x">1</div><div b-else-if="a > b">2</div>');
+	const { errors } = await compileSnippet('<div b-if="x">1</div><div b-else-if="a === b">2</div>');
 	assertEquals(errors.length > 0, true);
 	assertStringIncludes(errors.map(e => e.message).join(' | '), 'unsupported binary operator');
 });
 
 Deno.test("expression errors: disallowed operator in b-for iterable reports compile error", async () => {
-	const { errors } = await compileSnippet('<div b-for="x in (a > b)">x</div>');
+	const { errors } = await compileSnippet('<div b-for="x in (a === b)">x</div>');
 	assertEquals(errors.length > 0, true);
 	assertStringIncludes(errors.map(e => e.message).join(' | '), 'unsupported binary operator');
 });
 
 Deno.test("expression errors: disallowed operator in b-data: binding reports compile error", async () => {
 	const { errors } = await compileFile(
-		'<div b-name="page"><my-card b-data:flag="a > b"></my-card></div>'
+		'<div b-name="page"><my-card b-data:flag="a === b"></my-card></div>'
 	);
 	assertEquals(errors.length > 0, true);
 	assertStringIncludes(errors.map(e => e.message).join(' | '), 'unsupported binary operator');
 });
 
 Deno.test("expression errors: disallowed operator in text interpolation reports compile error", async () => {
-	const { errors } = await compileSnippet('<div>{{ a > b }}</div>');
+	const { errors } = await compileSnippet('<div>{{ a === b }}</div>');
 	assertEquals(errors.length > 0, true);
 	assertStringIncludes(errors.map(e => e.message).join(' | '), 'unsupported binary operator');
 });
 
 Deno.test("expression errors: disallowed operator in slot text interpolation reports compile error", async () => {
 	const { errors } = await compileFile(
-		'<div b-name="page"><my-card>{{ a > b }}</my-card></div>'
+		'<div b-name="page"><my-card>{{ a === b }}</my-card></div>'
 	);
 	assertEquals(errors.length > 0, true);
 	assertStringIncludes(errors.map(e => e.message).join(' | '), 'unsupported binary operator');

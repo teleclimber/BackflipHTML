@@ -43,6 +43,18 @@ function generatePhpNode(node: acorn.AnyNode, computed: boolean): string {
 			if (node.operator === '!=') {
 				return `!backflip_jsLooseEq(${left}, ${right})`;
 			}
+			if (node.operator === '<') {
+				return `backflip_jsLessThan(${left}, ${right})`;
+			}
+			if (node.operator === '>') {
+				return `backflip_jsLessThan(${right}, ${left})`;
+			}
+			if (node.operator === '<=') {
+				return `backflip_jsLessOrEq(${left}, ${right})`;
+			}
+			if (node.operator === '>=') {
+				return `backflip_jsLessOrEq(${right}, ${left})`;
+			}
 			return '(' + left + ' ' + node.operator + ' ' + right + ')';
 		}
 		default:

@@ -5,7 +5,7 @@ import * as acorn from 'acorn';
 // - abc.def
 // - abc[ ...recusrive... ]
 // - equality [StmtExpr] == [StmtExpr]
-// - comparison > <
+// - comparison > < >= <=
 // - && and || (maybe later)
 
 // nodes we want to interpret correctly:
@@ -101,8 +101,10 @@ function interpretNode(node:acorn.AnyNode, computed: boolean, errs: string[], va
 	}
 }
 
+const ALLOWED_BINARY_OPERATORS = new Set(['==', '!=', '+', '<', '>', '<=', '>=']);
+
 function interpretBinaryExpression(node:acorn.BinaryExpression, errs: string[], vars: string[]) {
-	if (node.operator !== '==' && node.operator !== '!=' && node.operator !== '+') {
+	if (!ALLOWED_BINARY_OPERATORS.has(node.operator)) {
 		errs.push(`unsupported binary operator: ${node.operator}`);
 		return;
 	}

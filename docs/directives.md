@@ -154,12 +154,13 @@ Expressions in directives and `{{ }}` interpolations are handled by `backcode.ts
 | Computed member access | `items[0]` |
 | Unary operators | `!hidden`, `-offset`, `+value` |
 | Equality operators | `a == b`, `a != b` |
+| Relational operators | `a < b`, `a > b`, `a <= b`, `a >= b` |
 | Plus operator | `a + b`, `'Hello, ' + name` |
 | Ternary | `admin ? name : "guest"` |
 
-The `+` operator works for both numeric addition and string concatenation. The JS and PHP backends produce identical results.
+The `+` operator works for both numeric addition and string concatenation. Relational operators follow JavaScript's Abstract Relational Comparison: two strings compare lexicographically, otherwise both sides are coerced to numbers and any `NaN` makes the result `false`. The JS and PHP backends produce identical results.
 
-**Not allowed:** function calls, other binary operators (`===`, `>`, `<`, `&&`, `||`, etc.), object/array literals, assignment, or any other construct not listed above.
+**Not allowed:** function calls, other binary operators (`===`, `&&`, `||`, etc.), object/array literals, assignment, or any other construct not listed above.
 
 ---
 

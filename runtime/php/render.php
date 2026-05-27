@@ -157,6 +157,46 @@ function backflip_jsLooseEq(mixed $a, mixed $b): bool
 }
 
 /**
+ * JS-style `<` (Abstract Relational Comparison). If both operands are strings
+ * after ToPrimitive, compare lexicographically; otherwise convert both via
+ * ToNumber and compare. NaN on either side yields false.
+ *
+ * Diverges from PHP `<`: PHP would compare null<'a' as ''<'a' (true), and
+ * coerce non-numeric strings to 0 in mixed comparisons; JS produces NaN
+ * (false) in those cases.
+ */
+function backflip_jsLessThan(mixed $a, mixed $b): bool
+{
+    if (is_string($a) && is_string($b)) {
+        return strcmp($a, $b) < 0;
+    }
+    $na = backflip_jsToNumber($a);
+    $nb = backflip_jsToNumber($b);
+    if ((is_float($na) && is_nan($na)) || (is_float($nb) && is_nan($nb))) {
+        return false;
+    }
+    return $na < $nb;
+}
+
+/**
+ * JS-style `<=`. Per spec, `a <= b` is false if either side is NaN, else
+ * `!(b < a)`. Written directly (not as `!backflip_jsLessThan($b, $a)`) so the
+ * NaN branch returns false instead of true.
+ */
+function backflip_jsLessOrEq(mixed $a, mixed $b): bool
+{
+    if (is_string($a) && is_string($b)) {
+        return strcmp($a, $b) <= 0;
+    }
+    $na = backflip_jsToNumber($a);
+    $nb = backflip_jsToNumber($b);
+    if ((is_float($na) && is_nan($na)) || (is_float($nb) && is_nan($nb))) {
+        return false;
+    }
+    return $na <= $nb;
+}
+
+/**
  * Extract vars from ctx (null for missing keys), then call the closure.
  *
  * $fnData = ['fn' => Closure, 'vars' => ['user', 'post']]

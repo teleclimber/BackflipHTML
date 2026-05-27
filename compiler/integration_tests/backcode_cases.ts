@@ -83,6 +83,50 @@ export const cases: TestCase[] = [
 	{ name: "unary: +false (JS 0)",          code: "+a", inputs: { a: false }, expected: 0  },
 
 	// -----------------------------------------------------------------
+	// Relational: < > <= >= across primitive pairings
+	// -----------------------------------------------------------------
+	// numbers
+	{ name: "lt: 1 < 2",                      code: "a < b",  inputs: { a: 1, b: 2 },           expected: true  },
+	{ name: "lt: 2 < 1",                      code: "a < b",  inputs: { a: 2, b: 1 },           expected: false },
+	{ name: "lt: 1 < 1",                      code: "a < b",  inputs: { a: 1, b: 1 },           expected: false },
+	{ name: "gt: 2 > 1",                      code: "a > b",  inputs: { a: 2, b: 1 },           expected: true  },
+	{ name: "gt: 1 > 1",                      code: "a > b",  inputs: { a: 1, b: 1 },           expected: false },
+	{ name: "lte: 1 <= 1",                    code: "a <= b", inputs: { a: 1, b: 1 },           expected: true  },
+	{ name: "lte: 2 <= 1",                    code: "a <= b", inputs: { a: 2, b: 1 },           expected: false },
+	{ name: "gte: 1 >= 1",                    code: "a >= b", inputs: { a: 1, b: 1 },           expected: true  },
+	{ name: "gte: 1 >= 2",                    code: "a >= b", inputs: { a: 1, b: 2 },           expected: false },
+	// floats
+	{ name: "lt: 1.5 < 2",                    code: "a < b",  inputs: { a: 1.5, b: 2 },         expected: true  },
+	{ name: "gte: 2.0 >= 2",                  code: "a >= b", inputs: { a: 2.0, b: 2 },         expected: true  },
+	// strings (lexicographic)
+	{ name: "lt: 'a' < 'b'",                  code: "a < b",  inputs: { a: "a",  b: "b" },      expected: true  },
+	{ name: "lt: 'b' < 'a'",                  code: "a < b",  inputs: { a: "b",  b: "a" },      expected: false },
+	{ name: "lt: 'apple' < 'banana'",         code: "a < b",  inputs: { a: "apple", b: "banana" }, expected: true },
+	{ name: "lt: '5' < '10' (lex)",           code: "a < b",  inputs: { a: "5",  b: "10" },     expected: false },
+	{ name: "lte: 'abc' <= 'abc'",            code: "a <= b", inputs: { a: "abc", b: "abc" },   expected: true  },
+	{ name: "gt: 'b' > 'a'",                  code: "a > b",  inputs: { a: "b",  b: "a" },      expected: true  },
+	// numeric string vs number (JS ToNumber on string side)
+	{ name: "lt: '5' < 10 (numeric str)",     code: "a < b",  inputs: { a: "5",  b: 10 },       expected: true  },
+	{ name: "gt: '10' > 5 (numeric str)",     code: "a > b",  inputs: { a: "10", b: 5 },        expected: true  },
+	// non-numeric string vs number — JS: NaN → false (PHP `<` would say true)
+	{ name: "lt: 'abc' < 10 (JS false, NaN)", code: "a < b",  inputs: { a: "abc", b: 10 },      expected: false },
+	{ name: "lt: 10 < 'abc' (JS false, NaN)", code: "a < b",  inputs: { a: 10, b: "abc" },      expected: false },
+	{ name: "lte: 'abc' <= 10 (JS false)",    code: "a <= b", inputs: { a: "abc", b: 10 },      expected: false },
+	{ name: "gte: 'abc' >= 10 (JS false)",    code: "a >= b", inputs: { a: "abc", b: 10 },      expected: false },
+	// null handling
+	{ name: "lt: null < 1 (JS true, 0<1)",    code: "a < b",  inputs: { a: null, b: 1 },        expected: true  },
+	{ name: "lt: null < 0 (JS false, 0<0)",   code: "a < b",  inputs: { a: null, b: 0 },        expected: false },
+	{ name: "lte: null <= 0 (JS true)",       code: "a <= b", inputs: { a: null, b: 0 },        expected: true  },
+	// null vs non-numeric string — JS: NaN → false (PHP would lex '' < 'a' → true)
+	{ name: "lt: null < 'a' (JS false, NaN)", code: "a < b",  inputs: { a: null, b: "a" },      expected: false },
+	{ name: "gt: 'a' > null (JS false, NaN)", code: "a > b",  inputs: { a: "a", b: null },      expected: false },
+	// booleans coerce to numbers
+	{ name: "lt: false < 1 (JS true)",        code: "a < b",  inputs: { a: false, b: 1 },       expected: true  },
+	{ name: "lt: true < 2 (JS true)",         code: "a < b",  inputs: { a: true, b: 2 },        expected: true  },
+	{ name: "lte: true <= 1 (JS true)",       code: "a <= b", inputs: { a: true, b: 1 },        expected: true  },
+	{ name: "gt: true > 0 (JS true)",         code: "a > b",  inputs: { a: true, b: 0 },        expected: true  },
+
+	// -----------------------------------------------------------------
 	// Composed expressions: each test pokes multiple operators / member access
 	// -----------------------------------------------------------------
 	{ name: "compose: u.name + '!'",         code: "u.name + '!'",           inputs: { u: { name: "hi" } },                          expected: "hi!"  },
@@ -100,4 +144,9 @@ export const cases: TestCase[] = [
 	{ name: "compose: u.role == 'admin'",    code: "u.role == 'admin'",      inputs: { u: { role: "admin" } },                       expected: true   },
 	{ name: "compose: !u.active (0)",        code: "!u.active",              inputs: { u: { active: 0 } },                           expected: true   },
 	{ name: "compose: !u.active ('0')",      code: "!u.active",              inputs: { u: { active: "0" } },                         expected: false  },
+	{ name: "compose: u.age >= 18 (adult)",  code: "u.age >= 18",            inputs: { u: { age: 21 } },                             expected: true   },
+	{ name: "compose: u.age >= 18 (minor)",  code: "u.age >= 18",            inputs: { u: { age: 17 } },                             expected: false  },
+	{ name: "compose: a + b < c",            code: "a + b < c",              inputs: { a: 1, b: 2, c: 4 },                           expected: true   },
+	{ name: "compose: !(a < b)",             code: "!(a < b)",               inputs: { a: 1, b: 2 },                                 expected: false  },
+	{ name: "compose: a < b ? 'lo' : 'hi'",  code: "a < b ? 'lo' : 'hi'",    inputs: { a: 1, b: 2 },                                 expected: "lo"   },
 ];
