@@ -78,3 +78,12 @@ Test files:
 | `generate/js/nodes2js_test.ts` | AST → JS module |
 | `generate/php/generatephp_test.ts` | Expression → PHP closure |
 | `generate/php/nodes2php_test.ts` | AST → PHP file |
+| `integration_tests/backcode_test.ts` | Cross-language runtime equivalence for compiled backcode expressions |
+
+### Cross-language runtime equivalence (`integration_tests/`)
+
+`backcode_test.ts` is the harness that compiles each test's backcode string with every code generator, runs it under each target runtime, and asserts that all runtimes produce the same value. JS is the reference language; non-JS runtimes (currently PHP) must match it. Test cases live in `backcode_cases.ts` — a flat list of `{ code, inputs, expected }` records covering operator semantics (`==`, `+`, `!`, ternary, member access) and their compositions, focused on the kinds of inputs where JS and other languages tend to disagree (mixed-type equality, `+` concat vs add, `'0'` truthiness, etc.).
+
+The PHP runtime spawns one `php -r` subprocess per case; if `php` isn't in PATH the harness skips PHP with a warning instead of failing.
+
+To add another target language, create `integration_tests/backcode_runtime_<lang>.ts` exporting a `Runtime` (see `backcode_runtime.ts`), then import it from `backcode_test.ts` and push it into the `runtimes` list. No changes to the case fixture are needed — every existing case automatically covers the new language.
