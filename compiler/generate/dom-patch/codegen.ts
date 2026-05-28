@@ -73,7 +73,7 @@ export function generateClassForPartial(
 	}
 
 	const selMethods = bfidOrder.map(genSelMethod);
-	const mutateMethods = varOrder.map(v => genMutateMethod(v, sitesByVar.get(v)!));
+	const mutateMethods = varOrder.map(v => genMutateMethod(v, sitesByVar.get(v)!, className));
 	const collect = genCollectData(bAttrs);
 	const update = genUpdate(varOrder);
 
@@ -149,9 +149,11 @@ function genBcMethod(fnName: string, s: BfidSite): string {
 	return `\t${fnName}(data) {\n${destructure}\t\treturn ${expr};\n\t}`;
 }
 
-function genMutateMethod(varName: string, varSites: BfidSite[]): string {
-	// Group sites by target element so each `elem = …` lookup is emitted once per
-	// mutate fn. All this-element sites land in one group (there is only one ce).
+function genMutateMethod(varName: string, varSites: BfidSite[], className: string): string {
+	// Group sites by target element so each `elem = …` lookup and its null guard is
+	// emitted once per mutate fn. All this-element sites land in one group (there is
+	// only one ce). A null lookup means the rendered DOM diverged from the compiled
+	// template, so the guard logs instead of silently skipping the update.
 	const byTarget = new Map<string, { target: PatchTarget; sites: BfidSite[] }>();
 	for (const s of varSites) {
 		const key = targetKey(s.target);
@@ -168,11 +170,22 @@ function genMutateMethod(varName: string, varSites: BfidSite[]): string {
 		body.push(target.kind === 'this-element'
 			? `\t\telem = this.ce;`
 			: `\t\telem = this.${selFnName(target.bfid)}();`);
+		body.push('\t\tif (elem) {');
 		for (const s of sites) {
 			body.push(genSiteUpdate(s));
 		}
+		body.push('\t\t} else {');
+		body.push(`\t\t\t${genMissingElementError(target, className)}`);
+		body.push('\t\t}');
 	}
 	return `\t${mutateFnName(varName)}(data) {\n${body.join('\n')}\n\t}`;
+}
+
+function genMissingElementError(target: PatchTarget, className: string): string {
+	if (target.kind === 'this-element') {
+		return `console.error('BackflipHTML ${className}: host element not found; skipping update');`;
+	}
+	return `console.error('BackflipHTML ${className}: element [data-bfid="${target.bfid}"] not found; skipping update', this.ce);`;
 }
 
 function genSiteUpdate(s: BfidSite): string {
@@ -183,9 +196,9 @@ function genSiteUpdate(s: BfidSite): string {
 			const fn = bcFnNameForSite(s);
 			const dom = inner.attr.name;
 			if (inner.attr.isBoolean) {
-				return `\t\tif (elem) { if (this.${fn}(data)) elem.setAttribute('${dom}', ''); else elem.removeAttribute('${dom}'); }`;
+				return `\t\t\tif (this.${fn}(data)) elem.setAttribute('${dom}', ''); else elem.removeAttribute('${dom}');`;
 			}
-			return `\t\tif (elem) elem.setAttribute('${dom}', String(this.${fn}(data)));`;
+			return `\t\t\telem.setAttribute('${dom}', String(this.${fn}(data)));`;
 		}
 		default:
 			throw new Error(`dom-patch codegen: unsupported site kind '${inner.kind}' — add an emit branch when wiring this kind in.`);

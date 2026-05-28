@@ -46,7 +46,7 @@ class BackflipMyElement {
 }
 ```
 
-Inside a `mutate_<varName>` body, sites are grouped by element. bfid-element sites use `elem = this.sel_<bfid>();`; definition-root sites use `elem = this.ce;`. Both then run identical `if (elem) elem.setAttribute(...)` / `if (elem) { ... removeAttribute(...) }` updates.
+Inside a `mutate_<varName>` body, sites are grouped by element. bfid-element sites use `elem = this.sel_<bfid>();`; definition-root sites use `elem = this.ce;`. Each group is guarded once: when `elem` is found the group's `elem.setAttribute(...)` / `setAttribute(...)`+`removeAttribute(...)` updates run; when it is null the guard's `else` branch logs `console.error(...)` and skips the update. A null lookup means the rendered DOM has diverged from the compiled template (something went wrong upstream), so it is reported rather than silently ignored.
 
 - `collectData()` returns every declared `b-attr` (string → `getAttribute(name) ?? ''`; bool → `hasAttribute(name)`).
 - `update(varName)` only switches over live vars **that have at least one mutate-able site**. Unused live vars still appear in `collectData`, just not in `update`.

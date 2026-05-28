@@ -28,6 +28,18 @@ function attrBfidSite(bfid: string, attr: AttrPart, liveVars: string[]): BfidSit
 	return { target: { kind: 'bfid-element', bfid }, backcode };
 }
 
+function defRootBfidSite(attr: AttrPart, liveVars: string[]): BfidSite {
+	if (attr.type !== 'dynamic') throw new Error('expected dynamic');
+	const backcode: BackcodeSite = {
+		site: { kind: 'definition-root-attr', attr },
+		parsed: attr.expr,
+		liveVars,
+		otherVars: [],
+		inForLoop: false,
+	};
+	return { target: { kind: 'this-element' }, backcode };
+}
+
 Deno.test("classNameFor capitalizes parts", () => {
 	assertEquals(classNameFor('my-element'), 'BackflipMyElement');
 	assertEquals(classNameFor('foo-bar-baz'), 'BackflipFooBarBaz');
@@ -57,7 +69,11 @@ Deno.test("single attr, single live var: exact-string class", () => {
 \tmutate_foo(data) {
 \t\tlet elem;
 \t\telem = this.sel_bf0();
-\t\tif (elem) elem.setAttribute('title', String(this.bc_bf0_title(data)));
+\t\tif (elem) {
+\t\t\telem.setAttribute('title', String(this.bc_bf0_title(data)));
+\t\t} else {
+\t\t\tconsole.error('BackflipHTML BackflipMyElement: element [data-bfid="bf0"] not found; skipping update', this.ce);
+\t\t}
 \t}
 
 \tcollectData() {
@@ -73,6 +89,28 @@ Deno.test("single attr, single live var: exact-string class", () => {
 \t}
 }`;
 	assertEquals(js, expected);
+});
+
+Deno.test("null bfid element: mutate logs console.error in else branch", () => {
+	const a = dynAttr('title', 'foo');
+	const site = attrBfidSite('bf0', a, ['foo']);
+	const js = generateClassForPartial('my-element', [{ name: 'foo', isBool: false }], [site]);
+	if (!js) throw new Error('expected js');
+	assertEquals(
+		js.includes(`} else {\n\t\t\tconsole.error('BackflipHTML BackflipMyElement: element [data-bfid="bf0"] not found; skipping update', this.ce);\n\t\t}`),
+		true,
+	);
+});
+
+Deno.test("null this element: mutate logs console.error in else branch", () => {
+	const a = dynAttr('class', 'flag');
+	const site = defRootBfidSite(a, ['flag']);
+	const js = generateClassForPartial('my-element', [{ name: 'flag', isBool: false }], [site]);
+	if (!js) throw new Error('expected js');
+	assertEquals(
+		js.includes(`} else {\n\t\t\tconsole.error('BackflipHTML BackflipMyElement: host element not found; skipping update');\n\t\t}`),
+		true,
+	);
 });
 
 Deno.test("two attrs on same element with same live var: one sel, two bc, both in one mutate", () => {
@@ -118,7 +156,7 @@ Deno.test("bool dynamic attr uses setAttribute/removeAttribute pattern", () => {
 	const js = generateClassForPartial('my-element', [{ name: 'flag', isBool: true }], [site]);
 	if (!js) throw new Error('expected js');
 	assertEquals(
-		js.includes(`if (elem) { if (this.bc_bf0_hidden(data)) elem.setAttribute('hidden', ''); else elem.removeAttribute('hidden'); }`),
+		js.includes(`if (this.bc_bf0_hidden(data)) elem.setAttribute('hidden', ''); else elem.removeAttribute('hidden');`),
 		true,
 	);
 });
