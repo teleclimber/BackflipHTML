@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import type { CompiledFile } from '../compiler/types.js';
 import { resolveAssetRefs } from '../compiler/helpers.js';
 import { flattenCompiledFile } from '../compiler/flatten.js';
+import { applyDomPatch } from '../compiler/generate/dom-patch/nodes2patch.js';
 import { fileToJsModule } from '../compiler/generate/js/nodes2js.js';
 import { renderRoot } from '../runtime/js/render.js';
 import type { RootRNode } from '../runtime/js/render.js';
@@ -89,6 +90,10 @@ async function evalPartial(
 	tmpDir?: string,
 	assetMap?: Map<string, string>,
 ): Promise<RootRNode> {
+	// Mirror the CLI build: dom-patch mutates the AST in place (appending
+	// data-bfid markers to reactive elements) and must run before flatten + js
+	// codegen so the previewed HTML carries the ids the runtime queries on.
+	applyDomPatch(compiledFile);
 	const resolvedFile = assetMap ? resolveAssetRefs(compiledFile, assetMap) : compiledFile;
 	const flattenedFile = flattenCompiledFile(resolvedFile);
 	const js = fileToJsModule(flattenedFile, fileName, assetMap);
@@ -117,6 +122,7 @@ async function evalPartial(
 		for (const [filePath, file] of allFiles) {
 			const jsPath = path.join(workDir, filePath.replace('.html', '.js'));
 			await fs.mkdir(path.dirname(jsPath), { recursive: true });
+			applyDomPatch(file);
 			const resolvedCrossFile = assetMap ? resolveAssetRefs(file, assetMap) : file;
 			const flatCrossFile = flattenCompiledFile(resolvedCrossFile);
 			await fs.writeFile(jsPath, fileToJsModule(flatCrossFile, filePath, assetMap), 'utf-8');

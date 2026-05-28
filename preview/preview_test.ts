@@ -1,5 +1,7 @@
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
 import { compileDirectory } from "../compiler/partials.ts";
+import { compilePartial } from "../compiler/compiler.ts";
+import type { CompiledFile, PartialDef } from "../compiler/types.ts";
 import { previewPartial } from "./preview.ts";
 
 const TEMPLATES_DIR = new URL("../test/templates", import.meta.url).pathname;
@@ -193,6 +195,36 @@ Deno.test("preview with data overrides uses custom values", async () => {
 	});
 	assertEquals(result.errors.length, 0);
 	assertStringIncludes(result.html, 'World');
+});
+
+// --- dom-patch: data-bfid injection ---
+
+async function compileCustomElement(html: string): Promise<CompiledFile> {
+	const m = html.match(/<([a-z][a-z0-9-]*-[a-z0-9-]*)/);
+	if (!m) throw new Error('test html must start with a custom-element tag');
+	const def: PartialDef = {
+		name: m[1],
+		exported: false,
+		customElement: true,
+		loc: { filename: '', from: 1, to: 1 },
+	};
+	const { compiled, errors } = await compilePartial(html, def);
+	if (errors.length > 0) throw new Error('compile errors: ' + errors.map(e => e.message).join(', '));
+	return { partials: new Map([[def.name, compiled]]) };
+}
+
+Deno.test("preview injects data-bfid on reactive body element (matches build output)", async () => {
+	const compiledFile = await compileCustomElement(
+		`<my-badge b-attr:tone><span :data-tone="tone">badge</span></my-badge>`
+	);
+	const result = await previewPartial({
+		partialName: 'my-badge',
+		compiledFile,
+		fileName: 'badge.html',
+		dataOverrides: { tone: 'info' },
+	});
+	assertEquals(result.errors.length, 0);
+	assertStringIncludes(result.html, 'data-bfid=');
 });
 
 // --- Error handling ---
