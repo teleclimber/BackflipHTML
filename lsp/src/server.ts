@@ -16,7 +16,7 @@ import {
 	DiagnosticSeverity,
 } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { compileDirectory, loadConfig, resolveConfigRoot, resolveAssetDirs, CONFIG_FILENAME, previewPartial, parseBPartValue, type BackflipError, type CompiledFile, type CompileOptions, type LoadConfigResult } from '@backflip/html';
+import { compileDirectory, loadConfig, resolveConfigRoot, resolveAssetDirs, resolveDomPatchOutputDirs, CONFIG_FILENAME, previewPartial, parseBPartValue, type BackflipError, type CompiledFile, type CompileOptions, type LoadConfigResult } from '@backflip/html';
 import { analyzeCss, discoverCssFiles, type CssAnalysisResult, type PartialSourceInfo } from '@backflip/css';
 import { discoverAssetFileInfos, collectAllAssetReferences, validateAssetFiles, buildAssetUsageReport, filterReport, renderAssetReportHtml } from '@backflip/assets';
 import { buildIndex, type ProjectIndex } from './index.js';
@@ -27,6 +27,7 @@ import { getDocumentSymbols } from './symbols.js';
 import { getHover, findElementsForSelector, findRulesForElement, findCustomElementTagAtCursor } from './hover.js';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
 import * as crypto from 'node:crypto';
 
 const connection = createConnection(ProposedFeatures.all);
@@ -43,6 +44,8 @@ let knownFiles: Set<string> = new Set();
 let assetMap: Map<string, string> | undefined;
 let assetDirs: Map<string, string> | undefined;
 let templateFileContents: Map<string, string> = new Map();
+let domPatchOutputDirs: string[] = [];
+let domPatchTmpDir: string | undefined;
 
 connection.onInitialize((params: InitializeParams): InitializeResult => {
 	workspaceRoot = params.workspaceFolders?.[0]?.uri?.replace('file://', '') ?? '';
@@ -87,11 +90,13 @@ async function loadAndApplyConfig(): Promise<void> {
 			compiledFiles = new Map();
 			assetMap = undefined;
 			assetDirs = undefined;
+			domPatchOutputDirs = [];
 			clearAllDiagnostics();
 			projectIndex = { partialDefs: new Map(), partialRefs: [] };
 			return;
 		}
 		templateRoot = resolveConfigRoot(workspaceRoot, config);
+		domPatchOutputDirs = resolveDomPatchOutputDirs(workspaceRoot, config);
 		if (config.assets && config.assets.length > 0) {
 			assetMap = new Map(config.assets.map(a => [a.name, `/__assets/${a.name}/`]));
 			assetDirs = resolveAssetDirs(workspaceRoot, config);
@@ -111,6 +116,7 @@ async function loadAndApplyConfig(): Promise<void> {
 		compiledFiles = new Map();
 		assetMap = undefined;
 		assetDirs = undefined;
+		domPatchOutputDirs = [];
 		configErrors = [];
 		clearAllDiagnostics();
 		projectIndex = { partialDefs: new Map(), partialRefs: [] };
@@ -528,6 +534,11 @@ connection.onRequest('backflip/previewPartial', async (params: { uri: string; pa
 
 	try {
 		const nonce = crypto.randomBytes(16).toString('hex');
+		// Lazily create a session temp dir for freshly generated dom-patch JS, so the
+		// webview loads classes whose bfids match the previewed HTML (not stale build output).
+		if (domPatchOutputDirs.length > 0 && !domPatchTmpDir) {
+			domPatchTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'backflip-bfdom-'));
+		}
 		const result = await previewPartial({
 			partialName: params.partialName,
 			compiledFile,
@@ -535,6 +546,8 @@ connection.onRequest('backflip/previewPartial', async (params: { uri: string; pa
 			fileName: relPath,
 			nonce,
 			assetMap,
+			domPatchOutputDirs: domPatchOutputDirs.length > 0 ? domPatchOutputDirs : undefined,
+			domPatchOutDir: domPatchTmpDir,
 		});
 		const assetDirsObj: Record<string, string> | undefined = assetDirs
 			? Object.fromEntries(assetDirs)
@@ -547,6 +560,8 @@ connection.onRequest('backflip/previewPartial', async (params: { uri: string; pa
 			cssPaths: cssPaths.length > 0 ? cssPaths : undefined,
 			templateRoot,
 			assetDirs: assetDirsObj,
+			domPatchDir: domPatchTmpDir,
+			domPatchAssets: result.domPatchAssets,
 		};
 	} catch (err) {
 		connection.console.error(`[backflip] preview error: ${err instanceof Error ? err.message : err}`);

@@ -1,7 +1,7 @@
 import { assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert";
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
-import { loadConfig, resolveConfigRoot, resolveAssetDirs, CONFIG_FILENAME } from './config.ts';
+import { loadConfig, resolveConfigRoot, resolveAssetDirs, resolveDomPatchOutputDirs, CONFIG_FILENAME, type BackflipConfig } from './config.ts';
 
 const TMPDIR = '/tmp/claude-1000/';
 
@@ -10,6 +10,28 @@ async function makeTempDir(suffix: string): Promise<string> {
 	await fs.mkdir(dir, { recursive: true });
 	return dir;
 }
+
+Deno.test("resolveDomPatchOutputDirs - returns absolute dom-patch output dirs only", () => {
+	const config: BackflipConfig = {
+		root: "templates",
+		output: [
+			{ lang: "dom-patch", path: "server/static/bfdom/" },
+			{ lang: "js", path: "server/compiled" },
+		],
+		assets: [
+			{ name: "assets", path: "server/static/", prefix: "/static/" },
+		],
+	};
+	assertEquals(resolveDomPatchOutputDirs("/proj", config), ["/proj/server/static/bfdom"]);
+});
+
+Deno.test("resolveDomPatchOutputDirs - empty when no dom-patch output", () => {
+	const config: BackflipConfig = {
+		root: "templates",
+		output: [{ lang: "js", path: "dist" }],
+	};
+	assertEquals(resolveDomPatchOutputDirs("/proj", config), []);
+});
 
 Deno.test("loadConfig - returns null when no config file exists", async () => {
 	const dir = await makeTempDir("missing");

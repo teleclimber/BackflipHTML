@@ -60,6 +60,21 @@ For nested partials referenced via `b-part`:
 
 ---
 
+## dom-patch reactivity
+
+Custom-element partials with reactive attributes compile to a [dom-patch](../compiler/generate/dom-patch/README.md) JS class that updates specific elements in the browser. Each patchable element is tagged with a `data-bfid` marker that the class locates via `querySelector`.
+
+Because bfids are generated per compile, the JS emitted by a separate `backflip build` would query ids that don't match what the preview renders. So the preview **regenerates the dom-patch JS on each render and serves that** instead of the on-disk build output — guaranteeing the served class queries the exact bfids in the previewed HTML.
+
+The preview computes, for each generated file, the absolute path the build *would* write it to (from the [`dom-patch` output dirs](configuration.md)) and maps it to where the fresh copy was actually saved. Any asset request that resolves to one of those build paths is served the fresh copy. This works whether a dom-patch output dir equals an asset dir or sits in a subdirectory of one.
+
+- **Standalone server**: an asset request whose resolved disk path matches a dom-patch build destination is served from a session temp dir (falling through to disk if a file has no reactive partials).
+- **VSCode**: the same freshly generated JS is written to a temp dir and loaded into the webview by remapping the matching asset URLs.
+
+No template changes are needed — the existing `@<name>/<file>.js` asset reference is resolved transparently.
+
+---
+
 ## VSCode integration
 
 ### Preview Partial command
@@ -97,11 +112,14 @@ const result = await previewPartial({
     fileName: 'components.html',
     cssHrefs: ['/assets/styles.css'],    // optional CSS links for fragment preview
     dataOverrides: { title: 'Custom' }, // optional overrides
+    domPatchOutputDirs: ['/abs/server/static-bfdom'], // optional: absolute dom-patch build dirs
+    domPatchOutDir: '/tmp/bfdom',        // optional: where to write freshly generated dom-patch JS
 });
 
-console.log(result.html);     // complete HTML document
-console.log(result.mockData); // generated mock data
-console.log(result.errors);   // any non-fatal issues
+console.log(result.html);           // complete HTML document
+console.log(result.mockData);       // generated mock data
+console.log(result.errors);         // any non-fatal issues
+console.log(result.domPatchAssets); // { buildDestPath: savedPath } for dom-patch JS this render
 ```
 
 ---

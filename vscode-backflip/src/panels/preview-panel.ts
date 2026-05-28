@@ -4,6 +4,9 @@ import * as crypto from 'node:crypto';
 
 let panel: vscode.WebviewPanel | null = null;
 let templateRoot: string | null = null;
+let domPatchDir: string | undefined;
+// Map of build destination path -> actual saved (temp) path for fresh dom-patch JS.
+let domPatchAssets: Record<string, string> = {};
 
 function generateNonce(): string {
 	return crypto.randomBytes(16).toString('hex');
@@ -16,8 +19,12 @@ export function showPreviewPanel(
 	cssPaths?: string[],
 	templateRootPath?: string,
 	assetDirs?: Record<string, string>,
+	domPatchDirPath?: string,
+	domPatchAssetMap?: Record<string, string>,
 ): void {
 	templateRoot = templateRootPath ?? null;
+	domPatchDir = domPatchDirPath;
+	domPatchAssets = domPatchAssetMap ?? {};
 
 	if (panel) {
 		panel.reveal();
@@ -32,6 +39,9 @@ export function showPreviewPanel(
 			for (const dirPath of Object.values(assetDirs)) {
 				resourceRoots.push(vscode.Uri.file(dirPath));
 			}
+		}
+		if (domPatchDir) {
+			resourceRoots.push(vscode.Uri.file(domPatchDir));
 		}
 
 		panel = vscode.window.createWebviewPanel(
@@ -51,8 +61,10 @@ export function showPreviewPanel(
 	panel.webview.html = rewriteAssetUrls(injectCssLinks(html, panel.webview, cssPaths), panel.webview, assetDirs);
 }
 
-export function refreshPreviewPanel(html: string, partialName: string, cssPaths?: string[], templateRootPath?: string, assetDirs?: Record<string, string>): void {
+export function refreshPreviewPanel(html: string, partialName: string, cssPaths?: string[], templateRootPath?: string, assetDirs?: Record<string, string>, domPatchDirPath?: string, domPatchAssetMap?: Record<string, string>): void {
 	if (templateRootPath !== undefined) templateRoot = templateRootPath;
+	if (domPatchDirPath !== undefined) domPatchDir = domPatchDirPath;
+	if (domPatchAssetMap !== undefined) domPatchAssets = domPatchAssetMap;
 	if (panel) {
 		panel.title = `Preview: ${partialName}`;
 		panel.webview.html = rewriteAssetUrls(injectCssLinks(html, panel.webview, cssPaths), panel.webview, assetDirs);
@@ -113,7 +125,10 @@ function rewriteAssetUrls(html: string, webview: vscode.Webview, assetDirs?: Rec
 				end++;
 			}
 			const subpath = html.slice(start, end);
-			const fileUri = vscode.Uri.file(path.join(dirPath, subpath));
+			// If this resolves to a dom-patch build destination, load the freshly generated
+			// JS (bfids matching the previewed HTML); otherwise use the on-disk asset file.
+			const diskPath = path.join(dirPath, subpath);
+			const fileUri = vscode.Uri.file(domPatchAssets[diskPath] ?? diskPath);
 			const webviewUri = webview.asWebviewUri(fileUri).toString();
 			html = html.slice(0, idx) + webviewUri + html.slice(end);
 			idx = html.indexOf(prefix, idx + webviewUri.length);

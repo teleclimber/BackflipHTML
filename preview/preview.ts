@@ -23,19 +23,29 @@ export interface PreviewOptions {
 	dataOverrides?: Record<string, unknown>;
 	tmpDir?: string;
 	assetMap?: Map<string, string>;
+	/** Absolute dirs the build would write dom-patch JS to (see resolveDomPatchOutputDirs). */
+	domPatchOutputDirs?: string[];
+	/** Dir to actually write the freshly generated dom-patch JS into. */
+	domPatchOutDir?: string;
 }
 
 export interface PreviewResult {
 	html: string;
 	mockData: Record<string, unknown>;
 	errors: string[];
+	/**
+	 * Map of build destination path -> actual saved path for dom-patch JS generated
+	 * this render. The key is where the file *would* live on a build (so an asset
+	 * request resolving to that path can be matched); the value is the real file.
+	 */
+	domPatchAssets?: Record<string, string>;
 }
 
 /**
  * Preview a partial by compiling it, generating mock data, and rendering to HTML.
  */
 export async function previewPartial(options: PreviewOptions): Promise<PreviewResult> {
-	const { partialName, compiledFile, allFiles, fileName, cssHrefs, liveReload, nonce, dataOverrides, tmpDir, assetMap } = options;
+	const { partialName, compiledFile, allFiles, fileName, cssHrefs, liveReload, nonce, dataOverrides, tmpDir, assetMap, domPatchOutputDirs, domPatchOutDir } = options;
 	const errors: string[] = [];
 
 	// 1. Find the partial
@@ -75,7 +85,43 @@ export async function previewPartial(options: PreviewOptions): Promise<PreviewRe
 	// 6. Wrap in chrome
 	const html = wrapInChrome(rendered, partialName, { cssHrefs, fileName, liveReload, nonce });
 
-	return { html, mockData, errors };
+	// 7. Capture dom-patch JS for the rendered file + its cross-file deps. evalPartial
+	// already ran applyDomPatch on these cached ASTs, so regenerating here is idempotent
+	// and the JS references the exact bfids present in the HTML above.
+	let domPatchAssets: Record<string, string> | undefined;
+	if (domPatchOutDir && domPatchOutputDirs && domPatchOutputDirs.length > 0) {
+		const files = new Map(allFiles ?? []);
+		files.set(fileName ?? 'preview.html', compiledFile);
+		domPatchAssets = await writeDomPatchAssets(files, domPatchOutputDirs, domPatchOutDir);
+	}
+
+	return { html, mockData, errors, domPatchAssets };
+}
+
+/**
+ * Regenerate dom-patch JS for each file and save it under `outDir`. For every
+ * configured dom-patch output dir, record where the build *would* write the file
+ * (`<outputDir>/<file>.js`) mapped to the actual saved path, so an asset request
+ * resolving to that build path can be served the fresh JS.
+ */
+async function writeDomPatchAssets(
+	files: Map<string, CompiledFile>,
+	outputDirs: string[],
+	outDir: string,
+): Promise<Record<string, string>> {
+	const assets: Record<string, string> = {};
+	for (const [relPath, file] of files) {
+		const { js } = applyDomPatch(file);
+		if (!js) continue;
+		const jsRel = relPath.replace(/\.html$/, '.js');
+		const savedPath = path.join(outDir, jsRel);
+		await fs.mkdir(path.dirname(savedPath), { recursive: true });
+		await fs.writeFile(savedPath, js, 'utf-8');
+		for (const outputDir of outputDirs) {
+			assets[path.join(outputDir, jsRel)] = savedPath;
+		}
+	}
+	return assets;
 }
 
 /**

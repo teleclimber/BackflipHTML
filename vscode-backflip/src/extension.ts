@@ -182,12 +182,12 @@ export function activate(context: ExtensionContext): void {
 			};
 			lastPreviewQuery = params;
 
-			const result = await client.sendRequest<{ html: string; partialName: string; cssPaths?: string[]; templateRoot?: string; assetDirs?: Record<string, string> } | null>('backflip/previewPartial', params);
+			const result = await client.sendRequest<{ html: string; partialName: string; cssPaths?: string[]; templateRoot?: string; assetDirs?: Record<string, string>; domPatchDir?: string; domPatchAssets?: Record<string, string> } | null>('backflip/previewPartial', params);
 			if (!result) {
 				vscode.window.showInformationMessage('Could not generate preview for this partial.');
 				return;
 			}
-			showPreviewPanel(result.html, result.partialName, context, result.cssPaths, result.templateRoot, result.assetDirs);
+			showPreviewPanel(result.html, result.partialName, context, result.cssPaths, result.templateRoot, result.assetDirs, result.domPatchDir, result.domPatchAssets);
 		},
 	);
 	context.subscriptions.push(previewPartialDisposable);
@@ -292,9 +292,9 @@ export function activate(context: ExtensionContext): void {
 			}
 
 			if (isPreviewOpen() && lastPreviewQuery) {
-				const result = await client.sendRequest<{ html: string; partialName: string; cssPaths?: string[]; templateRoot?: string; assetDirs?: Record<string, string> } | null>('backflip/previewPartial', lastPreviewQuery);
+				const result = await client.sendRequest<{ html: string; partialName: string; cssPaths?: string[]; templateRoot?: string; assetDirs?: Record<string, string>; domPatchDir?: string; domPatchAssets?: Record<string, string> } | null>('backflip/previewPartial', lastPreviewQuery);
 				if (result) {
-					refreshPreviewPanel(result.html, result.partialName, result.cssPaths, result.templateRoot, result.assetDirs);
+					refreshPreviewPanel(result.html, result.partialName, result.cssPaths, result.templateRoot, result.assetDirs, result.domPatchDir, result.domPatchAssets);
 				}
 			}
 

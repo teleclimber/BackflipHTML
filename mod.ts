@@ -3,7 +3,7 @@ export type { CompiledDirectory } from './compiler/partials.js';
 export { fileToJsModule } from './compiler/generate/js/nodes2js.js';
 export { fileToPhpFile } from './compiler/generate/php/nodes2php.js';
 export { BackflipError } from './compiler/errors.js';
-export { loadConfig, resolveConfigRoot, resolveAssetDirs, CONFIG_FILENAME } from './compiler/config.js';
+export { loadConfig, resolveConfigRoot, resolveAssetDirs, resolveDomPatchOutputDirs, CONFIG_FILENAME } from './compiler/config.js';
 export type { BackflipConfig, OutputConfig, AssetDirConfig, LoadConfigResult } from './compiler/config.js';
 export { collectSlots, resolveAssetRefs, parseBPartValue } from './compiler/helpers.js';
 export { flattenStatics, flattenCompiledFile } from './compiler/flatten.js';

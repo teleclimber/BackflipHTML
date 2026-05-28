@@ -161,3 +161,16 @@ export function resolveAssetDirs(configDir: string, config: BackflipConfig): Map
 	}
 	return result;
 }
+
+/**
+ * Absolute directories that `dom-patch` output is written to. The preview uses
+ * these to compute where each generated JS file *would* be saved on a build, so
+ * it can serve freshly generated JS (whose bfids match the previewed HTML) for
+ * any asset request that resolves to such a path — regardless of whether the
+ * dom-patch dir equals an asset dir or sits inside one.
+ */
+export function resolveDomPatchOutputDirs(configDir: string, config: BackflipConfig): string[] {
+	return (config.output ?? [])
+		.filter(o => o.lang === 'dom-patch')
+		.map(o => path.resolve(configDir, o.path));
+}

@@ -1,7 +1,10 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { compileDirectory } from "../compiler/partials.ts";
+import { compilePartial } from "../compiler/compiler.ts";
+import type { CompiledFile, PartialDef } from "../compiler/types.ts";
 import { renderIndex, handleRequest, broadcastReload, type ServerContext } from "./server.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import * as path from "node:path";
 
 const TEMPLATES_DIR = new URL("../test/templates", import.meta.url).pathname;
 
@@ -172,5 +175,53 @@ Deno.test("responses include Cache-Control: no-store", async () => {
 	const res = mockRes();
 	await handleRequest(mockReq('/preview/simple.html/greeting'), res, ctx);
 	assertEquals(res._headers['Cache-Control'], 'no-store');
+});
+
+// --- dom-patch asset interception ---
+
+async function compileCustomElement(html: string): Promise<CompiledFile> {
+	const m = html.match(/<([a-z][a-z0-9-]*-[a-z0-9-]*)/);
+	if (!m) throw new Error('test html must start with a custom-element tag');
+	const def: PartialDef = { name: m[1], exported: false, customElement: true, loc: { filename: '', from: 1, to: 1 } };
+	const { compiled, errors } = await compilePartial(html, def);
+	if (errors.length > 0) throw new Error('compile errors: ' + errors.map(e => e.message).join(', '));
+	return { partials: new Map([[def.name, compiled]]) };
+}
+
+Deno.test("server serves generated dom-patch JS for a dom-patch dir nested inside an asset dir", async () => {
+	const file = await compileCustomElement(
+		`<my-badge b-attr:tone><span :data-tone="tone">badge</span></my-badge>`
+	);
+	const tmpDir = await Deno.makeTempDir({ prefix: 'srv-bfdom-' });
+	// Asset dir is `static/`; dom-patch output goes to the `static/bfdom` SUBDIR.
+	const assetDir = '/proj/server/static';
+	const buildDir = path.join(assetDir, 'bfdom');
+	const dpCtx: ServerContext = {
+		directory: { files: new Map([['badge.html', file]]) },
+		cssHrefs: [],
+		templateRoot: '/templates',
+		assetDirs: new Map([['static', assetDir]]),
+		assetMap: new Map([['static', '/__assets/static/']]),
+		domPatchOutputDirs: [buildDir],
+		domPatchTmpDir: tmpDir,
+		domPatchAssets: new Map(),
+	};
+
+	// Rendering the preview records build-dest -> saved-path for the generated JS.
+	const previewRes = mockRes();
+	await handleRequest(mockReq('/preview/badge.html/my-badge'), previewRes, dpCtx);
+	assertEquals(previewRes._status, 200);
+	const htmlBfid = previewRes._body.match(/data-bfid="([^"]+)"/)?.[1];
+	assertEquals(typeof htmlBfid, 'string');
+	// The map keys on the nested build destination, not the asset dir root.
+	assertEquals(dpCtx.domPatchAssets!.has(path.join(buildDir, 'badge.js')), true);
+
+	// A request resolving to that nested path is served the fresh JS (no disk read).
+	const jsRes = mockRes();
+	await handleRequest(mockReq('/__assets/static/bfdom/badge.js'), jsRes, dpCtx);
+	assertEquals(jsRes._status, 200);
+	assertStringIncludes(jsRes._headers['Content-Type'], 'javascript');
+	const jsBfid = String(jsRes._body).match(/data-bfid="([^"]+)"/)?.[1];
+	assertEquals(htmlBfid, jsBfid);
 });
 

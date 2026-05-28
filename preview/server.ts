@@ -2,7 +2,7 @@ import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
-import { loadConfig, resolveConfigRoot, resolveAssetDirs } from '../compiler/config.js';
+import { loadConfig, resolveConfigRoot, resolveAssetDirs, resolveDomPatchOutputDirs } from '../compiler/config.js';
 import { compileDirectory, type CompiledDirectory } from '../compiler/partials.js';
 import { previewPartial } from './preview.js';
 import type { CompiledFile } from '../compiler/types.js';
@@ -27,10 +27,13 @@ export interface ServerContext {
 	templateRoot: string;
 	assetDirs?: Map<string, string>;    // name -> absolute path
 	assetMap?: Map<string, string>;     // name -> preview prefix (__assets/name/)
+	domPatchOutputDirs?: string[];      // absolute dirs the build writes dom-patch JS to
+	domPatchTmpDir?: string;            // dir where freshly generated dom-patch JS is written
+	domPatchAssets?: Map<string, string>; // build dest path -> actual saved path (filled per render)
 }
 
 /** Build the server context: compile templates and load CSS. */
-export async function buildContext(projectDir: string): Promise<ServerContext> {
+export async function buildContext(projectDir: string, opts?: { domPatchTmpDir?: string }): Promise<ServerContext> {
 	const { config, errors: configErrors } = await loadConfig(projectDir);
 	if (!config) {
 		throw new Error('backflip.json not found — run from a project directory with a backflip.json');
@@ -82,7 +85,13 @@ export async function buildContext(projectDir: string): Promise<ServerContext> {
 		}
 	}
 
-	return { directory, cssHrefs, templateRoot: inputDir, assetDirs: assetDirsMap, assetMap };
+	const domPatchOutputDirs = resolveDomPatchOutputDirs(projectDir, config);
+	let domPatchTmpDir: string | undefined = opts?.domPatchTmpDir;
+	if (domPatchOutputDirs.length > 0 && !domPatchTmpDir) {
+		domPatchTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'backflip-bfdom-'));
+	}
+
+	return { directory, cssHrefs, templateRoot: inputDir, assetDirs: assetDirsMap, assetMap, domPatchOutputDirs, domPatchTmpDir, domPatchAssets: new Map() };
 }
 
 /** Build a tree structure from the compiled directory for the index page. */
@@ -212,8 +221,11 @@ export async function handleRequest(
 			return;
 		}
 		const filePath = path.join(dir, subpath);
+		// If this resolves to a dom-patch build destination, serve the freshly generated
+		// JS instead (bfids matching the previewed HTML); otherwise read from disk.
+		const readFrom = ctx.domPatchAssets?.get(filePath) ?? filePath;
 		try {
-			const content = await fs.readFile(filePath);
+			const content = await fs.readFile(readFrom);
 			const ext = path.extname(filePath).toLowerCase();
 			const contentType = MIME_TYPES[ext] ?? 'application/octet-stream';
 			res.writeHead(200, { 'Content-Type': contentType, 'Cache-Control': 'no-store' });
@@ -255,7 +267,17 @@ export async function handleRequest(
 		cssHrefs: ctx.cssHrefs.length > 0 ? ctx.cssHrefs : undefined,
 		liveReload,
 		assetMap: ctx.assetMap,
+		domPatchOutputDirs: ctx.domPatchOutputDirs,
+		domPatchOutDir: ctx.domPatchTmpDir,
 	});
+
+	// Record where the freshly generated dom-patch JS was saved so the asset route
+	// can serve it for requests resolving to the matching build destination.
+	if (result.domPatchAssets && ctx.domPatchAssets) {
+		for (const [dest, saved] of Object.entries(result.domPatchAssets)) {
+			ctx.domPatchAssets.set(dest, saved);
+		}
+	}
 
 	if (result.errors.length > 0) {
 		for (const err of result.errors) console.error(err);
@@ -327,6 +349,9 @@ if (import.meta.url === `file://${process.argv[1]}` ||
 		get templateRoot() { return ctx.templateRoot; },
 		get assetDirs() { return ctx.assetDirs; },
 		get assetMap() { return ctx.assetMap; },
+		get domPatchOutputDirs() { return ctx.domPatchOutputDirs; },
+		get domPatchTmpDir() { return ctx.domPatchTmpDir; },
+		get domPatchAssets() { return ctx.domPatchAssets; },
 	};
 
 	const server = createServer(liveCtx, sseClients);
@@ -350,7 +375,7 @@ if (import.meta.url === `file://${process.argv[1]}` ||
 		if (category === 'template' || category === 'config' || category === 'asset') {
 			try {
 				console.log('Recompiling templates...');
-				ctx = await buildContext(projectDir);
+				ctx = await buildContext(projectDir, { domPatchTmpDir: ctx.domPatchTmpDir });
 				console.log('Recompilation complete.');
 			} catch (err) {
 				console.error('Recompilation failed:', err instanceof Error ? err.message : err);
