@@ -183,12 +183,6 @@ if (args.check) {
     const compileOpts = assetMap || assetDirs ? { assetMap, assetDirs } : undefined;
     const { directory: result, errors } = await compileDirectory(inputDir, compileOpts);
 
-    if (assetDirs) {
-        const refs = collectAllAssetReferences(result.files, assetDirs);
-        const assetErrors = validateAssetFiles(refs, assetDirs);
-        errors.push(...assetErrors);
-    }
-
     const fatalErrors = errors.filter(e => e.severity === 'fatal');
     const nonFatalErrors = errors.filter(e => e.severity === 'error');
     const warnings = errors.filter(e => e.severity === 'warning');
@@ -248,7 +242,23 @@ if (args.check) {
         console.log(`Generated ${count} ${out.lang} file${count !== 1 ? 's' : ''} to ${out.path}`);
     }
 
-    if (nonFatalErrors.length > 0) {
+    // Validate asset references *after* writing outputs. Some asset dirs double as
+    // dom-patch output dirs (e.g. demo-attr-meter serves generated JS via @bfdom/…),
+    // and the output dirs were cleaned above — so the build's own generated files
+    // only exist on disk now. Checking earlier would falsely flag them as missing,
+    // while a reference no build produces (a typo'd filename) is still genuinely
+    // absent here and correctly reported.
+    let assetCheckFailed = false;
+    if (assetDirs) {
+        const refs = collectAllAssetReferences(result.files, assetDirs);
+        const assetErrors = validateAssetFiles(refs, assetDirs);
+        for (const err of assetErrors) {
+            if (err.severity === 'warning') console.warn(`warning: ${err.message}`);
+            else { console.error(err.message); assetCheckFailed = true; }
+        }
+    }
+
+    if (nonFatalErrors.length > 0 || assetCheckFailed) {
         Deno.exit(1);
     }
 }

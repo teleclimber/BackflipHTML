@@ -121,3 +121,92 @@ Deno.test("Config: compiles multiple outputs (js and php)", async () => {
         await fs.rm(workDir, { recursive: true, force: true });
     }
 });
+
+Deno.test("Config: asset dir that doubles as dom-patch output dir does not report missing assets", async () => {
+    // Mirrors the demo-attr-meter setup: the `bfdom` asset dir is the same dir the
+    // build writes dom-patch JS to. A page referencing @bfdom/<file>.js must not be
+    // flagged as a missing asset just because the build cleans+regenerates that dir.
+    const workDir = path.join(TMPDIR, "cli-test-bfdom-asset");
+    const templatesDir = path.join(workDir, "templates");
+    const bfdomDir = path.join(workDir, "static-bfdom");
+    await fs.mkdir(templatesDir, { recursive: true });
+    await fs.mkdir(bfdomDir, { recursive: true });
+
+    // A custom element with a dynamic attribute → produces dom-patch JS (widget.js).
+    await fs.writeFile(
+        path.join(templatesDir, "widget.html"),
+        `<my-widget b-attr:level :class="level > 80 ? 'high' : ''" b-export>\n\t<meter :value="level"></meter>\n</my-widget>\n`,
+    );
+    // A page that references the generated dom-patch JS as a bfdom asset.
+    await fs.writeFile(
+        path.join(templatesDir, "page.html"),
+        `<html b-name="page" b-export>\n\t<my-widget level="90"></my-widget>\n\t<script lang="js" src~="@bfdom/widget.js"></script>\n</html>\n`,
+    );
+
+    const config = {
+        root: "templates",
+        output: [
+            { lang: "dom-patch", path: "static-bfdom" },
+            { lang: "js", path: "compiled" },
+        ],
+        assets: [{ name: "bfdom", path: "static-bfdom", prefix: "/static-bfdom/" }],
+    };
+    await fs.writeFile(path.join(workDir, "backflip.json"), JSON.stringify(config));
+
+    try {
+        const { code, stdout, stderr } = await runCli([], workDir);
+        assertEquals(
+            stderr.includes("asset file not found"),
+            false,
+            `Should not report the generated dom-patch asset as missing. stderr: ${stderr}`,
+        );
+        assertEquals(code, 0, `Expected exit 0, got ${code}. stderr: ${stderr}`);
+        assertEquals(stdout.includes("Generated"), true, `Expected 'Generated' in stdout: ${stdout}`);
+
+        // The dom-patch JS the page referenced should actually exist after the build.
+        await fs.stat(path.join(bfdomDir, "widget.js"));
+    } finally {
+        await fs.rm(workDir, { recursive: true, force: true });
+    }
+});
+
+Deno.test("Config: reference to a dom-patch asset no template generates is still reported missing", async () => {
+    // Guards against the over-broad fix: validating after generation must still
+    // catch a bad @bfdom/<name>.js reference when no template produces that file.
+    const workDir = path.join(TMPDIR, "cli-test-bfdom-missing");
+    const templatesDir = path.join(workDir, "templates");
+    await fs.mkdir(templatesDir, { recursive: true });
+    await fs.mkdir(path.join(workDir, "static-bfdom"), { recursive: true });
+
+    await fs.writeFile(
+        path.join(templatesDir, "widget.html"),
+        `<my-widget b-attr:level :class="level > 80 ? 'high' : ''" b-export>\n\t<meter :value="level"></meter>\n</my-widget>\n`,
+    );
+    // Page references @bfdom/typo.js — there is no typo.html, so nothing generates it.
+    await fs.writeFile(
+        path.join(templatesDir, "page.html"),
+        `<html b-name="page" b-export>\n\t<my-widget level="90"></my-widget>\n\t<script lang="js" src~="@bfdom/typo.js"></script>\n</html>\n`,
+    );
+
+    const config = {
+        root: "templates",
+        output: [
+            { lang: "dom-patch", path: "static-bfdom" },
+            { lang: "js", path: "compiled" },
+        ],
+        assets: [{ name: "bfdom", path: "static-bfdom", prefix: "/static-bfdom/" }],
+    };
+    await fs.writeFile(path.join(workDir, "backflip.json"), JSON.stringify(config));
+
+    try {
+        const { code, stderr } = await runCli([], workDir);
+        assertEquals(
+            stderr.includes("asset file not found: @bfdom/typo.js"),
+            true,
+            `Expected missing-asset error for the typo'd reference. stderr: ${stderr}`,
+        );
+        assertEquals(code, 1, `Expected exit 1 for missing asset, got ${code}. stderr: ${stderr}`);
+    } finally {
+        await fs.rm(workDir, { recursive: true, force: true });
+    }
+});

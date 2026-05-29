@@ -69,7 +69,7 @@ The `srcset` attribute is fully supported. BackflipHTML parses the `srcset` valu
 
 By declaring your assets, BackflipHTML provides compile-time guarantees and editor assistance:
 
-- **Validation**: The compiler throws errors if an asset directory name is undefined, if a path attempts directory traversal outside the asset folder (`../`), or if the referenced file does not exist.
+- **Validation**: The compiler throws errors if an asset directory name is undefined, if a path attempts directory traversal outside the asset folder (`../`), or if the referenced file does not exist. When an asset directory doubles as a [`dom-patch` output directory](configuration.md), the build generates files into it; the "file does not exist" check runs *after* those files are written, so generated assets validate correctly while references no build produces are still reported as missing.
 - **Language Server (LSP)**: The VSCode extension provides auto-completion for asset paths, hover previews (with image dimensions), go-to-definition, and red squiggles for missing files. It also provides an Asset Report panel.
 - **Preview Server**: The preview server automatically resolves and serves assets, allowing you to preview templates with images and CSS without needing a separate build step.
 
