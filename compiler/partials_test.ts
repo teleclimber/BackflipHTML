@@ -181,6 +181,16 @@ Deno.test("compileDirectory - plain HTML file with no directives", async () => {
 });
 
 // Test: empty HTML file
+Deno.test("compileDirectory - missing directory compiles to empty, no throw", async () => {
+    // A non-existent template directory should yield an empty result rather than
+    // throwing ENOENT, so watch-based tools (preview, LSP) can start and pick the
+    // directory up once it is created.
+    const dir = path.join(TMPDIR, `partials_test_missing_${Date.now()}`);
+    const { directory, errors } = await compileDirectory(dir);
+    assertEquals(directory.files.size, 0);
+    assertEquals(errors.length, 0);
+});
+
 Deno.test("compileDirectory - empty HTML file", async () => {
     const dir = await makeTempDir("empty");
     await writeFile(path.join(dir, "empty.html"), "");

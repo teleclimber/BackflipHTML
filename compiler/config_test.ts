@@ -42,6 +42,7 @@ Deno.test("loadConfig - returns null when no config file exists", async () => {
 
 Deno.test("loadConfig - returns parsed config with root only", async () => {
 	const dir = await makeTempDir("root_only");
+	await fs.mkdir(path.join(dir, "src/templates"), { recursive: true });
 	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({ root: "src/templates" }));
 	const { config, errors } = await loadConfig(dir);
 	assertEquals(config, { root: "src/templates" });
@@ -50,6 +51,7 @@ Deno.test("loadConfig - returns parsed config with root only", async () => {
 
 Deno.test("loadConfig - returns parsed config with all fields", async () => {
 	const dir = await makeTempDir("all_fields");
+	await fs.mkdir(path.join(dir, "src/templates"), { recursive: true });
 	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({
 		root: "src/templates",
 		output: [{ lang: "js", path: "dist" }]
@@ -106,6 +108,26 @@ Deno.test("loadConfig - throws when root is not a string", async () => {
 	const dir = await makeTempDir("root_num");
 	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({ root: 123 }));
 	await assertRejects(() => loadConfig(dir), Error, '"root" is required and must be a string');
+});
+
+Deno.test("loadConfig - root directory not found is a soft error", async () => {
+	const dir = await makeTempDir("root_nodir");
+	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({ root: "templates" }));
+	const { config, errors } = await loadConfig(dir);
+	// Config is still returned so watch-based tools can recover when the dir appears.
+	assertEquals(config, { root: "templates" });
+	assertEquals(errors.length, 1);
+	assertStringIncludes(errors[0], 'directory not found: templates');
+});
+
+Deno.test("loadConfig - root path is file not directory is a soft error", async () => {
+	const dir = await makeTempDir("root_file");
+	await fs.writeFile(path.join(dir, "afile.txt"), "hello");
+	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({ root: "afile.txt" }));
+	const { config, errors } = await loadConfig(dir);
+	assertEquals(config, { root: "afile.txt" });
+	assertEquals(errors.length, 1);
+	assertStringIncludes(errors[0], 'is not a directory');
 });
 
 Deno.test("loadConfig - throws on invalid output lang value", async () => {

@@ -83,6 +83,23 @@ export async function loadConfig(dir: string): Promise<LoadConfigResult> {
 	}
 
 	const configErrors: string[] = [];
+
+	// Root existence is a soft error: record it but keep the config so watch-based
+	// tools (preview, LSP) can recover once the directory is created.
+	const resolvedRoot = path.resolve(dir, obj.root);
+	try {
+		const stat = await fs.stat(resolvedRoot);
+		if (!stat.isDirectory()) {
+			configErrors.push(`${CONFIG_FILENAME}: "root" is not a directory: ${obj.root}`);
+		}
+	} catch (err: any) {
+		if (err.code === 'ENOENT') {
+			configErrors.push(`${CONFIG_FILENAME}: "root" directory not found: ${obj.root}`);
+		} else {
+			throw err;
+		}
+	}
+
 	const validAssets: Record<string, unknown>[] = [];
 
 	if (obj.assets !== undefined) {

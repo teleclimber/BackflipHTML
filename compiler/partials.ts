@@ -1,4 +1,5 @@
 import * as fs from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
 import * as path from 'node:path';
 import stream from 'node:stream';
 import { RewritingStream } from 'parse5-html-rewriting-stream';
@@ -20,7 +21,17 @@ export interface CompiledDirectory {
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist']);
 
 async function collectHtmlFiles(dir: string, base: string = dir): Promise<string[]> {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
+    let entries: Dirent<string>[];
+    try {
+        entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch (err: any) {
+        // A missing directory (e.g. a template root that hasn't been created yet,
+        // or a subdirectory removed mid-scan) contributes no files rather than
+        // crashing the caller. Watch-based tools rely on this to start and then
+        // pick the directory up once it appears.
+        if (err?.code === 'ENOENT') return [];
+        throw err;
+    }
     const results: string[] = [];
     for (const entry of entries) {
         const fullPath = path.join(dir, entry.name);
