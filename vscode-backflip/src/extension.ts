@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { workspace, ExtensionContext } from 'vscode';
+import { ExtensionContext } from 'vscode';
 import {
 	LanguageClient,
 	LanguageClientOptions,
@@ -232,13 +232,9 @@ export function activate(context: ExtensionContext): void {
 			{ scheme: 'file', language: 'html' },
 			{ scheme: 'file', language: 'css' },
 		],
-		synchronize: {
-			fileEvents: [
-				workspace.createFileSystemWatcher('**/*.html'),
-				workspace.createFileSystemWatcher('**/*.css'),
-				workspace.createFileSystemWatcher('**/backflip.json'),
-			],
-		},
+		// File watching is handled by the language server's own native recursive
+		// fs watcher (see lsp setupFileWatcher / lib/watch.ts), which — unlike
+		// VS Code's suffix-glob watchers — also catches directory renames/moves.
 		middleware: {
 			provideHover: async (document, position, token, next) => {
 				const result = await next(document, position, token);

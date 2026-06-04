@@ -5,7 +5,6 @@ import {
 	InitializeParams,
 	InitializeResult,
 	TextDocumentSyncKind,
-	DidChangeWatchedFilesParams,
 	DefinitionParams,
 	ReferenceParams,
 	DocumentSymbolParams,
@@ -25,6 +24,7 @@ import { findDefinition, findAssetDefinition, findCustomElementDefinition } from
 import { findReferences, parseAssetRefAtCursor, findAssetReferences } from './references.js';
 import { getDocumentSymbols } from './symbols.js';
 import { getHover, findElementsForSelector, findRulesForElement, findCustomElementTagAtCursor } from './hover.js';
+import { createWatcher, type Watcher, type WatchOptions, type WatchCallback } from '../../lib/watch.js';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
@@ -46,6 +46,7 @@ let assetDirs: Map<string, string> | undefined;
 let templateFileContents: Map<string, string> = new Map();
 let domPatchOutputDirs: string[] = [];
 let domPatchTmpDir: string | undefined;
+let fileWatcher: Watcher | null = null;
 
 connection.onInitialize((params: InitializeParams): InitializeResult => {
 	workspaceRoot = params.workspaceFolders?.[0]?.uri?.replace('file://', '') ?? '';
@@ -120,7 +121,45 @@ async function loadAndApplyConfig(): Promise<void> {
 		configErrors = [];
 		clearAllDiagnostics();
 		projectIndex = { partialDefs: new Map(), partialRefs: [] };
+	} finally {
+		setupFileWatcher();
 	}
+}
+
+/**
+ * (Re)create the native filesystem watcher. Runs after every config load so the
+ * watched template root and asset dirs track the current config. Unlike VS Code's
+ * suffix-glob watchers, the native recursive watcher surfaces per-file events for
+ * directory renames/moves, so those trigger a recompile too.
+ */
+function setupFileWatcher(): void {
+	if (fileWatcher) {
+		fileWatcher.close();
+		fileWatcher = null;
+	}
+	if (!workspaceRoot) return;
+
+	const options: WatchOptions = {
+		// Fall back to the workspace root when there's no config yet, so newly
+		// added templates are still noticed.
+		templateRoot: templateRoot ?? workspaceRoot,
+		configPath: path.join(workspaceRoot, CONFIG_FILENAME),
+	};
+	if (assetDirs && assetDirs.size > 0) {
+		options.assetDirs = Array.from(assetDirs.values());
+	}
+
+	const onWatch: WatchCallback = (category) => {
+		if (category === 'config') {
+			// Config may have changed the watched dirs; loadAndApplyConfig
+			// recreates the watcher via its finally block.
+			loadAndApplyConfig();
+		} else {
+			scheduleRecompile();
+		}
+	};
+
+	fileWatcher = createWatcher(options, onWatch);
 }
 
 function clearAllDiagnostics(): void {
@@ -265,18 +304,6 @@ documents.onDidSave((event) => {
 	const fileName = path.basename(filePath);
 
 	if (fileName === CONFIG_FILENAME) {
-		loadAndApplyConfig();
-	} else {
-		scheduleRecompile();
-	}
-});
-
-// Handle file watcher events (for files not open in the editor, external edits, etc.)
-connection.onDidChangeWatchedFiles((params: DidChangeWatchedFilesParams) => {
-	const configChanged = params.changes.some(
-		(c) => path.basename(c.uri.replace('file://', '')) === CONFIG_FILENAME
-	);
-	if (configChanged) {
 		loadAndApplyConfig();
 	} else {
 		scheduleRecompile();

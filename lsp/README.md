@@ -15,7 +15,7 @@
 
 The server requires a `backflip.json` in the workspace root to activate (see [`docs/configuration.md`](../docs/configuration.md)). On file open/save, it runs `compileDirectory()` on the template directory and builds a project index of partial definitions and references. CSS analysis is provided by [`@backflip/css`](../css/README.md) — CSS files are automatically discovered from configured asset directories.
 
-File changes trigger recompilation with a 300ms debounce. The server also watches for `backflip.json` changes to reload configuration.
+File changes trigger recompilation with a 300ms debounce. The server runs its own native recursive filesystem watcher (shared with the preview server, see [`lib/watch.ts`](../lib/watch.ts)) over the template root and asset directories, so edits, file renames, and directory renames/moves all recompute — including changes made outside the editor (e.g. from the terminal). The editor client's watched-file notifications are kept as a backup for environments where native `fs.watch` is unreliable. The server also watches for `backflip.json` changes to reload configuration.
 
 ## Key files
 
