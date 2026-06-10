@@ -1,8 +1,9 @@
 import { assertEquals } from "jsr:@std/assert";
 
-import type { ElementTNode } from "../../types.ts";
+import type { ElementTNode, PrintTNode, TNode } from "../../types.ts";
+import { interpretBackcode } from "../../backcode.ts";
 import { makeSequentialBfidGen } from "./bfid.ts";
-import { ensureBfid } from "./mutate-ast.ts";
+import { ensureBfid, insertCommentsAround } from "./mutate-ast.ts";
 
 function el(attrs: any[] = []): ElementTNode {
 	return { type: 'element', tagName: 'div', attrs, tnodes: [] };
@@ -55,4 +56,39 @@ Deno.test("two calls on same element return same id and only append once", () =>
 	assertEquals(a, b);
 	assertEquals(a, 'bf0');
 	assertEquals(e.attrs.length, 1);
+});
+
+Deno.test("insertCommentsAround brackets the node with two comment siblings", () => {
+	const print: PrintTNode = { type: 'print', data: interpretBackcode('x') };
+	const container: TNode[] = [
+		{ type: 'raw', raw: 'Some text ' },
+		print,
+		{ type: 'raw', raw: ' more text.' },
+	];
+	insertCommentsAround(container, print, 'bfid:bf1', 'bfid:bf2');
+	assertEquals(container.length, 5);
+	assertEquals(container[0], { type: 'raw', raw: 'Some text ' });
+	assertEquals(container[1], { type: 'comment', text: 'bfid:bf1' });
+	assertEquals(container[2], print);
+	assertEquals(container[3], { type: 'comment', text: 'bfid:bf2' });
+	assertEquals(container[4], { type: 'raw', raw: ' more text.' });
+});
+
+Deno.test("insertCommentsAround handles a node at the start of its container", () => {
+	const print: PrintTNode = { type: 'print', data: interpretBackcode('x') };
+	const container: TNode[] = [print];
+	insertCommentsAround(container, print, 'bfid:bf1', 'bfid:bf2');
+	assertEquals(container.map(n => n.type), ['comment', 'print', 'comment']);
+});
+
+Deno.test("insertCommentsAround throws when the node is not in the container", () => {
+	const print: PrintTNode = { type: 'print', data: interpretBackcode('x') };
+	let threw = false;
+	try {
+		insertCommentsAround([], print, 'a', 'b');
+	} catch (e) {
+		threw = true;
+		assertEquals(String(e).includes('not found in its container'), true);
+	}
+	assertEquals(threw, true);
 });

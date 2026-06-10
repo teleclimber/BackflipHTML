@@ -40,6 +40,38 @@ Deno.test("collects print nodes", () => {
 	assertEquals(sites[0].liveVars, ['user']);
 });
 
+Deno.test("print site carries its container and nearest enclosing element", () => {
+	// Print directly in the root → parentElement is null (the custom element itself).
+	const rootPrint: PrintTNode = { type: 'print', data: interpretBackcode('a') };
+	const r1 = root(rootPrint);
+	const s1 = collectBackcodeSites(r1, new Set(['a']))[0];
+	if (s1.site.kind !== 'print') throw new Error('expected print');
+	assertEquals(s1.site.parentElement, null);
+	assertEquals(s1.site.container, r1.tnodes);
+
+	// Print inside a <p> → parentElement is that <p>, container is the <p>'s children.
+	const bodyPrint: PrintTNode = { type: 'print', data: interpretBackcode('b') };
+	const p = elem('p', [], [bodyPrint]);
+	const r2 = root(p);
+	const s2 = collectBackcodeSites(r2, new Set(['b']))[0];
+	if (s2.site.kind !== 'print') throw new Error('expected print');
+	assertEquals(s2.site.parentElement, p);
+	assertEquals(s2.site.container, p.tnodes);
+});
+
+Deno.test("print inside b-if keeps nearest element as parent (if is DOM-transparent)", () => {
+	const print: PrintTNode = { type: 'print', data: interpretBackcode('a') };
+	const branch: IfBranch = { condition: interpretBackcode('show'), tnodes: [print] };
+	const ifNode: IfTNode = { type: 'if', branches: [branch] };
+	const p = elem('p', [], [ifNode]);
+	const r = root(p);
+	const printSite = collectBackcodeSites(r, new Set(['a', 'show'])).find(s => s.site.kind === 'print')!;
+	if (printSite.site.kind !== 'print') throw new Error('expected print');
+	assertEquals(printSite.site.parentElement, p);
+	// The markers must be inserted as siblings of the print, i.e. inside the branch.
+	assertEquals(printSite.site.container, branch.tnodes);
+});
+
 Deno.test("collects if-condition sites and recurses into branches", () => {
 	const innerEl = elem('span', [dyn('title', 'x')]);
 	const branch1: IfBranch = { condition: interpretBackcode('show'), tnodes: [innerEl] };

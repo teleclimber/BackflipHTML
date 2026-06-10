@@ -60,6 +60,7 @@ function flattenList(tnodes: TNode[]): TNode[] {
 function flattenNode(n: TNode): TNode[] {
 	switch (n.type) {
 		case 'raw':
+		case 'comment':
 		case 'print':
 		case 'slot':
 		case 'attr-bind':
@@ -86,7 +87,7 @@ function flattenNode(n: TNode): TNode[] {
 
 function flattenElement(el: ElementTNode): TNode[] {
 	const flatChildren = flattenList(el.tnodes);
-	const childrenLeafFlat = flatChildren.every(c => c.type === 'raw' || c.type === 'attr-bind');
+	const childrenLeafFlat = flatChildren.every(c => c.type === 'raw' || c.type === 'comment' || c.type === 'attr-bind');
 	// Unresolved asset attrs must stay on an ElementTNode — codegen would throw
 	// otherwise. After resolveAssetRefs runs, asset parts have been turned into
 	// static parts and this branch is no longer taken.

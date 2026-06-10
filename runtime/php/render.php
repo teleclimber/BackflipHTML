@@ -258,6 +258,9 @@ function backflip_streamRender(array $node, array $ctx, array $slots = []): Gene
         case 'raw':
             yield $node['raw'];
             break;
+        case 'comment':
+            yield '<!--' . $node['text'] . '-->';
+            break;
         case 'print':
             yield backflip_renderPrint($node, $ctx);
             break;

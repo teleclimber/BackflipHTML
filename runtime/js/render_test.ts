@@ -11,6 +11,10 @@ Deno.test("raw node", () => {
 	assertEquals(render({ type: 'raw', raw: '<p>hello</p>' }, {}), '<p>hello</p>');
 });
 
+Deno.test("comment node", () => {
+	assertEquals(render({ type: 'comment', text: 'bfid:bf1' }, {}), '<!--bfid:bf1-->');
+});
+
 Deno.test("print node", () => {
 	const node: PrintRNode = { type: 'print', data: makeFn('name', ['name']) };
 	assertEquals(render(node, { name: 'world' }), 'world');

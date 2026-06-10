@@ -119,6 +119,20 @@ Deno.test("php: greeting: renders with a different name", async () => {
     );
 });
 
+Deno.test("php: comment node renders verbatim as an HTML comment", async () => {
+    const root = `['type' => 'root', 'nodes' => [`
+        + `['type' => 'raw', 'raw' => '<p>a'],`
+        + `['type' => 'comment', 'text' => 'bfid:bf1'],`
+        + `['type' => 'raw', 'raw' => 'b</p>']`
+        + `]]`;
+    const script = `<?php
+declare(strict_types=1);
+require '${RENDER_PHP}';
+echo backflip_renderRoot(${root}, []);
+`;
+    assertEquals(await runPhp(script), "<p>a<!--bfid:bf1-->b</p>");
+});
+
 // ---------------------------------------------------------------------------
 // blog.html — b-for and b-if/b-else
 // ---------------------------------------------------------------------------

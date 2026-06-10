@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, CustomElementCallTNode, PartialBinding, ElementTNode, AttrBindTNode, AttrPart, CompiledFile } from '../../types.js';
+import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, CommentTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, CustomElementCallTNode, PartialBinding, ElementTNode, AttrBindTNode, AttrPart, CompiledFile } from '../../types.js';
 import type { Parsed } from '../../backcode.js';
 import { generatePhpFunction } from './generatephp.js';
 
@@ -25,6 +25,9 @@ export function nodeToPhp(n: TNode | RootTNode, assetMap?: Map<string, string>):
 			break;
 		case 'raw':
 			out = rawToPhp(n);
+			break;
+		case 'comment':
+			out = commentToPhp(n);
 			break;
 		case 'slot':
 			out = slotToPhp(n);
@@ -88,6 +91,10 @@ function rawToPhp(n: RawTNode): string {
 		.replace(/\\/g, '\\\\')
 		.replace(/'/g, "\\'");
 	return `['type' => 'raw', 'raw' => '${escaped}']`;
+}
+
+function commentToPhp(n: CommentTNode): string {
+	return `['type' => 'comment', 'text' => '${escapeStr(n.text)}']`;
 }
 
 function printToPhp(print_node: PrintTNode): string {

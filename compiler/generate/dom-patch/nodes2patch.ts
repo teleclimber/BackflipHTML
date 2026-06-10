@@ -1,8 +1,8 @@
 import type { CompiledFile } from '../../types.js';
-import { makeBfidGen, type BfidGen } from './bfid.js';
+import { makeBfidGen, commentMarker, type BfidGen } from './bfid.js';
 import { collectBackcodeSites } from './collect.js';
 import { qualifies } from './filter.js';
-import { ensureBfid, elementForSite } from './mutate-ast.js';
+import { ensureBfid, elementForSite, insertCommentsAround } from './mutate-ast.js';
 import { generateClassForPartial, generateFile, type BfidSite } from './codegen.js';
 
 export type { BfidGen } from './bfid.js';
@@ -30,6 +30,20 @@ export function applyDomPatch(file: CompiledFile, bfidGen?: BfidGen): DomPatchRe
 			if (site.site.kind === 'definition-root-attr') {
 				// Patches the custom element itself — runtime already has the reference (this.ce).
 				withBfids.push({ target: { kind: 'this-element' }, backcode: site });
+				continue;
+			}
+			if (site.site.kind === 'print') {
+				// The print's parent element anchors the runtime lookup (or this.ce when
+				// the print sits directly in the custom element). Two marker comments are
+				// inserted as siblings so the runtime can find and replace the range.
+				const parentEl = site.site.parentElement;
+				const target = parentEl
+					? { kind: 'bfid-element' as const, bfid: ensureBfid(parentEl, gen) }
+					: { kind: 'this-element' as const };
+				const startId = gen();
+				const endId = gen();
+				insertCommentsAround(site.site.container, site.site.node, commentMarker(startId), commentMarker(endId));
+				withBfids.push({ target, backcode: site, comments: { startId, endId } });
 				continue;
 			}
 			const element = elementForSite(site);

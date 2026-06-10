@@ -11,6 +11,7 @@
     "npm:css-select@^5.1.0": "5.2.2",
     "npm:css-tree@^3.1.0": "3.2.1",
     "npm:css-what@^6.1.0": "6.2.2",
+    "npm:jsdom@*": "29.0.1",
     "npm:jsdom@^29.0.1": "29.0.1",
     "npm:parse5-html-rewriting-stream@*": "8.0.0",
     "npm:parse5-html-rewriting-stream@8": "8.0.0",

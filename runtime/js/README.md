@@ -12,6 +12,7 @@ See [`docs/runtime-js.md`](../../docs/runtime-js.md) for the full API reference,
 ## Node types handled
 
 - **raw** — passed through as-is
+- **comment** — emitted verbatim as `<!--text-->`
 - **print** — evaluates expression, HTML-escapes the result via `escapeHtml()`, and inserts it
 - **for** — iterates over a collection (checked via `Symbol.iterator`), rendering children once per item with an augmented context
 - **if** — evaluates branches in order, renders the first truthy one

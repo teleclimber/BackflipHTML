@@ -12,6 +12,10 @@ export interface RawRNode {
 	type: 'raw',
 	raw: string
 }
+export interface CommentRNode {	// an HTML comment <!--text-->, emitted verbatim
+	type: 'comment',
+	text: string
+}
 export interface PrintRNode {	// for outputing {{ foo }} into HTML (do escaping)
 	type: 'print',
 	data: rfn,
@@ -65,7 +69,7 @@ export interface AttrBindRNode {
 	attrsOnly?: boolean
 }
 
-export type RNode = RawRNode | PrintRNode | ForRNode | IfRNode | SlotRNode | PartialRefRNode | AttrBindRNode;
+export type RNode = RawRNode | CommentRNode | PrintRNode | ForRNode | IfRNode | SlotRNode | PartialRefRNode | AttrBindRNode;
 
 export type SlotMap = { [name: string]: { nodes: RNode[], ctx: any } }
 
@@ -94,6 +98,9 @@ function* streamRender(n :RNode, ctx:any, slots?: SlotMap) :Generator<string> {
 			break;
 		case 'raw':
 			yield n.raw;
+			break;
+		case 'comment':
+			yield `<!--${n.text}-->`;
 			break;
 		case 'partial-ref':
 			yield* streamRenderPartialRef(n, ctx);

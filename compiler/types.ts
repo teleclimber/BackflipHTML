@@ -38,6 +38,11 @@ export interface RawTNode {
 	type: 'raw',
 	raw: string
 }
+export interface CommentTNode {	// an HTML comment <!--text-->, emitted verbatim
+	type: 'comment',
+	text: string,
+	loc?: SourceLoc
+}
 export interface PrintTNode {	// for outputing {{ foo }} into HTML (do escaping)
 	type: 'print',
 	data: Parsed,
@@ -146,7 +151,7 @@ export interface AttrBindTNode {
 	loc?: SourceLoc,
 }
 
-export type TNode = RawTNode | PrintTNode | ForTNode | IfTNode | SlotTNode | PartialRefTNode | ElementTNode | AttrBindTNode;
+export type TNode = RawTNode | CommentTNode | PrintTNode | ForTNode | IfTNode | SlotTNode | PartialRefTNode | ElementTNode | AttrBindTNode;
 export type ParentTNode = RootTNode | ForTNode | IfBranch | ElementTNode;
 
 export interface AssetRef {

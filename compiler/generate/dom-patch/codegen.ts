@@ -1,4 +1,5 @@
 import { generateStatement } from '../js/generatejs.js';
+import { commentMarker } from './bfid.js';
 import type { BackcodeSite } from './collect.js';
 
 /**
@@ -15,6 +16,9 @@ export type PatchTarget =
 export interface BfidSite {
 	target: PatchTarget;
 	backcode: BackcodeSite;
+	// For 'print' sites: the ids of the two marker comments bracketing the range.
+	// `target` is the print's parent element (the comments' DOM parent).
+	comments?: { startId: string; endId: string };
 }
 
 export function classNameFor(partialName: string): string {
@@ -77,6 +81,10 @@ export function generateClassForPartial(
 	const collect = genCollectData(bAttrs);
 	const update = genUpdate(varOrder);
 
+	// The child-range patch helper is only needed when there's at least one print site.
+	const hasPrint = sites.some(s => s.backcode.site.kind === 'print');
+	const helperMethods = hasPrint ? [genPatchTextBetweenMethod(className)] : [];
+
 	const methods = [
 		'\tconstructor(ce) { this.ce = ce; }',
 		'',
@@ -86,6 +94,7 @@ export function generateClassForPartial(
 		'',
 		...mutateMethods,
 		'',
+		...(helperMethods.length ? [...helperMethods, ''] : []),
 		collect,
 		'',
 		update,
@@ -119,6 +128,13 @@ function bcFnNameForSite(s: BfidSite): string {
 			// The only remaining collision source — two def-root attrs with the same
 			// name — is already rejected by the compiler.
 			return `bc_ce_${sanitizeAttrName(inner.attr.name)}`;
+		case 'print': {
+			// Keyed off the (unique) leading marker id, so each print gets its own bc fn.
+			if (!s.comments) {
+				throw new Error("dom-patch codegen: 'print' site is missing its comment markers");
+			}
+			return `bc_print_${sanitizeAttrName(s.comments.startId)}`;
+		}
 		default:
 			throw new Error(`dom-patch codegen: unsupported site kind '${inner.kind}' — add a bc-name scheme when wiring this kind in.`);
 	}
@@ -181,6 +197,35 @@ function genMutateMethod(varName: string, varSites: BfidSite[], className: strin
 	return `\t${mutateFnName(varName)}(data) {\n${body.join('\n')}\n\t}`;
 }
 
+// Per-class helper used by 'print' sites. Finds the two marker comments among
+// `parent`'s direct children, removes every node strictly between them, and
+// inserts a single text node before the closing marker. A text node is used
+// (never innerText/innerHTML) so the parent's other children — and any markup
+// the value happens to contain — are preserved and never interpreted as HTML.
+function genPatchTextBetweenMethod(className: string): string {
+	return [
+		'\tpatchTextBetween(parent, startMarker, endMarker, text) {',
+		'\t\tlet start = null, end = null;',
+		'\t\tfor (const node of parent.childNodes) {',
+		'\t\t\tif (node.nodeType !== 8) continue;',
+		'\t\t\tif (node.nodeValue === startMarker) start = node;',
+		'\t\t\telse if (node.nodeValue === endMarker) end = node;',
+		'\t\t}',
+		'\t\tif (!start || !end) {',
+		`\t\t\tconsole.error('BackflipHTML ${className}: comment markers not found; skipping update', parent);`,
+		'\t\t\treturn;',
+		'\t\t}',
+		'\t\tlet n = start.nextSibling;',
+		'\t\twhile (n && n !== end) {',
+		'\t\t\tconst next = n.nextSibling;',
+		'\t\t\tparent.removeChild(n);',
+		'\t\t\tn = next;',
+		'\t\t}',
+		'\t\tparent.insertBefore(document.createTextNode(text), end);',
+		'\t}',
+	].join('\n');
+}
+
 function genMissingElementError(target: PatchTarget, className: string): string {
 	if (target.kind === 'this-element') {
 		return `console.error('BackflipHTML ${className}: host element not found; skipping update');`;
@@ -199,6 +244,15 @@ function genSiteUpdate(s: BfidSite): string {
 				return `\t\t\tif (this.${fn}(data)) elem.setAttribute('${dom}', ''); else elem.removeAttribute('${dom}');`;
 			}
 			return `\t\t\telem.setAttribute('${dom}', String(this.${fn}(data)));`;
+		}
+		case 'print': {
+			if (!s.comments) {
+				throw new Error("dom-patch codegen: 'print' site is missing its comment markers");
+			}
+			const fn = bcFnNameForSite(s);
+			const start = commentMarker(s.comments.startId);
+			const end = commentMarker(s.comments.endId);
+			return `\t\t\tthis.patchTextBetween(elem, '${start}', '${end}', String(this.${fn}(data)));`;
 		}
 		default:
 			throw new Error(`dom-patch codegen: unsupported site kind '${inner.kind}' — add an emit branch when wiring this kind in.`);

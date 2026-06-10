@@ -1,6 +1,6 @@
 import { assertEquals, assertMatch } from "jsr:@std/assert";
 
-import type { RootTNode, RawTNode, PrintTNode, ForTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, CompiledFile } from "../../types.ts";
+import type { RootTNode, RawTNode, CommentTNode, PrintTNode, ForTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, CompiledFile } from "../../types.ts";
 import { interpretBackcode } from "../../backcode.ts";
 import { nodeToJS, nodeToJsExport, fileToJsModule, sanitizeName } from "./nodes2js.ts";
 
@@ -28,6 +28,20 @@ Deno.test("raw node escapes newlines", () => {
 	// Should not contain a literal newline inside the raw string value
 	const rawMatch = js.match(/raw:\s*'([^']*)'/);
 	assertEquals(rawMatch![1].includes('\n'), false);
+});
+
+Deno.test("comment node", () => {
+	const node: CommentTNode = { type: 'comment', text: 'bfid:bf1' };
+	const js = nodeToJS(node);
+	assertMatch(js, /type:\s*'comment'/);
+	assertMatch(js, /text:\s*'bfid:bf1'/);
+});
+
+Deno.test("comment node escapes quotes", () => {
+	const node: CommentTNode = { type: 'comment', text: "a'b" };
+	const js = nodeToJS(node);
+	const m = js.match(/text:\s*'([^]*)'\s*\}/);
+	assertEquals(m![1], "a\\'b");
 });
 
 Deno.test("print node", () => {

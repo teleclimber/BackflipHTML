@@ -1,6 +1,6 @@
 import { assertEquals } from "jsr:@std/assert";
 
-import type { ElementTNode, AttrPart, PrintTNode } from "../../types.ts";
+import type { ElementTNode, AttrPart, PrintTNode, ForTNode } from "../../types.ts";
 import { interpretBackcode } from "../../backcode.ts";
 import type { BackcodeSite } from "./collect.ts";
 import { qualifies } from "./filter.ts";
@@ -20,13 +20,39 @@ function makeAttrSite(
 	};
 }
 
-Deno.test("rejects non-attr sites (v1: only attr kind is patchable)", () => {
-	const printSite: BackcodeSite = {
-		site: { kind: 'print', node: { type: 'print', data: interpretBackcode('x') } as PrintTNode },
-		parsed: interpretBackcode('x'),
-		liveVars: ['x'], otherVars: [], inForLoop: false,
+function makePrintSite(
+	code: string,
+	liveVars: string[],
+	otherVars: string[],
+	inForLoop = false,
+): BackcodeSite {
+	const node: PrintTNode = { type: 'print', data: interpretBackcode(code) };
+	const container: PrintTNode[] = [node];
+	return {
+		site: { kind: 'print', node, container, parentElement: null },
+		parsed: interpretBackcode(code),
+		liveVars, otherVars, inForLoop,
 	};
-	assertEquals(qualifies(printSite), false);
+}
+
+Deno.test("accepts pure-live print sites", () => {
+	assertEquals(qualifies(makePrintSite('x', ['x'], [])), true);
+});
+
+Deno.test("print sites obey the cross-kind rules (no-live / mixed / in-for rejected)", () => {
+	assertEquals(qualifies(makePrintSite('x', [], ['x'])), false);
+	assertEquals(qualifies(makePrintSite('x + y', ['x'], ['y'])), false);
+	assertEquals(qualifies(makePrintSite('x', ['x'], [], true)), false);
+});
+
+Deno.test("rejects still-unsupported kinds (e.g. for-iterable)", () => {
+	const node: ForTNode = { type: 'for', iterable: interpretBackcode('items'), valName: 'item', tnodes: [] };
+	const site: BackcodeSite = {
+		site: { kind: 'for-iterable', node },
+		parsed: interpretBackcode('items'),
+		liveVars: ['items'], otherVars: [], inForLoop: false,
+	};
+	assertEquals(qualifies(site), false);
 });
 
 Deno.test("rejects sites with no live vars (any kind)", () => {

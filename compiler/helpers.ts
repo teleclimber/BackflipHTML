@@ -6,6 +6,7 @@ import type {
 	AssetRef,
 	TNode,
 	RawTNode,
+	CommentTNode,
 	PrintTNode,
 	ForTNode,
 	IfTNode,
@@ -684,6 +685,13 @@ function resolveTNodes(tnodes: TNode[], assetMap: Map<string, string>): TNode[] 
 				} else {
 					result.push({ type: 'raw', raw: n.raw } as RawTNode);
 				}
+				break;
+			}
+			case 'comment': {
+				const n = node as CommentTNode;
+				const newNode: CommentTNode = { type: 'comment', text: n.text };
+				if (n.loc) newNode.loc = n.loc;
+				result.push(newNode);
 				break;
 			}
 			case 'print': {

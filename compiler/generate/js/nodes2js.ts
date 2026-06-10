@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, CustomElementCallTNode, PartialBinding, ElementTNode, AttrBindTNode, AttrPart, CompiledFile } from '../../types.js';
+import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, CommentTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, CustomElementCallTNode, PartialBinding, ElementTNode, AttrBindTNode, AttrPart, CompiledFile } from '../../types.js';
 import type { Parsed } from '../../backcode.js';
 import { generateFunction } from './generatejs.js';
 
@@ -29,6 +29,9 @@ export function nodeToJS(n :TNode|RootTNode, assetMap?: Map<string, string>) :st
 			break;
 		case 'raw':
 			out = rawToJS(n);
+			break;
+		case 'comment':
+			out = commentToJS(n);
 			break;
 		case 'slot':
 			out = slotToJS(n);
@@ -89,6 +92,10 @@ function rawToJS(n :RawTNode) :string {
 		.replace(/'/g, "\\'")
 		.replace(/\n/g, '\\n');
 	return `{ type: 'raw', raw: '${escaped}' }`;
+}
+
+function commentToJS(n: CommentTNode) :string {
+	return `{ type: 'comment', text: '${escapeStr(n.text)}' }`;
 }
 
 function printToJS(print_node: PrintTNode) :string {

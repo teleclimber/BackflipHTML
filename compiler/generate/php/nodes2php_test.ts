@@ -1,6 +1,6 @@
 import { assertEquals, assertMatch } from "jsr:@std/assert";
 
-import type { RootTNode, RawTNode, PrintTNode, ForTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, CompiledFile } from "../../types.ts";
+import type { RootTNode, RawTNode, CommentTNode, PrintTNode, ForTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, CompiledFile } from "../../types.ts";
 import { interpretBackcode } from "../../backcode.ts";
 import { nodeToPhp, fileToPhpFile, backcodeToPhp, sanitizeName } from "./nodes2php.ts";
 
@@ -40,6 +40,19 @@ Deno.test("raw node allows literal newlines", () => {
 	const php = nodeToPhp(node);
 	// PHP single-quoted strings allow literal newlines
 	assertMatch(php, /hello\nworld/);
+});
+
+Deno.test("comment node", () => {
+	const node: CommentTNode = { type: 'comment', text: 'bfid:bf1' };
+	const php = nodeToPhp(node);
+	assertMatch(php, /'type' => 'comment'/);
+	assertMatch(php, /'text' => 'bfid:bf1'/);
+});
+
+Deno.test("comment node with single quote escaped", () => {
+	const node: CommentTNode = { type: 'comment', text: "a'b" };
+	const php = nodeToPhp(node);
+	assertMatch(php, /a\\'b/);
 });
 
 Deno.test("print node", () => {

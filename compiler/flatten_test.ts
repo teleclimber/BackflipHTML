@@ -107,6 +107,37 @@ Deno.test("flatten: element with dynamic attr and dynamic child stays an element
 	assertEquals(out.tnodes[0].type, 'element');
 });
 
+Deno.test("flatten: comment markers around a print survive and keep their order", () => {
+	// Mirrors dom-patch output: <p data-bfid><!--bfid:bf1-->{{name}}<!--bfid:bf2--></p>.
+	// The print keeps the <p> from collapsing; the comments stay as siblings of the print.
+	const comment = (text: string): TNode => ({ type: 'comment', text });
+	const tree = root([
+		el('p', [staticAttr(' data-bfid="bf0"')], [
+			raw('Hello '), comment('bfid:bf1'), print('name'), comment('bfid:bf2'), raw('!'),
+		]),
+	]);
+	const out = flattenStatics(tree);
+	assertEquals(out.tnodes.length, 1);
+	const p = out.tnodes[0] as ElementTNode;
+	assertEquals(p.type, 'element');
+	assertEquals(p.tnodes.map(n => n.type), ['raw', 'comment', 'print', 'comment', 'raw']);
+	assertEquals(p.tnodes[1], { type: 'comment', text: 'bfid:bf1' });
+	assertEquals(p.tnodes[3], { type: 'comment', text: 'bfid:bf2' });
+});
+
+Deno.test("flatten: a comment is leaf-flat so a comment-only element still collapses", () => {
+	const comment = (text: string): TNode => ({ type: 'comment', text });
+	const tree = root([
+		el('div', [], [raw('a'), comment('c'), raw('b')]),
+	]);
+	const out = flattenStatics(tree);
+	// The element collapses; the comment is preserved between the surrounding raws.
+	assertEquals(out.tnodes.map(n => n.type), ['raw', 'comment', 'raw']);
+	assertEquals(out.tnodes[0], { type: 'raw', raw: '<div>a' });
+	assertEquals(out.tnodes[1], { type: 'comment', text: 'c' });
+	assertEquals(out.tnodes[2], { type: 'raw', raw: 'b</div>' });
+});
+
 Deno.test("flatten: AttrBindTNode passes through unchanged on a second pass", () => {
 	const tree = root([
 		el('div', [dynamicAttr('class', 'cls')], [raw('hi')]),

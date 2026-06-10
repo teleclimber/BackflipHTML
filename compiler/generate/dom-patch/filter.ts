@@ -18,8 +18,8 @@ export function qualifies(s: BackcodeSite): boolean {
 	switch (s.site.kind) {
 		case 'attr':
 		case 'definition-root-attr':
-			return true;
 		case 'print':
+			return true;
 		case 'if-condition':
 		case 'for-iterable':
 		case 'binding':

@@ -1,6 +1,6 @@
 import { assertEquals } from "jsr:@std/assert";
 
-import type { ElementTNode, AttrPart } from "../../types.ts";
+import type { ElementTNode, AttrPart, PrintTNode } from "../../types.ts";
 import { interpretBackcode } from "../../backcode.ts";
 import type { BackcodeSite } from "./collect.ts";
 import {
@@ -9,6 +9,7 @@ import {
 	classNameFor,
 	sanitizeAttrName,
 	type BfidSite,
+	type PatchTarget,
 } from "./codegen.ts";
 
 function dynAttr(name: string, code: string, isBoolean = false): AttrPart {
@@ -26,6 +27,24 @@ function attrBfidSite(bfid: string, attr: AttrPart, liveVars: string[]): BfidSit
 		inForLoop: false,
 	};
 	return { target: { kind: 'bfid-element', bfid }, backcode };
+}
+
+function printBfidSite(
+	target: PatchTarget,
+	code: string,
+	liveVars: string[],
+	startId: string,
+	endId: string,
+): BfidSite {
+	const node: PrintTNode = { type: 'print', data: interpretBackcode(code) };
+	const backcode: BackcodeSite = {
+		site: { kind: 'print', node, container: [node], parentElement: null },
+		parsed: interpretBackcode(code),
+		liveVars,
+		otherVars: [],
+		inForLoop: false,
+	};
+	return { target, backcode, comments: { startId, endId } };
 }
 
 function defRootBfidSite(attr: AttrPart, liveVars: string[]): BfidSite {
@@ -221,20 +240,65 @@ Deno.test("generated class is parseable JavaScript", () => {
 });
 
 Deno.test("unsupported site kind throws (must be filtered before reaching codegen)", () => {
-	const printSite: BfidSite = {
+	const bindingSite: BfidSite = {
 		target: { kind: 'bfid-element', bfid: 'bf0' },
 		backcode: {
-			site: { kind: 'print', node: { type: 'print', data: interpretBackcode('x') } },
+			// 'binding' is collected but not yet patchable — codegen must reject it.
+			site: { kind: 'binding', ref: {} as any, binding: { kind: 'expr', name: 'x', data: interpretBackcode('x') } },
 			parsed: interpretBackcode('x'),
 			liveVars: ['x'], otherVars: [], inForLoop: false,
 		},
 	};
 	let threw = false;
 	try {
-		generateClassForPartial('my-element', [{ name: 'x', isBool: false }], [printSite]);
+		generateClassForPartial('my-element', [{ name: 'x', isBool: false }], [bindingSite]);
 	} catch (e) {
 		threw = true;
-		assertEquals(String(e).includes("unsupported site kind 'print'"), true);
+		assertEquals(String(e).includes("unsupported site kind 'binding'"), true);
 	}
 	assertEquals(threw, true);
+});
+
+Deno.test("print site on a body element: sel + bc_print + patchTextBetween + helper", () => {
+	const site = printBfidSite({ kind: 'bfid-element', bfid: 'bf0' }, 'name', ['name'], 'bf1', 'bf2');
+	const js = generateClassForPartial('my-widget', [{ name: 'name', isBool: false }], [site]);
+	if (!js) throw new Error('expected js');
+	// Parent element is found via querySelector by its bfid.
+	assertEquals(js.includes("sel_bf0() { return this.ce.querySelector('[data-bfid=\"bf0\"]'); }"), true);
+	// The value function is keyed off the leading marker id.
+	assertEquals(js.includes('bc_print_bf1(data)'), true);
+	assertEquals(js.includes('const { name } = data;'), true);
+	// The mutate call targets the parent and passes both marker strings + the stringified value.
+	assertEquals(js.includes("this.patchTextBetween(elem, 'bfid:bf1', 'bfid:bf2', String(this.bc_print_bf1(data)));"), true);
+	// The helper method is emitted exactly once.
+	assertEquals(js.match(/patchTextBetween\(parent, startMarker, endMarker, text\) \{/g)?.length, 1);
+	assertEquals(js.includes('document.createTextNode(text)'), true);
+});
+
+Deno.test("print site directly in the custom element: targets this.ce, no sel", () => {
+	const site = printBfidSite({ kind: 'this-element' }, 'name', ['name'], 'bf0', 'bf1');
+	const js = generateClassForPartial('my-widget', [{ name: 'name', isBool: false }], [site]);
+	if (!js) throw new Error('expected js');
+	assertEquals(js.includes('sel_'), false);
+	assertEquals(js.includes('querySelector'), false);
+	assertEquals(js.includes('elem = this.ce;'), true);
+	assertEquals(js.includes("this.patchTextBetween(elem, 'bfid:bf0', 'bfid:bf1', String(this.bc_print_bf0(data)));"), true);
+});
+
+Deno.test("attr and print on same element + same var share one elem lookup", () => {
+	const attr = attrBfidSite('bf0', dynAttr('title', 'name'), ['name']);
+	const print = printBfidSite({ kind: 'bfid-element', bfid: 'bf0' }, 'name', ['name'], 'bf1', 'bf2');
+	const js = generateClassForPartial('my-widget', [{ name: 'name', isBool: false }], [attr, print]);
+	if (!js) throw new Error('expected js');
+	// One mutate_name; one elem lookup shared by both the setAttribute and patchTextBetween.
+	assertEquals(js.match(/elem = this\.sel_bf0\(\);/g)?.length, 1);
+	assertEquals(js.includes("elem.setAttribute('title', String(this.bc_bf0_title(data)));"), true);
+	assertEquals(js.includes("this.patchTextBetween(elem, 'bfid:bf1', 'bfid:bf2', String(this.bc_print_bf1(data)));"), true);
+});
+
+Deno.test("no print sites: patchTextBetween helper is not emitted", () => {
+	const site = attrBfidSite('bf0', dynAttr('title', 'foo'), ['foo']);
+	const js = generateClassForPartial('my-widget', [{ name: 'foo', isBool: false }], [site]);
+	if (!js) throw new Error('expected js');
+	assertEquals(js.includes('patchTextBetween'), false);
 });

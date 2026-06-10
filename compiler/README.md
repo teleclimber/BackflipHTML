@@ -17,6 +17,7 @@ Key function:
 The AST is a tree of `TNode`s under a `RootTNode`. Each variant models one structural concern:
 
 - `RawTNode` — pre-rendered HTML text (escaped at parse time as needed).
+- `CommentTNode` — an HTML comment (`<!--text-->`), emitted verbatim. Not produced by the parser; inserted by the [`dom-patch`](generate/dom-patch/README.md) pass as range markers around patchable children.
 - `PrintTNode` — `{{ expr }}` interpolation (escaped at render time).
 - `ElementTNode` — an HTML element: `tagName`, `attrs: AttrPart[]` (mixed `static` / `dynamic` / `asset`), and `tnodes` (body content). Carries source locations (`openTagLoc`, `closeTagLoc`, `loc`) for LSP and Phase 5 flatten.
 - `ForTNode` / `IfTNode` (with `IfBranch`) — flow control, holding nested `tnodes`.
