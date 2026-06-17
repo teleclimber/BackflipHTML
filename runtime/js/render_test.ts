@@ -1,6 +1,6 @@
-import { assertEquals, assertThrows } from "jsr:@std/assert";
+import { assertEquals, assertThrows, assertStringIncludes } from "jsr:@std/assert";
 
-import type { RootRNode, RawRNode, PrintRNode, ForRNode, IfRNode, SlotRNode, PartialRefRNode, rfn } from "./render.ts";
+import type { RootRNode, RawRNode, PrintRNode, ForRNode, IfRNode, SlotRNode, PartialRefRNode, RNode, rfn } from "./render.ts";
 import { render, renderRoot, escapeHtml } from "./render.ts";
 
 function makeFn(code: string, vars: string[]): rfn {
@@ -333,4 +333,124 @@ Deno.test("escapeHtml: escapes multiple chars", () => assertEquals(escapeHtml('<
 Deno.test("print node escapes HTML", () => {
 	const node: PrintRNode = { type: 'print', data: makeFn('v', ['v']) };
 	assertEquals(render(node, { v: '<script>alert(1)</script>' }), '&lt;script&gt;alert(1)&lt;/script&gt;');
+});
+
+// ---------------------------------------------------------------------------
+// dom-patch script auto-include (renderRoot)
+// ---------------------------------------------------------------------------
+
+// A reactive custom-element partial-ref carrying a baked-in scriptUrl.
+function ceRef(tagName: string, scriptUrl: string, body: RNode[] = []): PartialRefRNode {
+	return {
+		type: 'partial-ref',
+		customElement: true,
+		callerTagName: tagName,
+		callerOpenTag: [],
+		partial: { type: 'root', customElement: true, scriptUrl, definitionAttrNodes: [], nodes: body },
+		slots: {},
+		bindings: [],
+	};
+}
+
+Deno.test("auto-include: reactive custom element injects one script before </body>", () => {
+	const root: RootRNode = {
+		type: 'root',
+		nodes: [
+			{ type: 'raw', raw: '<html><body>' },
+			ceRef('my-widget', '/bfdom/my-widget.js'),
+			{ type: 'raw', raw: '</body></html>' },
+		],
+	};
+	const html = renderRoot(root, {});
+	assertEquals(html.match(/<script/g)?.length, 1);
+	assertStringIncludes(html, '</my-widget><script src="/bfdom/my-widget.js" defer></script></body></html>');
+});
+
+Deno.test("auto-include: script appended at end when no </body>", () => {
+	const root: RootRNode = { type: 'root', nodes: [ceRef('my-widget', '/bfdom/w.js')] };
+	assertEquals(renderRoot(root, {}), '<my-widget></my-widget><script src="/bfdom/w.js" defer></script>');
+});
+
+Deno.test("auto-include: script src is attribute-escaped", () => {
+	const root: RootRNode = { type: 'root', nodes: [ceRef('my-widget', '/bfdom/w.js?a=1&b=2')] };
+	assertStringIncludes(renderRoot(root, {}), 'src="/bfdom/w.js?a=1&amp;b=2"');
+});
+
+Deno.test("auto-include: same custom element used twice yields one script (dedup)", () => {
+	const root: RootRNode = {
+		type: 'root',
+		nodes: [ceRef('my-widget', '/bfdom/w.js'), ceRef('my-widget', '/bfdom/w.js')],
+	};
+	const html = renderRoot(root, {});
+	assertEquals(html.match(/<script/g)?.length, 1);
+});
+
+Deno.test("auto-include: only the taken b-if branch contributes its script", () => {
+	const root: RootRNode = {
+		type: 'root',
+		nodes: [{
+			type: 'if',
+			branches: [
+				{ condition: makeFn('show', ['show']), nodes: [ceRef('a-x', '/bfdom/a.js')] },
+				{ nodes: [ceRef('b-x', '/bfdom/b.js')] },
+			],
+		}],
+	};
+	const taken = renderRoot(root, { show: true });
+	assertStringIncludes(taken, 'src="/bfdom/a.js"');
+	assertEquals(taken.includes('/bfdom/b.js'), false);
+
+	const untaken = renderRoot(root, { show: false });
+	assertStringIncludes(untaken, 'src="/bfdom/b.js"');
+	assertEquals(untaken.includes('/bfdom/a.js'), false);
+});
+
+Deno.test("auto-include: b-for includes script when it iterates, excludes when empty", () => {
+	const root: RootRNode = {
+		type: 'root',
+		nodes: [{
+			type: 'for',
+			iterable: makeFn('items', ['items']),
+			valName: 'i',
+			nodes: [ceRef('row-x', '/bfdom/row.js')],
+		}],
+	};
+	const iterated = renderRoot(root, { items: [1, 2] });
+	assertEquals(iterated.match(/<script/g)?.length, 1);  // included once despite two iterations
+
+	const empty = renderRoot(root, { items: [] });
+	assertEquals(empty.includes('<script'), false);
+});
+
+Deno.test("auto-include: nested reactive partials collected; non-reactive contribute nothing", () => {
+	const inner = ceRef('inner-x', '/bfdom/inner.js');
+	const outer = ceRef('outer-x', '/bfdom/outer.js', [inner]);
+	const plain: PartialRefRNode = {
+		type: 'partial-ref',
+		partial: { type: 'root', nodes: [{ type: 'raw', raw: '<p>plain</p>' }] },
+		wrapper: null,
+		slots: {},
+		bindings: [],
+	};
+	const html = renderRoot({ type: 'root', nodes: [outer, plain] }, {});
+	assertStringIncludes(html, 'src="/bfdom/outer.js"');
+	assertStringIncludes(html, 'src="/bfdom/inner.js"');
+	// First-encounter order: outer before inner.
+	assertEquals(html.indexOf('/bfdom/outer.js') < html.indexOf('/bfdom/inner.js'), true);
+});
+
+Deno.test("auto-include: no reactive elements yields no script block", () => {
+	const root: RootRNode = { type: 'root', nodes: [{ type: 'raw', raw: '<p>x</p>' }] };
+	assertEquals(renderRoot(root, {}), '<p>x</p>');
+});
+
+Deno.test("auto-include: top-level reactive root contributes its own script", () => {
+	const root: RootRNode = {
+		type: 'root',
+		customElement: true,
+		scriptUrl: '/bfdom/self.js',
+		definitionAttrNodes: [],
+		nodes: [{ type: 'raw', raw: 'hi' }],
+	};
+	assertEquals(renderRoot(root, {}), 'hi<script src="/bfdom/self.js" defer></script>');
 });

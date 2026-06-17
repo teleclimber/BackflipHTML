@@ -471,3 +471,16 @@ Deno.test("generated JS is valid JavaScript", async () => {
 	assertEquals(result.nodes[2].type, 'if');
 	assertEquals(result.nodes[3].type, 'for');
 });
+
+Deno.test("scriptUrl: emitted on a custom-element root when set", () => {
+	const root: RootTNode = { type: 'root', kind: 'custom-element', tnodes: [{ type: 'raw', raw: 'x' }], scriptUrl: '/bfdom/widget.js' };
+	const js = nodeToJS(root);
+	assertMatch(js, /scriptUrl: '\/bfdom\/widget\.js'/);
+	assertMatch(js, /customElement: true/);
+});
+
+Deno.test("scriptUrl: absent on a custom-element root without it", () => {
+	const root: RootTNode = { type: 'root', kind: 'custom-element', tnodes: [{ type: 'raw', raw: 'x' }] };
+	const js = nodeToJS(root);
+	assertEquals(js.includes('scriptUrl'), false);
+});

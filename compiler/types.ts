@@ -32,6 +32,7 @@ export interface CustomElementPartialRoot extends BaseRoot {
 	definitionAttrNames?: string[],  // effective attribute names on the definition's wrapping tag
 	definitionAttrs?: AttrPart[],    // attr-parts for the definition's wrapping tag. Renders the definition's attrs in childCtx at call sites.
 	bAttrs?: { name: string; isBool: boolean; loc?: SourceLoc }[],  // declared b-attr:* directives on the custom element definition tag
+	scriptUrl?: string,              // public URL of this partial's generated dom-patch JS, stamped by applyDomPatch when the partial produces a patch class. The renderer auto-includes it.
 }
 export type RootTNode = NamedPartialRoot | CustomElementPartialRoot;
 export interface RawTNode {

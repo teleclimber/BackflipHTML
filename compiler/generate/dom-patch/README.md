@@ -68,4 +68,13 @@ The bfid and attribute function name must be valid JS identifiers, but the runti
 
 ## Entry point
 
-`applyDomPatch(file, bfidGen?)` mutates the CompiledFile in place and returns `{ js: string | null }`. Tests pass a deterministic `makeSequentialBfidGen()`; production code uses the default crypto-random generator.
+`applyDomPatch(file, opts?)` mutates the CompiledFile in place and returns `{ js: string | null }`. `opts` is `{ bfidGen?, scriptUrl? }`:
+
+- `bfidGen` — deterministic id generator (`makeSequentialBfidGen()`) in tests; production uses the default crypto-random generator.
+- `scriptUrl` — public URL of the JS file this run produces. When set, every partial that produces a patch class is stamped with `root.scriptUrl = scriptUrl` (on the `CustomElementPartialRoot`). Partials that produce **no** class are left unstamped, even when they share a file with one that does — a partial with no reactive sites needs no script. When `scriptUrl` is absent, generation is unchanged and nothing is stamped.
+
+## Script auto-include
+
+The stamped `scriptUrl` flows through the JS and PHP generators into the emitted root node, and the **renderer** auto-includes the scripts of the reactive custom-element partials it actually renders — there is no manual `<script>` step. The CLI derives each file's URL from the asset prefix that covers the dom-patch output dir (see [Assets](../../../docs/assets.md) and [Configuration](../../../docs/configuration.md)); if no asset prefix covers the output dir it warns and the scripts are not auto-included.
+
+Inclusion follows what actually rendered server-side: a custom element in an untaken `b-if`/`b-else` branch, or a `b-for` over an empty iterable, contributes no script. This is correct today because dom-patch does not toggle `b-if`/`b-else` branches client-side, so whatever rendered on the server is frozen. Making branches reactive in the browser is future work that will need separate handling for script inclusion.

@@ -47,6 +47,16 @@ for (const chunk of streamRenderRoot(greetingModule.greeting, { name: "Alice" })
 
 `streamRenderRoot` returns a `Generator<string>` that yields HTML chunks as it walks the template tree. This is useful for large templates or when you want to start sending HTML before the full render is complete.
 
+### dom-patch script auto-include
+
+When you build with a `dom-patch` output, each reactive custom-element partial is stamped at compile time with the public URL of its generated JS (derived from the asset prefix covering the dom-patch output dir — see [Assets](assets.md)). As `renderRoot` walks the tree it collects the URLs of the reactive custom elements that **actually rendered** (deduped, in first-encounter order) and injects a `<script src="…" defer></script>` for each:
+
+- Placement: immediately before the first `</body>` (case-insensitive) when one exists; otherwise appended at the end of the output.
+- Only rendered elements count — a custom element in an untaken `b-if`/`b-else` branch, or a `b-for` over an empty iterable, contributes nothing.
+- No reactive custom elements rendered ⇒ no `<script>` block is added.
+
+`streamRenderRoot` does **not** inject scripts (it is also used internally for nested partials); auto-include is a `renderRoot` page-level concern. The single-node `render(...)` entry never injects.
+
 ## Signatures
 
 ```ts

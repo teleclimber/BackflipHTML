@@ -33,6 +33,8 @@ Produces a browser-side JavaScript file (`.js`) for each template containing a c
 
 When `"dom-patch"` is configured alongside `"js"` or `"php"`, the dom-patch pass runs first and mutates the shared AST so the server-rendered HTML includes the `data-bfid` attributes the runtime queries on. The class output is emitted as a `.js` file mirroring the input file path.
 
+**Script auto-include.** For the renderer to auto-include these scripts (see [JS runtime](runtime-js.md) / [PHP runtime](runtime-php.md)), the `dom-patch` output directory must be covered by an [asset](assets.md) entry — i.e. an asset `path` that equals or contains the output dir. The public URL of each generated file is then `asset.prefix` + the file's path relative to that asset dir (when several asset dirs cover the file, the most specific one wins). If no asset prefix covers the output dir, the build emits a warning and the scripts are not auto-included. The demo convention is to make the `dom-patch` output dir itself an asset dir (e.g. a `bfdom` asset).
+
 ## CLI
 
 The [CLI](cli.md) reads `backflip.json` as a fallback when no arguments are provided. With a config file in your working directory, you can simply run:

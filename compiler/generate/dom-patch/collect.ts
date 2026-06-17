@@ -19,7 +19,7 @@ export type BackcodeSiteKind =
 	| { kind: 'binding'; ref: CustomElementCallTNode | BPartCallTNode; binding: PartialBinding & { kind: 'expr' } }
 	| { kind: 'caller-attr-expr'; ref: CustomElementCallTNode; attrInfo: NonNullable<CustomElementCallTNode['callerAttrInfos']>[number] };
 
-export interface _ {
+export interface BackcodeSite {
 	site: BackcodeSiteKind;
 	parsed: Parsed;
 	liveVars: string[];

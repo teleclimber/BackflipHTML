@@ -1,7 +1,7 @@
 import { assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert";
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
-import { loadConfig, resolveConfigRoot, resolveAssetDirs, resolveDomPatchOutputDirs, CONFIG_FILENAME, type BackflipConfig } from './config.ts';
+import { loadConfig, resolveConfigRoot, resolveAssetDirs, resolveDomPatchOutputDirs, resolveDomPatchScriptUrl, CONFIG_FILENAME, type BackflipConfig } from './config.ts';
 
 const TMPDIR = '/tmp/claude-1000/';
 
@@ -31,6 +31,65 @@ Deno.test("resolveDomPatchOutputDirs - empty when no dom-patch output", () => {
 		output: [{ lang: "js", path: "dist" }],
 	};
 	assertEquals(resolveDomPatchOutputDirs("/proj", config), []);
+});
+
+// --- resolveDomPatchScriptUrl tests ---
+
+Deno.test("resolveDomPatchScriptUrl - asset dir equals output dir", () => {
+	const config: BackflipConfig = {
+		root: "templates",
+		output: [{ lang: "dom-patch", path: "static/bfdom" }],
+		assets: [{ name: "bfdom", path: "static/bfdom", prefix: "/bfdom/" }],
+	};
+	assertEquals(resolveDomPatchScriptUrl("/proj", config, "widget.html"), "/bfdom/widget.js");
+});
+
+Deno.test("resolveDomPatchScriptUrl - asset dir is an ancestor of output dir", () => {
+	const config: BackflipConfig = {
+		root: "templates",
+		output: [{ lang: "dom-patch", path: "static/bfdom" }],
+		assets: [{ name: "static", path: "static", prefix: "/static/" }],
+	};
+	assertEquals(resolveDomPatchScriptUrl("/proj", config, "widget.html"), "/static/bfdom/widget.js");
+});
+
+Deno.test("resolveDomPatchScriptUrl - nested template path keeps POSIX separators", () => {
+	const config: BackflipConfig = {
+		root: "templates",
+		output: [{ lang: "dom-patch", path: "static/bfdom" }],
+		assets: [{ name: "bfdom", path: "static/bfdom", prefix: "/bfdom/" }],
+	};
+	assertEquals(resolveDomPatchScriptUrl("/proj", config, "graphics/charts.html"), "/bfdom/graphics/charts.js");
+});
+
+Deno.test("resolveDomPatchScriptUrl - no dom-patch output returns null", () => {
+	const config: BackflipConfig = {
+		root: "templates",
+		output: [{ lang: "js", path: "dist" }],
+		assets: [{ name: "static", path: "static", prefix: "/static/" }],
+	};
+	assertEquals(resolveDomPatchScriptUrl("/proj", config, "widget.html"), null);
+});
+
+Deno.test("resolveDomPatchScriptUrl - output dir not under any asset prefix returns null", () => {
+	const config: BackflipConfig = {
+		root: "templates",
+		output: [{ lang: "dom-patch", path: "build/bfdom" }],
+		assets: [{ name: "static", path: "static", prefix: "/static/" }],
+	};
+	assertEquals(resolveDomPatchScriptUrl("/proj", config, "widget.html"), null);
+});
+
+Deno.test("resolveDomPatchScriptUrl - picks most specific (longest) asset dir on overlap", () => {
+	const config: BackflipConfig = {
+		root: "templates",
+		output: [{ lang: "dom-patch", path: "static/bfdom" }],
+		assets: [
+			{ name: "static", path: "static", prefix: "/static/" },
+			{ name: "bfdom", path: "static/bfdom", prefix: "/bfdom/" },
+		],
+	};
+	assertEquals(resolveDomPatchScriptUrl("/proj", config, "widget.html"), "/bfdom/widget.js");
 });
 
 Deno.test("loadConfig - returns null when no config file exists", async () => {

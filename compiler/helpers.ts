@@ -653,6 +653,7 @@ export function resolveAssetRefs(compiled: CompiledFile, assetMap: Map<string, s
 				...(root.exported !== undefined ? { exported: root.exported } : {}),
 				...(root.definitionAttrNames ? { definitionAttrNames: root.definitionAttrNames } : {}),
 				...(root.bAttrs ? { bAttrs: root.bAttrs } : {}),
+				...(root.scriptUrl !== undefined ? { scriptUrl: root.scriptUrl } : {}),
 				...(root.meta ? { meta: root.meta } : {}),
 			}
 			: {

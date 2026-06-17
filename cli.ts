@@ -1,7 +1,7 @@
 import { parseArgs } from '@std/cli/parse-args';
 import { join, dirname } from 'node:path';
 import { compileDirectory } from './compiler/partials.ts';
-import { loadConfig, resolveConfigRoot, resolveAssetDirs, type OutputConfig } from './compiler/config.ts';
+import { loadConfig, resolveConfigRoot, resolveAssetDirs, resolveDomPatchOutputDirs, resolveDomPatchScriptUrl, type OutputConfig } from './compiler/config.ts';
 import { fileToJsModule } from './compiler/generate/js/nodes2js.ts';
 import { fileToPhpFile } from './compiler/generate/php/nodes2php.ts';
 import { applyDomPatch } from './compiler/generate/dom-patch/nodes2patch.ts';
@@ -211,8 +211,20 @@ if (args.check) {
     // the server-rendered HTML carries the ids the runtime class queries on.
     const domPatchJs = new Map<string, string | null>();
     if (outputs.some(o => o.lang === 'dom-patch')) {
+        // Each reactive partial is stamped with its script's public URL (derived
+        // from the asset prefix covering the dom-patch output dir) so the runtime
+        // can auto-include it. If the output dir isn't under any asset prefix the
+        // scripts can't be served; warn once.
+        const domPatchDirs = config ? resolveDomPatchOutputDirs(Deno.cwd(), config) : [];
+        let warnedUnservable = false;
         for (const [relPath, compiledFile] of result.files) {
-            domPatchJs.set(relPath, applyDomPatch(compiledFile).js);
+            const scriptUrl = config ? (resolveDomPatchScriptUrl(Deno.cwd(), config, relPath) ?? undefined) : undefined;
+            const { js } = applyDomPatch(compiledFile, scriptUrl !== undefined ? { scriptUrl } : undefined);
+            domPatchJs.set(relPath, js);
+            if (js && scriptUrl === undefined && domPatchDirs.length > 0 && !warnedUnservable) {
+                console.warn(`warning: dom-patch output "${domPatchDirs.join('", "')}" is not covered by an asset prefix; generated scripts will not be auto-included. Add an asset entry whose directory contains this output dir.`);
+                warnedUnservable = true;
+            }
         }
     }
 

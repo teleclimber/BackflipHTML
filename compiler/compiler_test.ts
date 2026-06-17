@@ -1,6 +1,6 @@
 import { assert, assertEquals, assertExists, assertStringIncludes } from "jsr:@std/assert";
 
-import type { RootTNode, RawTNode, PrintTNode, ForTNode, IfTNode, SlotTNode, PartialRefTNode, ElementTNode, TNode, AttrPart, SourceLoc, CompileOptions, CompiledFile, PartialDef } from "./types.ts";
+import type { RootTNode, CustomElementPartialRoot, RawTNode, PrintTNode, ForTNode, IfTNode, SlotTNode, PartialRefTNode, ElementTNode, TNode, AttrPart, SourceLoc, CompileOptions, CompiledFile, PartialDef } from "./types.ts";
 import { resolveAssetRefs } from "./helpers.ts";
 import { compilePartial } from "./compiler.ts";
 import { interpretBackcode } from "./backcode.ts";
@@ -1446,6 +1446,24 @@ Deno.test("asset: resolveAssetRefs does not mutate original", async () => {
 	// Original should still have its 'asset' AttrPart unresolved.
 	const afterCount = collectAllAttrParts(root.tnodes).filter(p => p.type === 'asset').length;
 	assertEquals(afterCount, 1);
+});
+
+Deno.test("asset: resolveAssetRefs preserves a custom-element root's scriptUrl", async () => {
+	const assetMap = new Map([['images', '/img/']]);
+	// A reactive custom element that also carries an asset ref, so resolveAssetRefs
+	// has work to do and rebuilds the root.
+	const { compiled } = await compileFile(
+		`<my-badge b-attr:level :class="level > 80 ? 'high' : ''" b-export><img src~="@images/icon.png" /></my-badge>`,
+		undefined, 'test.html', { assetMap }
+	);
+	const root = compiled.partials.get("my-badge")! as CustomElementPartialRoot;
+	assertEquals(root.kind, 'custom-element');
+	// Stamp the URL the way applyDomPatch does.
+	root.scriptUrl = '/static-bfdom/test.js';
+
+	const resolved = resolveAssetRefs(compiled, assetMap);
+	const resolvedRoot = resolved.partials.get("my-badge")! as CustomElementPartialRoot;
+	assertEquals(resolvedRoot.scriptUrl, '/static-bfdom/test.js');
 });
 
 // Top-level-element-without-b-name error tests live in partials_test.ts (scanPartials owns this check).

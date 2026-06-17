@@ -191,3 +191,33 @@ export function resolveDomPatchOutputDirs(configDir: string, config: BackflipCon
 		.filter(o => o.lang === 'dom-patch')
 		.map(o => path.resolve(configDir, o.path));
 }
+
+/**
+ * The public URL of the dom-patch JS the build writes for the template at
+ * `relPath` (relative to the template root, e.g. "graphics/charts.html"). The
+ * URL is derived from the asset-dir entry whose directory contains the generated
+ * JS file: `prefix + <jsPath relative to that asset dir>` (POSIX separators).
+ *
+ * Returns null when there is no dom-patch output, or when no asset prefix covers
+ * the dom-patch output dir (the scripts would not be servable). When several
+ * asset dirs cover the file, the most specific (longest dir) wins.
+ */
+export function resolveDomPatchScriptUrl(configDir: string, config: BackflipConfig, relPath: string): string | null {
+	const jsRel = relPath.replace(/\.html$/, '.js');
+	const assets = config.assets ?? [];
+	for (const outputDir of resolveDomPatchOutputDirs(configDir, config)) {
+		const jsPath = path.resolve(outputDir, jsRel);
+		let best: { dir: string; prefix: string } | null = null;
+		for (const asset of assets) {
+			const dir = path.resolve(configDir, asset.path);
+			if (jsPath === dir || jsPath.startsWith(dir + path.sep)) {
+				if (!best || dir.length > best.dir.length) best = { dir, prefix: asset.prefix };
+			}
+		}
+		if (best) {
+			const rel = path.relative(best.dir, jsPath).split(path.sep).join('/');
+			return best.prefix + rel;
+		}
+	}
+	return null;
+}

@@ -6,8 +6,8 @@ See [`docs/runtime-js.md`](../../docs/runtime-js.md) for the full API reference,
 
 ## API
 
-- `renderRoot(node, ctx, slots?)` — returns the complete HTML as a single string
-- `streamRenderRoot(node, ctx, slots?)` — returns a `Generator<string>` yielding HTML chunks incrementally
+- `renderRoot(node, ctx, slots?)` — returns the complete HTML as a single string. Also auto-includes dom-patch scripts: it collects the `scriptUrl` of every reactive custom-element partial that actually rendered (deduped) and injects a `<script src="…" defer></script>` for each — before the first `</body>` if present, otherwise appended. See [docs/runtime-js.md](../../docs/runtime-js.md#dom-patch-script-auto-include).
+- `streamRenderRoot(node, ctx, slots?)` — returns a `Generator<string>` yielding HTML chunks incrementally. Does not inject scripts (used internally for nested partials).
 
 ## Node types handled
 

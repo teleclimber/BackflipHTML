@@ -2,7 +2,7 @@ import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
-import { loadConfig, resolveConfigRoot, resolveAssetDirs, resolveDomPatchOutputDirs } from '../compiler/config.js';
+import { loadConfig, resolveConfigRoot, resolveAssetDirs, resolveDomPatchOutputDirs, type BackflipConfig } from '../compiler/config.js';
 import { compileDirectory, type CompiledDirectory } from '../compiler/partials.js';
 import { previewPartial } from './preview.js';
 import type { CompiledFile } from '../compiler/types.js';
@@ -30,6 +30,9 @@ export interface ServerContext {
 	domPatchOutputDirs?: string[];      // absolute dirs the build writes dom-patch JS to
 	domPatchTmpDir?: string;            // dir where freshly generated dom-patch JS is written
 	domPatchAssets?: Map<string, string>; // build dest path -> actual saved path (filled per render)
+	/** Config with asset prefixes rewritten to the preview's `/__assets/<name>/` serving prefixes, used to derive dom-patch script URLs. */
+	previewConfig?: BackflipConfig;
+	projectDir?: string;                // dir the config paths resolve against
 }
 
 /** Build the server context: compile templates and load CSS. */
@@ -91,7 +94,14 @@ export async function buildContext(projectDir: string, opts?: { domPatchTmpDir?:
 		domPatchTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'backflip-bfdom-'));
 	}
 
-	return { directory, cssHrefs, templateRoot: inputDir, assetDirs: assetDirsMap, assetMap, domPatchOutputDirs, domPatchTmpDir, domPatchAssets: new Map() };
+	// Derive script URLs against preview serving prefixes so the injected
+	// <script src> tags resolve through the /__assets/ route above.
+	const previewConfig: BackflipConfig = {
+		...config,
+		assets: config.assets?.map(a => ({ ...a, prefix: `/__assets/${a.name}/` })),
+	};
+
+	return { directory, cssHrefs, templateRoot: inputDir, assetDirs: assetDirsMap, assetMap, domPatchOutputDirs, domPatchTmpDir, domPatchAssets: new Map(), previewConfig, projectDir };
 }
 
 /** Build a tree structure from the compiled directory for the index page. */
@@ -269,6 +279,8 @@ export async function handleRequest(
 		assetMap: ctx.assetMap,
 		domPatchOutputDirs: ctx.domPatchOutputDirs,
 		domPatchOutDir: ctx.domPatchTmpDir,
+		config: ctx.previewConfig,
+		configDir: ctx.projectDir,
 	});
 
 	// Record where the freshly generated dom-patch JS was saved so the asset route
@@ -352,6 +364,8 @@ if (import.meta.url === `file://${process.argv[1]}` ||
 		get domPatchOutputDirs() { return ctx.domPatchOutputDirs; },
 		get domPatchTmpDir() { return ctx.domPatchTmpDir; },
 		get domPatchAssets() { return ctx.domPatchAssets; },
+		get previewConfig() { return ctx.previewConfig; },
+		get projectDir() { return ctx.projectDir; },
 	};
 
 	const server = createServer(liveCtx, sseClients);

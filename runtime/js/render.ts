@@ -6,7 +6,8 @@ export interface RootRNode {
 	type: 'root',
 	nodes: RNode[],
 	customElement?: boolean,
-	definitionAttrNodes?: RNode[]
+	definitionAttrNodes?: RNode[],
+	scriptUrl?: string   // public URL of this partial's dom-patch JS; collected and auto-included by renderRoot
 }
 export interface RawRNode {
 	type: 'raw',
@@ -78,20 +79,25 @@ export function render(n :RNode, ctx:any, slots?: SlotMap) :string {
 }
 
 export function renderRoot(n :RootRNode, ctx:any, slots?: SlotMap) :string {
-	return Array.from(streamRenderRoot(n, ctx, slots)).join('');
+	// Collect the script URLs of every reactive custom-element partial actually
+	// rendered (deduped, first-encounter order) and inject <script> tags for them.
+	const scripts = new Set<string>();
+	if (n.scriptUrl) scripts.add(n.scriptUrl);
+	const body = Array.from(streamRenderRoot(n, ctx, slots, scripts)).join('');
+	return injectScripts(body, scripts);
 }
 
-export function* streamRenderRoot(n: RootRNode, ctx: any, slots?: SlotMap): Generator<string> {
-	for (const child of n.nodes) yield* streamRender(child, ctx, slots);
+export function* streamRenderRoot(n: RootRNode, ctx: any, slots?: SlotMap, scripts?: Set<string>): Generator<string> {
+	for (const child of n.nodes) yield* streamRender(child, ctx, slots, scripts);
 }
 
-function* streamRender(n :RNode, ctx:any, slots?: SlotMap) :Generator<string> {
+function* streamRender(n :RNode, ctx:any, slots?: SlotMap, scripts?: Set<string>) :Generator<string> {
 	switch(n.type) {
 		case 'for':
-			yield* streamRenderFor(n, ctx, slots);
+			yield* streamRenderFor(n, ctx, slots, scripts);
 			break;
 		case 'if':
-			yield* streamRenderIf(n, ctx, slots);
+			yield* streamRenderIf(n, ctx, slots, scripts);
 			break;
 		case 'print':
 			yield escapeHtml(String(execFn(n.data, ctx)));
@@ -103,10 +109,10 @@ function* streamRender(n :RNode, ctx:any, slots?: SlotMap) :Generator<string> {
 			yield `<!--${n.text}-->`;
 			break;
 		case 'partial-ref':
-			yield* streamRenderPartialRef(n, ctx);
+			yield* streamRenderPartialRef(n, ctx, scripts);
 			break;
 		case 'slot':
-			yield* streamRenderSlot(n, slots);
+			yield* streamRenderSlot(n, slots, scripts);
 			break;
 		case 'attr-bind':
 			yield renderAttrBind(n, ctx);
@@ -116,7 +122,7 @@ function* streamRender(n :RNode, ctx:any, slots?: SlotMap) :Generator<string> {
 	}
 }
 
-function* streamRenderFor(for_node: ForRNode, ctx:any, slots?: SlotMap) :Generator<string> {
+function* streamRenderFor(for_node: ForRNode, ctx:any, slots?: SlotMap, scripts?: Set<string>) :Generator<string> {
 	const iterable = execFn(for_node.iterable, ctx);
 	if( !isIterable(iterable) ) throw new Error("iterable not iterable.");
 
@@ -125,9 +131,22 @@ function* streamRenderFor(for_node: ForRNode, ctx:any, slots?: SlotMap) :Generat
 		val_ctx[for_node.valName] = it;
 		const inner_ctx = Object.assign({}, ctx, val_ctx);
 		for (const nn of for_node.nodes) {
-			yield* streamRender(nn, inner_ctx, slots);
+			yield* streamRender(nn, inner_ctx, slots, scripts);
 		}
 	}
+}
+
+// Build and place the auto-include <script> tags. Inserts immediately before the
+// first closing </body> (case-insensitive) when one exists — correct for full
+// pages — otherwise appends to the end. Empty collector → body returned as-is.
+function injectScripts(body: string, scripts: Set<string>): string {
+	if (scripts.size === 0) return body;
+	const block = Array.from(scripts)
+		.map(url => `<script src="${escapeHtml(url)}" defer></script>`)
+		.join('\n');
+	const m = /<\/body>/i.exec(body);
+	if (!m) return body + block;
+	return body.slice(0, m.index) + block + body.slice(m.index);
 }
 
 // see https://stackoverflow.com/questions/18884249/checking-whether-something-is-iterable
@@ -139,11 +158,11 @@ function isIterable(obj:any) {
 	return typeof obj[Symbol.iterator] === 'function';
 }
 
-function* streamRenderIf(if_node: IfRNode, ctx:any, slots?: SlotMap) :Generator<string> {
+function* streamRenderIf(if_node: IfRNode, ctx:any, slots?: SlotMap, scripts?: Set<string>) :Generator<string> {
 	for( const branch of if_node.branches ) {
 		if( !branch.condition || execFn(branch.condition, ctx) ) {
 			for (const n of branch.nodes) {
-				yield* streamRender(n, ctx, slots);
+				yield* streamRender(n, ctx, slots, scripts);
 			}
 			return;
 		}
@@ -169,9 +188,9 @@ function evalBinding(binding: PartialBindingR, ctx: any): any {
 	return value;
 }
 
-function* streamRenderPartialRef(node: PartialRefRNode, ctx: any) :Generator<string> {
+function* streamRenderPartialRef(node: PartialRefRNode, ctx: any, scripts?: Set<string>) :Generator<string> {
 	if (node.customElement) {
-		yield* streamRenderCustomElementRef(node, ctx);
+		yield* streamRenderCustomElementRef(node, ctx, scripts);
 		return;
 	}
 	// Evaluate bindings in caller ctx, build child ctx
@@ -187,26 +206,29 @@ function* streamRenderPartialRef(node: PartialRefRNode, ctx: any) :Generator<str
 	// Render the partial with child ctx and slot map
 	if (node.wrapper) {
 		yield node.wrapper.open;
-		yield* streamRenderRoot(node.partial!, childCtx, slotMap);
+		yield* streamRenderRoot(node.partial!, childCtx, slotMap, scripts);
 		yield node.wrapper.close;
 	} else {
-		yield* streamRenderRoot(node.partial!, childCtx, slotMap);
+		yield* streamRenderRoot(node.partial!, childCtx, slotMap, scripts);
 	}
 }
 
-function* streamRenderCustomElementRef(node: PartialRefRNode, ctx: any) :Generator<string> {
+function* streamRenderCustomElementRef(node: PartialRefRNode, ctx: any, scripts?: Set<string>) :Generator<string> {
 	const tagName = node.callerTagName!;
 
 	if (node.unresolved) {
 		// Fallback: render as plain HTML — caller-side attrs only, default slot in caller ctx.
 		yield `<${tagName}`;
-		for (const n of node.callerOpenTag ?? []) yield* streamRender(n, ctx, undefined);
+		for (const n of node.callerOpenTag ?? []) yield* streamRender(n, ctx, undefined, scripts);
 		yield `>`;
 		const def = node.slots?.['default'];
-		if (def) for (const n of def) yield* streamRender(n, ctx, undefined);
+		if (def) for (const n of def) yield* streamRender(n, ctx, undefined, scripts);
 		yield `</${tagName}>`;
 		return;
 	}
+
+	// This reactive partial actually rendered — record its script for auto-inclusion.
+	if (node.partial?.scriptUrl) scripts?.add(node.partial.scriptUrl);
 
 	// Bindings evaluated in caller ctx, applied to the child ctx that the body and the
 	// definition-side attrs see.
@@ -221,20 +243,20 @@ function* streamRenderCustomElementRef(node: PartialRefRNode, ctx: any) :Generat
 
 	// Single merged open tag: caller-side attrs in caller ctx, definition-side attrs in childCtx.
 	yield `<${tagName}`;
-	for (const n of node.callerOpenTag ?? []) yield* streamRender(n, ctx, undefined);
-	for (const n of node.partial!.definitionAttrNodes ?? []) yield* streamRender(n, childCtx, undefined);
+	for (const n of node.callerOpenTag ?? []) yield* streamRender(n, ctx, undefined, scripts);
+	for (const n of node.partial!.definitionAttrNodes ?? []) yield* streamRender(n, childCtx, undefined, scripts);
 	yield `>`;
-	for (const n of node.partial!.nodes) yield* streamRender(n, childCtx, slotMap);
+	for (const n of node.partial!.nodes) yield* streamRender(n, childCtx, slotMap, scripts);
 	yield `</${tagName}>`;
 }
 
-function* streamRenderSlot(node: SlotRNode, slots: SlotMap | undefined) :Generator<string> {
+function* streamRenderSlot(node: SlotRNode, slots: SlotMap | undefined, scripts?: Set<string>) :Generator<string> {
 	const slotName = node.name ?? 'default';
 	const slotEntry = slots?.[slotName];
 	if( !slotEntry ) return;
 	// Render slot content in the caller's context, slots don't leak inward
 	for (const n of slotEntry.nodes) {
-		yield* streamRender(n, slotEntry.ctx, undefined);
+		yield* streamRender(n, slotEntry.ctx, undefined, scripts);
 	}
 }
 

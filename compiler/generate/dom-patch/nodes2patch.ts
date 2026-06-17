@@ -11,8 +11,19 @@ export interface DomPatchResult {
 	js: string | null;
 }
 
-export function applyDomPatch(file: CompiledFile, bfidGen?: BfidGen): DomPatchResult {
-	const gen = bfidGen ?? makeBfidGen();
+export interface DomPatchOptions {
+	bfidGen?: BfidGen;
+	/**
+	 * Public URL of the JS file this run produces. When set, every partial that
+	 * produces a patch class is stamped with `root.scriptUrl = scriptUrl` so the
+	 * renderer can auto-include the script. Partials that produce no class are
+	 * left unstamped, even when they share a file with one that does.
+	 */
+	scriptUrl?: string;
+}
+
+export function applyDomPatch(file: CompiledFile, opts?: DomPatchOptions): DomPatchResult {
+	const gen = opts?.bfidGen ?? makeBfidGen();
 	const classes: string[] = [];
 
 	for (const [partialName, root] of file.partials) {
@@ -53,7 +64,11 @@ export function applyDomPatch(file: CompiledFile, bfidGen?: BfidGen): DomPatchRe
 		if (withBfids.length === 0) continue;
 
 		const cls = generateClassForPartial(partialName, bAttrs, withBfids);
-		if (cls) classes.push(cls);
+		if (cls) {
+			classes.push(cls);
+			// Only partials that produce a patch class need (and get) a script URL.
+			if (opts?.scriptUrl !== undefined) root.scriptUrl = opts.scriptUrl;
+		}
 	}
 
 	if (classes.length === 0) return { js: null };

@@ -55,6 +55,14 @@ backflip ./templates ./out --lang dom-patch
 
 When the output directory is specified via CLI arguments, it must be empty before running. When the output directory comes from `backflip.json`, it is automatically emptied before writing. The input hierarchy is preserved, with `.html` extensions replaced by `.js` or `.php`.
 
+When a `dom-patch` output produces scripts but its output directory is not covered by any [asset](assets.md) prefix, the build prints a non-fatal warning and the generated scripts are **not** auto-included by the renderer:
+
+```
+warning: dom-patch output "<path>" is not covered by an asset prefix; generated scripts will not be auto-included. Add an asset entry whose directory contains this output dir.
+```
+
+See [Configuration → `dom-patch`](configuration.md#lang-dom-patch) for how the script URL is derived.
+
 ## Check mode
 
 Validate templates for compile errors without writing any output:

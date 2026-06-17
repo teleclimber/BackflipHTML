@@ -54,12 +54,13 @@ export function nodeToJS(n :TNode|RootTNode, assetMap?: Map<string, string>) :st
 
 function rootToJS(n: RootTNode, assetMap?: Map<string, string>): string {
 	const body = n.tnodes!.map(nn => nodeToJS(nn, assetMap)).join(',\n');
-	if (n.kind === 'custom-element' && n.definitionAttrs && n.definitionAttrs.length > 0) {
-		const defAttrs = attrPartsToAttrsOnlyRNodeJS(n.definitionAttrs, assetMap);
-		return `{ type:"root", customElement: true, definitionAttrNodes: [\n${defAttrs}\n], nodes: [\n${body}\n] }`;
-	}
 	if (n.kind === 'custom-element') {
-		return `{ type:"root", customElement: true, definitionAttrNodes: [], nodes: [\n${body}\n] }`;
+		const scriptUrl = n.scriptUrl !== undefined ? `, scriptUrl: '${escapeStr(n.scriptUrl)}'` : '';
+		if (n.definitionAttrs && n.definitionAttrs.length > 0) {
+			const defAttrs = attrPartsToAttrsOnlyRNodeJS(n.definitionAttrs, assetMap);
+			return `{ type:"root", customElement: true${scriptUrl}, definitionAttrNodes: [\n${defAttrs}\n], nodes: [\n${body}\n] }`;
+		}
+		return `{ type:"root", customElement: true${scriptUrl}, definitionAttrNodes: [], nodes: [\n${body}\n] }`;
 	}
 	return `{ type:"root", nodes: [\n${body}\n] }`;
 }

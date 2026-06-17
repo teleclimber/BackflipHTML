@@ -1,6 +1,7 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import type { CompiledFile } from '../compiler/types.js';
+import { resolveDomPatchScriptUrl, type BackflipConfig } from '../compiler/config.js';
 import { resolveAssetRefs } from '../compiler/helpers.js';
 import { flattenCompiledFile } from '../compiler/flatten.js';
 import { applyDomPatch } from '../compiler/generate/dom-patch/nodes2patch.js';
@@ -27,6 +28,14 @@ export interface PreviewOptions {
 	domPatchOutputDirs?: string[];
 	/** Dir to actually write the freshly generated dom-patch JS into. */
 	domPatchOutDir?: string;
+	/**
+	 * Config used to derive each reactive partial's script URL for auto-include.
+	 * Its asset prefixes should be the preview's serving prefixes (e.g.
+	 * `/__assets/<name>/`) so injected URLs resolve against the preview server.
+	 */
+	config?: BackflipConfig;
+	/** Directory the config paths are resolved against (the project dir). */
+	configDir?: string;
 }
 
 export interface PreviewResult {
@@ -45,8 +54,14 @@ export interface PreviewResult {
  * Preview a partial by compiling it, generating mock data, and rendering to HTML.
  */
 export async function previewPartial(options: PreviewOptions): Promise<PreviewResult> {
-	const { partialName, compiledFile, allFiles, fileName, cssHrefs, liveReload, nonce, dataOverrides, tmpDir, assetMap, domPatchOutputDirs, domPatchOutDir } = options;
+	const { partialName, compiledFile, allFiles, fileName, cssHrefs, liveReload, nonce, dataOverrides, tmpDir, assetMap, domPatchOutputDirs, domPatchOutDir, config, configDir } = options;
 	const errors: string[] = [];
+
+	// Per-file script URL for dom-patch auto-include (null/undefined → not stamped).
+	const scriptUrlFor = (relPath: string): string | undefined =>
+		config && configDir !== undefined
+			? (resolveDomPatchScriptUrl(configDir, config, relPath) ?? undefined)
+			: undefined;
 
 	// 1. Find the partial
 	const root = compiledFile.partials.get(partialName);
@@ -65,7 +80,7 @@ export async function previewPartial(options: PreviewOptions): Promise<PreviewRe
 	// 4. Compile to JS and evaluate to get RootRNode
 	let rnode: RootRNode;
 	try {
-		rnode = await evalPartial(partialName, compiledFile, fileName ?? 'preview.html', allFiles, tmpDir, assetMap);
+		rnode = await evalPartial(partialName, compiledFile, fileName ?? 'preview.html', allFiles, tmpDir, assetMap, scriptUrlFor);
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		errors.push(`Eval error: ${msg}`);
@@ -92,7 +107,7 @@ export async function previewPartial(options: PreviewOptions): Promise<PreviewRe
 	if (domPatchOutDir && domPatchOutputDirs && domPatchOutputDirs.length > 0) {
 		const files = new Map(allFiles ?? []);
 		files.set(fileName ?? 'preview.html', compiledFile);
-		domPatchAssets = await writeDomPatchAssets(files, domPatchOutputDirs, domPatchOutDir);
+		domPatchAssets = await writeDomPatchAssets(files, domPatchOutputDirs, domPatchOutDir, scriptUrlFor);
 	}
 
 	return { html, mockData, errors, domPatchAssets };
@@ -108,10 +123,11 @@ async function writeDomPatchAssets(
 	files: Map<string, CompiledFile>,
 	outputDirs: string[],
 	outDir: string,
+	scriptUrlFor?: (relPath: string) => string | undefined,
 ): Promise<Record<string, string>> {
 	const assets: Record<string, string> = {};
 	for (const [relPath, file] of files) {
-		const { js } = applyDomPatch(file);
+		const { js } = applyDomPatch(file, { scriptUrl: scriptUrlFor?.(relPath) });
 		if (!js) continue;
 		const jsRel = relPath.replace(/\.html$/, '.js');
 		const savedPath = path.join(outDir, jsRel);
@@ -135,11 +151,12 @@ async function evalPartial(
 	allFiles?: Map<string, CompiledFile>,
 	tmpDir?: string,
 	assetMap?: Map<string, string>,
+	scriptUrlFor?: (relPath: string) => string | undefined,
 ): Promise<RootRNode> {
 	// Mirror the CLI build: dom-patch mutates the AST in place (appending
 	// data-bfid markers to reactive elements) and must run before flatten + js
 	// codegen so the previewed HTML carries the ids the runtime queries on.
-	applyDomPatch(compiledFile);
+	applyDomPatch(compiledFile, { scriptUrl: scriptUrlFor?.(fileName) });
 	const resolvedFile = assetMap ? resolveAssetRefs(compiledFile, assetMap) : compiledFile;
 	const flattenedFile = flattenCompiledFile(resolvedFile);
 	const js = fileToJsModule(flattenedFile, fileName, assetMap);
@@ -168,7 +185,7 @@ async function evalPartial(
 		for (const [filePath, file] of allFiles) {
 			const jsPath = path.join(workDir, filePath.replace('.html', '.js'));
 			await fs.mkdir(path.dirname(jsPath), { recursive: true });
-			applyDomPatch(file);
+			applyDomPatch(file, { scriptUrl: scriptUrlFor?.(filePath) });
 			const resolvedCrossFile = assetMap ? resolveAssetRefs(file, assetMap) : file;
 			const flatCrossFile = flattenCompiledFile(resolvedCrossFile);
 			await fs.writeFile(jsPath, fileToJsModule(flatCrossFile, filePath, assetMap), 'utf-8');

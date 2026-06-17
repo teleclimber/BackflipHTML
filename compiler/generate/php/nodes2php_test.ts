@@ -421,3 +421,16 @@ Deno.test("fileToPhpFile same-file dep comes before dependent", () => {
 	const postIdx = php.indexOf('$post =');
 	assertEquals(noticeIdx < postIdx, true);
 });
+
+Deno.test("scriptUrl: emitted on a custom-element root when set", () => {
+	const root: RootTNode = { type: 'root', kind: 'custom-element', tnodes: [{ type: 'raw', raw: 'x' }], scriptUrl: '/bfdom/widget.js' };
+	const php = nodeToPhp(root);
+	assertEquals(php.includes("'scriptUrl' => '/bfdom/widget.js'"), true);
+	assertEquals(php.includes("'customElement' => true"), true);
+});
+
+Deno.test("scriptUrl: absent on a custom-element root without it", () => {
+	const root: RootTNode = { type: 'root', kind: 'custom-element', tnodes: [{ type: 'raw', raw: 'x' }] };
+	const php = nodeToPhp(root);
+	assertEquals(php.includes('scriptUrl'), false);
+});
