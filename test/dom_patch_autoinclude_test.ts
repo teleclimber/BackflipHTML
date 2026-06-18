@@ -16,7 +16,7 @@ import { applyDomPatch } from "../compiler/generate/dom-patch/nodes2patch.ts";
 import { resolveDomPatchScriptUrl, type BackflipConfig } from "../compiler/config.ts";
 import { fileToJsModule } from "../compiler/generate/js/nodes2js.ts";
 import { fileToPhpFile } from "../compiler/generate/php/nodes2php.ts";
-import { renderRoot, type RootRNode } from "../runtime/js/render.ts";
+import { renderRoot, streamRenderRoot, type RootRNode } from "../runtime/js/render.ts";
 
 const TMPDIR = "/tmp/claude-1000/dom-patch-autoinclude";
 const CLI_PATH = new URL("../cli.ts", import.meta.url).pathname;
@@ -62,8 +62,10 @@ async function writeTemplates(files: Record<string, string>): Promise<string> {
 	return root;
 }
 
-// Compile, stamp script URLs, generate same-file JS, eval, render the partial.
-async function buildAndRenderJs(partialName: string, ctx: any, config: BackflipConfig): Promise<string> {
+// Compile, stamp script URLs, generate same-file JS, eval, return the partial's
+// RootRNode. dom-patch bakes random data-bfid values in at generation time, so a
+// single build must be reused when comparing batch vs streaming output.
+async function buildJsPartial(partialName: string, config: BackflipConfig): Promise<RootRNode> {
 	const root = await writeTemplates({ "app.html": APP_HTML });
 	try {
 		const { directory } = await compileDirectory(root);
@@ -78,10 +80,14 @@ async function buildAndRenderJs(partialName: string, ctx: any, config: BackflipC
 		while ((m = re.exec(js)) !== null) exportNames.push(m[1]);
 		const code = js.replace(/^export const /gm, "const ");
 		const mod = new Function(code + `\nreturn { ${exportNames.join(", ")} };`)();
-		return renderRoot(mod[sanitize(partialName)] as RootRNode, ctx);
+		return mod[sanitize(partialName)] as RootRNode;
 	} finally {
 		await fs.rm(root, { recursive: true, force: true });
 	}
+}
+
+async function buildAndRenderJs(partialName: string, ctx: any, config: BackflipConfig): Promise<string> {
+	return renderRoot(await buildJsPartial(partialName, config), ctx);
 }
 
 Deno.test("integration JS: reactive custom element injects resolved script once before </body>", async () => {
@@ -95,6 +101,24 @@ Deno.test("integration JS: untaken b-if branch excludes the script (rendered-onl
 	assertStringIncludes(taken, '<script src="/bfdom/app.js" defer></script>');
 
 	const untaken = await buildAndRenderJs("conditional-page", { show: false }, COVERED_CONFIG);
+	assertEquals(untaken.includes("<script"), false);
+});
+
+Deno.test("integration JS streaming: reactive custom element injects resolved script before </body>", async () => {
+	const rnode = await buildJsPartial("page", COVERED_CONFIG);
+	const streamed = Array.from(streamRenderRoot(rnode, {})).join("");
+	assertEquals(streamed.match(/<script/g)?.length, 1);
+	assertStringIncludes(streamed, '<script src="/bfdom/app.js" defer></script></body>');
+	// Streaming output must equal batch output (same build, so bfids match).
+	assertEquals(streamed, renderRoot(rnode, {}));
+});
+
+Deno.test("integration JS streaming: untaken b-if branch excludes the script", async () => {
+	const rnode = await buildJsPartial("conditional-page", COVERED_CONFIG);
+	const taken = Array.from(streamRenderRoot(rnode, { show: true })).join("");
+	assertStringIncludes(taken, '<script src="/bfdom/app.js" defer></script>');
+
+	const untaken = Array.from(streamRenderRoot(rnode, { show: false })).join("");
 	assertEquals(untaken.includes("<script"), false);
 });
 
@@ -122,6 +146,41 @@ echo backflip_renderRoot($partials['page'], []);
 		assertEquals(out.code, 0, `php failed: ${stderr}`);
 		assertEquals(stdout.match(/<script/g)?.length, 1);
 		assertStringIncludes(stdout, '<script src="/bfdom/app.js" defer></script></body>');
+	} finally {
+		await fs.rm(root, { recursive: true, force: true });
+	}
+});
+
+Deno.test("integration PHP streaming: injects resolved script before </body> and equals batch", async () => {
+	const root = await writeTemplates({ "app.html": APP_HTML });
+	try {
+		const { directory } = await compileDirectory(root);
+		for (const [relPath, file] of directory.files) {
+			applyDomPatch(file, { scriptUrl: resolveDomPatchScriptUrl("/proj", COVERED_CONFIG, relPath) ?? undefined });
+		}
+		const phpPath = path.join(root, "app.php");
+		await fs.writeFile(phpPath, fileToPhpFile(directory.files.get("app.html")!, "app.html"));
+
+		// Print streaming output and batch output separated by a NUL so we can
+		// compare them and assert streaming injects the script too.
+		const harness = `<?php
+require '${RENDER_PHP}';
+$partials = require '${phpPath}';
+$stream = '';
+foreach (backflip_streamRenderRoot($partials['page'], []) as $chunk) { $stream .= $chunk; }
+echo $stream . "\\0" . backflip_renderRoot($partials['page'], []);
+`;
+		const harnessPath = path.join(root, "harness.php");
+		await fs.writeFile(harnessPath, harness);
+		const cmd = new Deno.Command("php", { args: [harnessPath], stdout: "piped", stderr: "piped" });
+		const out = await cmd.output();
+		const stdout = new TextDecoder().decode(out.stdout);
+		const stderr = new TextDecoder().decode(out.stderr);
+		assertEquals(out.code, 0, `php failed: ${stderr}`);
+		const [streamed, batched] = stdout.split("\0");
+		assertEquals(streamed.match(/<script/g)?.length, 1);
+		assertStringIncludes(streamed, '<script src="/bfdom/app.js" defer></script></body>');
+		assertEquals(streamed, batched);
 	} finally {
 		await fs.rm(root, { recursive: true, force: true });
 	}

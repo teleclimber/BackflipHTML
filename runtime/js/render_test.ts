@@ -1,7 +1,11 @@
 import { assertEquals, assertThrows, assertStringIncludes } from "jsr:@std/assert";
 
 import type { RootRNode, RawRNode, PrintRNode, ForRNode, IfRNode, SlotRNode, PartialRefRNode, RNode, rfn } from "./render.ts";
-import { render, renderRoot, escapeHtml } from "./render.ts";
+import { render, renderRoot, streamRenderRoot, escapeHtml } from "./render.ts";
+
+function streamToString(n: RootRNode, ctx: any): string {
+	return Array.from(streamRenderRoot(n, ctx)).join('');
+}
 
 function makeFn(code: string, vars: string[]): rfn {
 	return { fn: new Function(...vars, `return ${code};`) as (...args: any[]) => any, vars };
@@ -453,4 +457,94 @@ Deno.test("auto-include: top-level reactive root contributes its own script", ()
 		nodes: [{ type: 'raw', raw: 'hi' }],
 	};
 	assertEquals(renderRoot(root, {}), 'hi<script src="/bfdom/self.js" defer></script>');
+});
+
+// ---------------------------------------------------------------------------
+// dom-patch script auto-include (streamRenderRoot)
+//
+// Streaming must inject the same scripts, in the same place, as batch — these
+// mirror the renderRoot cases above and additionally assert stream === batch.
+// ---------------------------------------------------------------------------
+
+Deno.test("stream auto-include: reactive custom element injects one script before </body>", () => {
+	const root: RootRNode = {
+		type: 'root',
+		nodes: [
+			{ type: 'raw', raw: '<html><body>' },
+			ceRef('my-widget', '/bfdom/my-widget.js'),
+			{ type: 'raw', raw: '</body></html>' },
+		],
+	};
+	const html = streamToString(root, {});
+	assertEquals(html.match(/<script/g)?.length, 1);
+	assertStringIncludes(html, '</my-widget><script src="/bfdom/my-widget.js" defer></script></body></html>');
+	assertEquals(html, renderRoot(root, {}));
+});
+
+Deno.test("stream auto-include: injects before </body> even when split across chunks", () => {
+	// The closing tag is emitted character-by-character so </body> straddles
+	// chunk boundaries — the carry logic must still find and inject before it.
+	const root: RootRNode = {
+		type: 'root',
+		nodes: [
+			{ type: 'raw', raw: '<html><body>' },
+			ceRef('my-widget', '/bfdom/w.js'),
+			...'</body></html>'.split('').map((c): RNode => ({ type: 'raw', raw: c })),
+		],
+	};
+	const html = streamToString(root, {});
+	assertEquals(html.match(/<script/g)?.length, 1);
+	assertStringIncludes(html, '<script src="/bfdom/w.js" defer></script></body></html>');
+	assertEquals(html, renderRoot(root, {}));
+});
+
+Deno.test("stream auto-include: appended at end when no </body>", () => {
+	const root: RootRNode = { type: 'root', nodes: [ceRef('my-widget', '/bfdom/w.js')] };
+	assertEquals(streamToString(root, {}), '<my-widget></my-widget><script src="/bfdom/w.js" defer></script>');
+});
+
+Deno.test("stream auto-include: dedup, b-if, and b-for match batch", () => {
+	const ifRoot: RootRNode = {
+		type: 'root',
+		nodes: [{
+			type: 'if',
+			branches: [
+				{ condition: makeFn('show', ['show']), nodes: [ceRef('a-x', '/bfdom/a.js')] },
+				{ nodes: [ceRef('b-x', '/bfdom/b.js')] },
+			],
+		}],
+	};
+	assertEquals(streamToString(ifRoot, { show: true }), renderRoot(ifRoot, { show: true }));
+	assertEquals(streamToString(ifRoot, { show: false }), renderRoot(ifRoot, { show: false }));
+
+	const forRoot: RootRNode = {
+		type: 'root',
+		nodes: [{
+			type: 'for',
+			iterable: makeFn('items', ['items']),
+			valName: 'i',
+			nodes: [ceRef('row-x', '/bfdom/row.js')],
+		}],
+	};
+	assertEquals(streamToString(forRoot, { items: [1, 2] }), renderRoot(forRoot, { items: [1, 2] }));
+	assertEquals(streamToString(forRoot, { items: [] }).includes('<script'), false);
+});
+
+Deno.test("stream auto-include: nested partials do not inject mid-document", () => {
+	const inner = ceRef('inner-x', '/bfdom/inner.js');
+	const outer = ceRef('outer-x', '/bfdom/outer.js', [inner]);
+	const root: RootRNode = {
+		type: 'root',
+		nodes: [{ type: 'raw', raw: '<body>' }, outer, { type: 'raw', raw: '</body>' }],
+	};
+	const html = streamToString(root, {});
+	// Both scripts collected, but emitted once, together, before </body>.
+	assertEquals(html.match(/<script/g)?.length, 2);
+	assertStringIncludes(html, '/bfdom/outer.js" defer></script>\n<script src="/bfdom/inner.js" defer></script></body>');
+	assertEquals(html, renderRoot(root, {}));
+});
+
+Deno.test("stream auto-include: no reactive elements yields no script block", () => {
+	const root: RootRNode = { type: 'root', nodes: [{ type: 'raw', raw: '<body><p>x</p></body>' }] };
+	assertEquals(streamToString(root, {}), '<body><p>x</p></body>');
 });

@@ -232,50 +232,103 @@ function backflip_evalBinding(array $binding, array $ctx): mixed
 }
 
 /**
- * Render all nodes in $node['nodes'], join and return.
- *
- * Collects the script URLs of every reactive custom-element partial actually
- * rendered (deduped, first-encounter order via array keys) and injects matching
- * <script> tags into the output (see backflip_injectScripts).
+ * Batch render of a page root. Collects the script URLs of every reactive
+ * custom-element partial actually rendered and injects matching <script> tags.
+ * Defined as the collected output of backflip_streamRenderRoot so batch and
+ * streaming are byte-identical.
  */
 function backflip_renderRoot(array $node, array $ctx, array $slots = []): string
 {
-    $scripts = [];
-    if (isset($node['scriptUrl'])) {
-        $scripts[$node['scriptUrl']] = true;
-    }
-    $body = implode('', iterator_to_array(backflip_streamRenderRoot($node, $ctx, $slots, $scripts), false));
-    return backflip_injectScripts($body, $scripts);
+    return implode('', iterator_to_array(backflip_streamRenderRoot($node, $ctx, $slots), false));
 }
 
 /**
- * Build and place the auto-include <script> tags. Inserts immediately before the
- * first closing </body> (case-insensitive) when one exists, otherwise appends to
- * the end. Empty collector → body returned as-is. $scripts is an ordered set
- * (URL => true).
+ * Build the auto-include <script> block from the (ordered, deduped) collector.
+ * $scripts is an ordered set (URL => true). Empty collector → empty string.
  */
-function backflip_injectScripts(string $body, array $scripts): string
+function backflip_buildScriptBlock(array $scripts): string
 {
     if (count($scripts) === 0) {
-        return $body;
+        return '';
     }
     $tags = [];
     foreach (array_keys($scripts) as $url) {
         $escaped = htmlspecialchars((string)$url, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
         $tags[] = '<script src="' . $escaped . '" defer></script>';
     }
-    $block = implode("\n", $tags);
-    if (preg_match('/<\/body>/i', $body, $m, PREG_OFFSET_CAPTURE)) {
-        $pos = $m[0][1];
-        return substr($body, 0, $pos) . $block . substr($body, $pos);
-    }
-    return $body . $block;
+    return implode("\n", $tags);
 }
 
 /**
- * Streaming render of a root node. Yields string chunks.
+ * Public streaming page entry. Seeds the script collector with this root's own
+ * scriptUrl, streams the body, and injects the dom-patch <script> tags before the
+ * first </body> (see backflip_injectScriptsStreaming). Distinct from
+ * backflip_streamRenderRootInner, the non-injecting primitive used for nested partials.
  */
-function backflip_streamRenderRoot(array $node, array $ctx, array $slots = [], array &$scripts = []): Generator
+function backflip_streamRenderRoot(array $node, array $ctx, array $slots = []): Generator
+{
+    $scripts = [];
+    if (isset($node['scriptUrl'])) {
+        $scripts[$node['scriptUrl']] = true;
+    }
+    yield from backflip_injectScriptsStreaming(
+        backflip_streamRenderRootInner($node, $ctx, $slots, $scripts),
+        $scripts
+    );
+}
+
+/**
+ * Stream $inner, injecting the <script> block immediately before the first
+ * </body> (case-insensitive) — or appending it at the end when no </body> exists.
+ * The block can't be built until $inner is exhausted (the script set is only
+ * complete then), so once </body> is seen we withhold everything from it onward
+ * (just "</body></html>" + trailing whitespace, normally) and flush block + tail
+ * at the end. A small carry guards against </body> split across chunk boundaries.
+ * Placement and ordering match the old batch seek exactly, so backflip_renderRoot
+ * stays byte-identical. $scripts is read after $inner finishes, so it must be the
+ * same array the inner generator populates by reference.
+ */
+function backflip_injectScriptsStreaming(Generator $inner, array &$scripts): Generator
+{
+    $bodyClose = '</body>';
+    $carry = '';            // possible partial </body> prefix held back (pre-match)
+    $tail = null;           // everything from </body> onward, once matched
+    foreach ($inner as $chunk) {
+        if ($tail !== null) {
+            $tail .= $chunk;
+            continue;
+        }
+        $buf = $carry . $chunk;
+        if (preg_match('/<\/body>/i', $buf, $m, PREG_OFFSET_CAPTURE)) {
+            $pos = $m[0][1];
+            yield substr($buf, 0, $pos);
+            $tail = substr($buf, $pos);
+            $carry = '';
+        } else {
+            // Hold back up to len-1 trailing chars: they might begin a split </body>.
+            $keep = min(strlen($bodyClose) - 1, strlen($buf));
+            yield substr($buf, 0, strlen($buf) - $keep);
+            $carry = $keep > 0 ? substr($buf, strlen($buf) - $keep) : '';
+        }
+    }
+    $block = backflip_buildScriptBlock($scripts);
+    if ($tail !== null) {
+        yield $block . $tail;
+    } else {
+        if ($carry !== '') {
+            yield $carry;
+        }
+        if ($block !== '') {
+            yield $block;
+        }
+    }
+}
+
+/**
+ * Non-injecting root walk. Reused recursively for nested partials, so it must not
+ * emit <script> tags — only the page-level backflip_streamRenderRoot does that.
+ */
+function backflip_streamRenderRootInner(array $node, array $ctx, array $slots = [], array &$scripts = []): Generator
 {
     foreach ($node['nodes'] as $child) {
         yield from backflip_streamRender($child, $ctx, $slots, $scripts);
@@ -393,10 +446,10 @@ function backflip_streamRenderPartialRef(array $node, array $ctx, array &$script
     $wrapper = $node['wrapper'] ?? null;
     if ($wrapper !== null) {
         yield $wrapper['open'];
-        yield from backflip_streamRenderRoot($node['partial'], $childCtx, $slotMap, $scripts);
+        yield from backflip_streamRenderRootInner($node['partial'], $childCtx, $slotMap, $scripts);
         yield $wrapper['close'];
     } else {
-        yield from backflip_streamRenderRoot($node['partial'], $childCtx, $slotMap, $scripts);
+        yield from backflip_streamRenderRootInner($node['partial'], $childCtx, $slotMap, $scripts);
     }
 }
 

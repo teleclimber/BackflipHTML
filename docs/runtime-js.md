@@ -49,13 +49,13 @@ for (const chunk of streamRenderRoot(greetingModule.greeting, { name: "Alice" })
 
 ### dom-patch script auto-include
 
-When you build with a `dom-patch` output, each reactive custom-element partial is stamped at compile time with the public URL of its generated JS (derived from the asset prefix covering the dom-patch output dir — see [Assets](assets.md)). As `renderRoot` walks the tree it collects the URLs of the reactive custom elements that **actually rendered** (deduped, in first-encounter order) and injects a `<script src="…" defer></script>` for each:
+When you build with a `dom-patch` output, each reactive custom-element partial is stamped at compile time with the public URL of its generated JS (derived from the asset prefix covering the dom-patch output dir — see [Assets](assets.md)). As the renderer walks the tree it collects the URLs of the reactive custom elements that **actually rendered** (deduped, in first-encounter order) and injects a `<script src="…" defer></script>` for each:
 
 - Placement: immediately before the first `</body>` (case-insensitive) when one exists; otherwise appended at the end of the output.
 - Only rendered elements count — a custom element in an untaken `b-if`/`b-else` branch, or a `b-for` over an empty iterable, contributes nothing.
 - No reactive custom elements rendered ⇒ no `<script>` block is added.
 
-`streamRenderRoot` does **not** inject scripts (it is also used internally for nested partials); auto-include is a `renderRoot` page-level concern. The single-node `render(...)` entry never injects.
+Both `renderRoot` and `streamRenderRoot` auto-include scripts, with **byte-identical output** — `renderRoot` is simply the collected chunks of `streamRenderRoot`. Streaming achieves the same placement without buffering the whole document: it streams the body straight through and only withholds the trailing `</body>…` tail (normally just `</body></html>`), flushing the `<script>` block immediately before `</body>` once the full set of rendered scripts is known. Nested partials rendered inside a page never emit their own `<script>` block — auto-include is a page-level concern. The single-node `render(...)` entry never injects.
 
 ## Signatures
 

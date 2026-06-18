@@ -78,16 +78,25 @@ export function render(n :RNode, ctx:any, slots?: SlotMap) :string {
 	return Array.from(streamRender(n, ctx, slots)).join('');
 }
 
+// Batch render of a page root. Collects the script URLs of every reactive
+// custom-element partial actually rendered and injects <script> tags.
 export function renderRoot(n :RootRNode, ctx:any, slots?: SlotMap) :string {
-	// Collect the script URLs of every reactive custom-element partial actually
-	// rendered (deduped, first-encounter order) and inject <script> tags for them.
-	const scripts = new Set<string>();
-	if (n.scriptUrl) scripts.add(n.scriptUrl);
-	const body = Array.from(streamRenderRoot(n, ctx, slots, scripts)).join('');
-	return injectScripts(body, scripts);
+	return Array.from(streamRenderRoot(n, ctx, slots)).join('');
 }
 
-export function* streamRenderRoot(n: RootRNode, ctx: any, slots?: SlotMap, scripts?: Set<string>): Generator<string> {
+// Public streaming page entry. Seeds the script collector with this root's own
+// scriptUrl, streams the body, and injects the dom-patch <script> tags before the
+// first </body> (see injectScriptsStreaming). Distinct from streamRenderRootInner,
+// which is the non-injecting primitive used for nested partials.
+export function* streamRenderRoot(n: RootRNode, ctx: any, slots?: SlotMap): Generator<string> {
+	const scripts = new Set<string>();
+	if (n.scriptUrl) scripts.add(n.scriptUrl);
+	yield* injectScriptsStreaming(streamRenderRootInner(n, ctx, slots, scripts), scripts);
+}
+
+// Non-injecting root walk. Reused recursively for nested partials, so it must not
+// emit <script> tags — only the page-level streamRenderRoot does that.
+function* streamRenderRootInner(n: RootRNode, ctx: any, slots?: SlotMap, scripts?: Set<string>): Generator<string> {
 	for (const child of n.nodes) yield* streamRender(child, ctx, slots, scripts);
 }
 
@@ -136,17 +145,50 @@ function* streamRenderFor(for_node: ForRNode, ctx:any, slots?: SlotMap, scripts?
 	}
 }
 
-// Build and place the auto-include <script> tags. Inserts immediately before the
-// first closing </body> (case-insensitive) when one exists — correct for full
-// pages — otherwise appends to the end. Empty collector → body returned as-is.
-function injectScripts(body: string, scripts: Set<string>): string {
-	if (scripts.size === 0) return body;
-	const block = Array.from(scripts)
+// Build the auto-include <script> block from the (ordered, deduped) collector.
+// Empty collector → empty string.
+function buildScriptBlock(scripts: Set<string>): string {
+	if (scripts.size === 0) return '';
+	return Array.from(scripts)
 		.map(url => `<script src="${escapeHtml(url)}" defer></script>`)
 		.join('\n');
-	const m = /<\/body>/i.exec(body);
-	if (!m) return body + block;
-	return body.slice(0, m.index) + block + body.slice(m.index);
+}
+
+const BODY_CLOSE = '</body>';
+
+// Stream `inner`, injecting the <script> block immediately before the first
+// </body> (case-insensitive) — or appending it at the end when no </body> exists.
+// The block can't be built until `inner` is exhausted (the script set is only
+// complete then), so once </body> is seen we withhold everything from it onward
+// (just "</body></html>" + trailing whitespace, normally) and flush block + tail
+// at the end. A small carry guards against </body> split across chunk boundaries.
+// Placement and ordering match the old batch seek exactly, so renderRoot stays
+// byte-identical.
+function* injectScriptsStreaming(inner: Generator<string>, scripts: Set<string>): Generator<string> {
+	let carry = '';            // possible partial </body> prefix held back (pre-match)
+	let tail: string | null = null;  // everything from </body> onward, once matched
+	for (const chunk of inner) {
+		if (tail !== null) { tail += chunk; continue; }
+		const buf = carry + chunk;
+		const idx = buf.search(/<\/body>/i);
+		if (idx !== -1) {
+			yield buf.slice(0, idx);
+			tail = buf.slice(idx);
+			carry = '';
+		} else {
+			// Hold back up to len-1 trailing chars: they might begin a split </body>.
+			const keep = Math.min(BODY_CLOSE.length - 1, buf.length);
+			yield buf.slice(0, buf.length - keep);
+			carry = buf.slice(buf.length - keep);
+		}
+	}
+	const block = buildScriptBlock(scripts);
+	if (tail !== null) {
+		yield block + tail;
+	} else {
+		if (carry) yield carry;
+		if (block) yield block;
+	}
 }
 
 // see https://stackoverflow.com/questions/18884249/checking-whether-something-is-iterable
@@ -206,10 +248,10 @@ function* streamRenderPartialRef(node: PartialRefRNode, ctx: any, scripts?: Set<
 	// Render the partial with child ctx and slot map
 	if (node.wrapper) {
 		yield node.wrapper.open;
-		yield* streamRenderRoot(node.partial!, childCtx, slotMap, scripts);
+		yield* streamRenderRootInner(node.partial!, childCtx, slotMap, scripts);
 		yield node.wrapper.close;
 	} else {
-		yield* streamRenderRoot(node.partial!, childCtx, slotMap, scripts);
+		yield* streamRenderRootInner(node.partial!, childCtx, slotMap, scripts);
 	}
 }
 
