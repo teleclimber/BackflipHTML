@@ -472,15 +472,15 @@ Deno.test("generated JS is valid JavaScript", async () => {
 	assertEquals(result.nodes[3].type, 'for');
 });
 
-Deno.test("scriptUrl: emitted on a custom-element root when set", () => {
-	const root: RootTNode = { type: 'root', kind: 'custom-element', tnodes: [{ type: 'raw', raw: 'x' }], scriptUrl: '/bfdom/widget.js' };
+Deno.test("scripts: emitted on a custom-element root when set", () => {
+	const root: RootTNode = { type: 'root', kind: 'custom-element', tnodes: [{ type: 'raw', raw: 'x' }], scripts: [{ url: '/script/widget.js', kind: 'entry' }, { url: '/bfdom/widget.js', kind: 'dependency' }] };
 	const js = nodeToJS(root);
-	assertMatch(js, /scriptUrl: '\/bfdom\/widget\.js'/);
+	assertMatch(js, /scripts: \[\{ url: '\/script\/widget\.js', kind: 'entry' \}, \{ url: '\/bfdom\/widget\.js', kind: 'dependency' \}\]/);
 	assertMatch(js, /customElement: true/);
 });
 
-Deno.test("scriptUrl: absent on a custom-element root without it", () => {
+Deno.test("scripts: absent on a custom-element root without them", () => {
 	const root: RootTNode = { type: 'root', kind: 'custom-element', tnodes: [{ type: 'raw', raw: 'x' }] };
 	const js = nodeToJS(root);
-	assertEquals(js.includes('scriptUrl'), false);
+	assertEquals(js.includes('scripts'), false);
 });

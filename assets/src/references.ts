@@ -1,4 +1,5 @@
 import type { CompiledFile, TNode, ElementTNode, AttrPart, CustomElementCallTNode, RootTNode, CustomElementPartialRoot } from '@backflip/html';
+import { parseAssetRef } from '@backflip/html';
 import type { AssetReference } from './types.js';
 import { collectCssAssetReferences } from './css-references.js';
 
@@ -37,6 +38,19 @@ function walkRoot(root: RootTNode, sourceFile: string, partialName: string, out:
 	if (root.kind === 'custom-element') {
 		const cer = root as CustomElementPartialRoot;
 		if (cer.definitionAttrs) collectFromAttrParts(cer.definitionAttrs, sourceFile, partialName, out);
+		// b-script entry scripts are stored as unresolved @name/... paths; validate they exist on disk.
+		for (const script of cer.scripts ?? []) {
+			const ref = parseAssetRef(script.url);
+			if (!ref) continue;  // already-resolved (absolute) dependency URLs aren't asset refs
+			out.push({
+				sourceFile,
+				partialName,
+				line: 0,
+				column: 0,
+				assetName: ref.name,
+				assetSubpath: ref.subpath,
+			});
+		}
 	}
 }
 

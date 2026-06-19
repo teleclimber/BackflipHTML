@@ -422,15 +422,15 @@ Deno.test("fileToPhpFile same-file dep comes before dependent", () => {
 	assertEquals(noticeIdx < postIdx, true);
 });
 
-Deno.test("scriptUrl: emitted on a custom-element root when set", () => {
-	const root: RootTNode = { type: 'root', kind: 'custom-element', tnodes: [{ type: 'raw', raw: 'x' }], scriptUrl: '/bfdom/widget.js' };
+Deno.test("scripts: emitted on a custom-element root when set", () => {
+	const root: RootTNode = { type: 'root', kind: 'custom-element', tnodes: [{ type: 'raw', raw: 'x' }], scripts: [{ url: '/script/widget.js', kind: 'entry' }, { url: '/bfdom/widget.js', kind: 'dependency' }] };
 	const php = nodeToPhp(root);
-	assertEquals(php.includes("'scriptUrl' => '/bfdom/widget.js'"), true);
+	assertEquals(php.includes("'scripts' => [['url' => '/script/widget.js', 'kind' => 'entry'], ['url' => '/bfdom/widget.js', 'kind' => 'dependency']]"), true);
 	assertEquals(php.includes("'customElement' => true"), true);
 });
 
-Deno.test("scriptUrl: absent on a custom-element root without it", () => {
+Deno.test("scripts: absent on a custom-element root without them", () => {
 	const root: RootTNode = { type: 'root', kind: 'custom-element', tnodes: [{ type: 'raw', raw: 'x' }] };
 	const php = nodeToPhp(root);
-	assertEquals(php.includes('scriptUrl'), false);
+	assertEquals(php.includes('scripts'), false);
 });

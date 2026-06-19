@@ -75,7 +75,7 @@ Deno.test("single attr, single live var: exact-string class", () => {
 	const a = dynAttr('title', 'foo');
 	const site = attrBfidSite('bf0', a, ['foo']);
 	const js = generateClassForPartial('my-element', [{ name: 'foo', isBool: false }], [site]);
-	const expected = `class BackflipMyElement {
+	const expected = `export class BackflipMyElement {
 \tconstructor(ce) { this.ce = ce; }
 
 \tsel_bf0() { return this.ce.querySelector('[data-bfid="bf0"]'); }
@@ -234,7 +234,7 @@ Deno.test("generated class is parseable JavaScript", () => {
 		[{ name: 'foo', isBool: false }, { name: 'bar', isBool: false }],
 		[site]);
 	if (!js) throw new Error('expected js');
-	const fn = new Function(js + '; return BackflipMyElement;');
+	const fn = new Function(js.replaceAll('export class', 'class') + '; return BackflipMyElement;');
 	const Cls = fn();
 	assertEquals(typeof Cls, 'function');
 });

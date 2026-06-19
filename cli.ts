@@ -225,6 +225,18 @@ if (args.check) {
                 console.warn(`warning: dom-patch output "${domPatchDirs.join('", "')}" is not covered by an asset prefix; generated scripts will not be auto-included. Add an asset entry whose directory contains this output dir.`);
                 warnedUnservable = true;
             }
+            // A reactive partial carries a generated 'dependency' module, but it's only
+            // useful once a hand-coded entry module imports it. Warn when b-script is missing.
+            if (js) {
+                for (const [partialName, root] of compiledFile.partials) {
+                    if (root.kind !== 'custom-element' || !root.scripts) continue;
+                    const hasDep = root.scripts.some(s => s.kind === 'dependency');
+                    const hasEntry = root.scripts.some(s => s.kind === 'entry');
+                    if (hasDep && !hasEntry) {
+                        console.warn(`warning: <${partialName}> has generated dom-patch code but no b-script; its client module won't be auto-injected. Add b-script="@asset/..." on the definition pointing at the hand-coded web component.`);
+                    }
+                }
+            }
         }
     }
 

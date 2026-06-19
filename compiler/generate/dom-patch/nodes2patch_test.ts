@@ -113,7 +113,7 @@ Deno.test("end-to-end: emits valid JavaScript", async () => {
 	);
 	const { js } = applyDomPatch(file, { bfidGen: makeSequentialBfidGen() });
 	if (!js) throw new Error('expected js');
-	const fn = new Function(js + '; return BackflipMyWidget;');
+	const fn = new Function(js.replaceAll('export class', 'class') + '; return BackflipMyWidget;');
 	const Cls = fn();
 	assertEquals(typeof Cls, 'function');
 });
@@ -219,27 +219,27 @@ async function compileMany(htmls: string[]): Promise<CompiledFile> {
 	return { partials };
 }
 
-Deno.test("scriptUrl: stamped only on partials that produce a class (class-less sibling unstamped)", async () => {
+Deno.test("scripts: dependency added only on partials that produce a class (class-less sibling untouched)", async () => {
 	const file = await compileMany([
 		`<reactive-widget b-attr:title><span :data-x="title">hi</span></reactive-widget>`,
 		`<static-widget><span>hi</span></static-widget>`,
 	]);
 	const { js } = applyDomPatch(file, { bfidGen: makeSequentialBfidGen(), scriptUrl: '/bfdom/widgets.js' });
 	if (!js) throw new Error('expected js');
-	assertEquals((file.partials.get('reactive-widget') as any).scriptUrl, '/bfdom/widgets.js');
-	// Shares the file with a reactive partial but produces no class → not stamped.
-	assertEquals((file.partials.get('static-widget') as any).scriptUrl, undefined);
+	assertEquals((file.partials.get('reactive-widget') as any).scripts, [{ url: '/bfdom/widgets.js', kind: 'dependency' }]);
+	// Shares the file with a reactive partial but produces no class → no dependency.
+	assertEquals((file.partials.get('static-widget') as any).scripts, undefined);
 });
 
-Deno.test("scriptUrl: absent option leaves partials unstamped and does not change js", async () => {
+Deno.test("scripts: absent option leaves partials untouched and does not change js", async () => {
 	const html = `<my-widget b-attr:title><span :data-x="title">hi</span></my-widget>`;
 	const withFile = await compileCustomElement(html);
 	const withUrl = applyDomPatch(withFile, { bfidGen: makeSequentialBfidGen(), scriptUrl: '/bfdom/my-widget.js' });
 	const withoutFile = await compileCustomElement(html);
 	const without = applyDomPatch(withoutFile, { bfidGen: makeSequentialBfidGen() });
-	assertEquals(withUrl.js, without.js);  // stamping does not affect generated js
-	assertEquals((withFile.partials.get('my-widget') as any).scriptUrl, '/bfdom/my-widget.js');
-	assertEquals((withoutFile.partials.get('my-widget') as any).scriptUrl, undefined);
+	assertEquals(withUrl.js, without.js);  // recording the dependency does not affect generated js
+	assertEquals((withFile.partials.get('my-widget') as any).scripts, [{ url: '/bfdom/my-widget.js', kind: 'dependency' }]);
+	assertEquals((withoutFile.partials.get('my-widget') as any).scripts, undefined);
 });
 
 Deno.test("end-to-end: definition-root attr does NOT cause a data-bfid to be appended", async () => {

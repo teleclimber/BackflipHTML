@@ -343,6 +343,24 @@ For `b-attr:NAME.bool` (boolean):
 - A boolean `b-attr` used directly in a `{{ }}` interpolation produces a warning. Use a string `b-attr` if you need to print the value, or convert explicitly. (No warning for the reverse: a string `b-attr` used in a boolean context like `b-if`.)
 - `b-attr:NAME` should be all lowercase (hyphens are fine). HTML lowercases attribute names, so a name written as `b-attr:fooBar` is silently treated as `foobar`, and references to `fooBar` inside the partial body will not work. The compiler emits a warning when a `b-attr:` name contains uppercase letters.
 
+### Client script (`b-script`)
+
+A reactive custom element (one with `b-attr` declarations) usually pairs with a hand-coded web component on the client: a small module that imports the [generated dom-patch class](runtime-js.md#dom-patch-script-auto-include) and calls `customElements.define(...)`. Point the renderer at that module with `b-script` on the definition tag, using an [asset path](assets.md):
+
+```html
+<my-widget b-attr:count b-script="@scripts/my-widget.js">
+	<span :data-count="count">{{ count }}</span>
+</my-widget>
+```
+
+When a page renders `<my-widget>`, the renderer auto-includes `@scripts/my-widget.js` as `<script type="module">` (the **entry**), and `<link rel="modulepreload">` for the generated dom-patch module it imports (the **dependency**). See [JS runtime → auto-include](runtime-js.md#dom-patch-script-auto-include) for placement and ordering.
+
+Rules:
+
+- `b-script` is allowed only on a custom element partial **definition** tag. Using it elsewhere is a compile error.
+- Its value is an asset path (`@name/subpath`); the asset directory must be configured (see [Assets](assets.md)) and the file must exist. At most one `b-script` per definition.
+- A reactive partial with generated dom-patch code but no `b-script` builds with a warning — nothing would register its component.
+
 ### Conflicting attributes
 
 If the same attribute name appears on both the call site and the definition (e.g. both set `class`), the compiler reports an error. Special handling for class merging is not yet implemented. Names declared via `b-attr:NAME` are exempt from this check — that's the whole point of `b-attr`.

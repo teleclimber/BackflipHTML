@@ -51,12 +51,14 @@ export function nodeToPhp(n: TNode | RootTNode, assetMap?: Map<string, string>):
 function rootToPhp(n: RootTNode, assetMap?: Map<string, string>): string {
 	const nodes = n.tnodes.map(nn => nodeToPhp(nn, assetMap)).join(',\n    ');
 	if (n.kind === 'custom-element') {
-		const scriptUrl = n.scriptUrl !== undefined ? `, 'scriptUrl' => '${escapeStr(n.scriptUrl)}'` : '';
+		const scripts = n.scripts && n.scripts.length > 0
+			? `, 'scripts' => [${n.scripts.map(s => `['url' => '${escapeStr(s.url)}', 'kind' => '${s.kind}']`).join(', ')}]`
+			: '';
 		if (n.definitionAttrs && n.definitionAttrs.length > 0) {
 			const defAttrs = attrPartsToAttrsOnlyRNodePhp(n.definitionAttrs, assetMap);
-			return `['type' => 'root', 'customElement' => true${scriptUrl}, 'definitionAttrNodes' => [\n    ${defAttrs}\n], 'nodes' => [\n    ${nodes}\n]]`;
+			return `['type' => 'root', 'customElement' => true${scripts}, 'definitionAttrNodes' => [\n    ${defAttrs}\n], 'nodes' => [\n    ${nodes}\n]]`;
 		}
-		return `['type' => 'root', 'customElement' => true${scriptUrl}, 'definitionAttrNodes' => [], 'nodes' => [\n    ${nodes}\n]]`;
+		return `['type' => 'root', 'customElement' => true${scripts}, 'definitionAttrNodes' => [], 'nodes' => [\n    ${nodes}\n]]`;
 	}
 	return `['type' => 'root', 'nodes' => [\n    ${nodes}\n]]`;
 }

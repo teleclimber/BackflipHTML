@@ -427,7 +427,7 @@ export function classifyOpenTagAttrs(
 	const errors: BackflipError[] = [];
 	let hasBind = false;
 	for (const attr of tag.attrs) {
-		if (excludeAttrs.includes(attr.name) || attr.name.startsWith('b-data:') || attr.name.startsWith('b-attr:')) continue;
+		if (excludeAttrs.includes(attr.name) || attr.name.startsWith('b-data:') || attr.name.startsWith('b-attr:') || attr.name === 'b-script') continue;
 		if (isBindAttr(attr.name)) {
 			let bindName = getBindAttrName(attr.name);
 			let isAsset = false;
@@ -653,7 +653,8 @@ export function resolveAssetRefs(compiled: CompiledFile, assetMap: Map<string, s
 				...(root.exported !== undefined ? { exported: root.exported } : {}),
 				...(root.definitionAttrNames ? { definitionAttrNames: root.definitionAttrNames } : {}),
 				...(root.bAttrs ? { bAttrs: root.bAttrs } : {}),
-				...(root.scriptUrl !== undefined ? { scriptUrl: root.scriptUrl } : {}),
+				// Rewrite each script's @name/... prefix (no-op for already-absolute dependency URLs).
+				...(root.scripts ? { scripts: root.scripts.map(s => ({ ...s, url: replaceAssetRef(s.url, assetMap) })) } : {}),
 				...(root.meta ? { meta: root.meta } : {}),
 			}
 			: {

@@ -32,7 +32,17 @@ export interface CustomElementPartialRoot extends BaseRoot {
 	definitionAttrNames?: string[],  // effective attribute names on the definition's wrapping tag
 	definitionAttrs?: AttrPart[],    // attr-parts for the definition's wrapping tag. Renders the definition's attrs in childCtx at call sites.
 	bAttrs?: { name: string; isBool: boolean; loc?: SourceLoc }[],  // declared b-attr:* directives on the custom element definition tag
-	scriptUrl?: string,              // public URL of this partial's generated dom-patch JS, stamped by applyDomPatch when the partial produces a patch class. The renderer auto-includes it.
+	scripts?: PartialScript[],       // scripts the renderer auto-includes for this partial. 'entry' items come from b-script (an @name/... path until resolveAssetRefs rewrites it); 'dependency' items are the generated dom-patch module, stamped by applyDomPatch.
+}
+
+// A script the renderer auto-includes when a reactive custom-element partial is
+// rendered. `kind` decides how it is injected:
+//  - 'entry'      → <script type="module" src> (an executed module, e.g. the hand-coded web component)
+//  - 'dependency' → <link rel="modulepreload" href> (a module imported by an entry, preloaded for performance)
+// `url` may be an unresolved "@name/subpath" asset path until resolveAssetRefs rewrites it.
+export interface PartialScript {
+	url: string,
+	kind: 'entry' | 'dependency',
 }
 export type RootTNode = NamedPartialRoot | CustomElementPartialRoot;
 export interface RawTNode {

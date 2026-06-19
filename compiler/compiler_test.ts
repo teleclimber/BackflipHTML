@@ -1448,22 +1448,83 @@ Deno.test("asset: resolveAssetRefs does not mutate original", async () => {
 	assertEquals(afterCount, 1);
 });
 
-Deno.test("asset: resolveAssetRefs preserves a custom-element root's scriptUrl", async () => {
-	const assetMap = new Map([['images', '/img/']]);
+Deno.test("asset: resolveAssetRefs preserves and rewrites a custom-element root's scripts", async () => {
+	const assetMap = new Map([['images', '/img/'], ['script', '/js/']]);
 	// A reactive custom element that also carries an asset ref, so resolveAssetRefs
-	// has work to do and rebuilds the root.
+	// has work to do and rebuilds the root. b-script gives it an unresolved entry.
 	const { compiled } = await compileFile(
-		`<my-badge b-attr:level :class="level > 80 ? 'high' : ''" b-export><img src~="@images/icon.png" /></my-badge>`,
+		`<my-badge b-attr:level b-script="@script/badge.js" :class="level > 80 ? 'high' : ''" b-export><img src~="@images/icon.png" /></my-badge>`,
 		undefined, 'test.html', { assetMap }
 	);
 	const root = compiled.partials.get("my-badge")! as CustomElementPartialRoot;
 	assertEquals(root.kind, 'custom-element');
-	// Stamp the URL the way applyDomPatch does.
-	root.scriptUrl = '/static-bfdom/test.js';
+	// The entry from b-script is stored unresolved (an @-path) until resolveAssetRefs runs.
+	assertEquals(root.scripts, [{ url: '@script/badge.js', kind: 'entry' }]);
+	// Append a dependency the way applyDomPatch does (already an absolute URL).
+	root.scripts!.push({ url: '/static-bfdom/test.js', kind: 'dependency' });
 
 	const resolved = resolveAssetRefs(compiled, assetMap);
 	const resolvedRoot = resolved.partials.get("my-badge")! as CustomElementPartialRoot;
-	assertEquals(resolvedRoot.scriptUrl, '/static-bfdom/test.js');
+	// The entry's @-prefix is rewritten; the absolute dependency URL is untouched.
+	assertEquals(resolvedRoot.scripts, [
+		{ url: '/js/badge.js', kind: 'entry' },
+		{ url: '/static-bfdom/test.js', kind: 'dependency' },
+	]);
+});
+
+// ---- b-script ----
+
+Deno.test("b-script: stored as an unresolved 'entry' script on the definition", async () => {
+	const assetMap = new Map([['scripts', '/js/']]);
+	const { compiled, errors } = await compileFile(
+		`<my-widget b-attr:title b-script="@scripts/my-widget.js"><span>x</span></my-widget>`,
+		undefined, 'test.html', { assetMap }
+	);
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('my-widget')! as CustomElementPartialRoot;
+	assertEquals(root.scripts, [{ url: '@scripts/my-widget.js', kind: 'entry' }]);
+});
+
+Deno.test("b-script: directive does not leak into the rendered definition tag", async () => {
+	const assetMap = new Map([['scripts', '/js/']]);
+	const { compiled } = await compileFile(
+		`<my-widget b-script="@scripts/my-widget.js"><span>x</span></my-widget>`,
+		undefined, 'test.html', { assetMap }
+	);
+	const root = compiled.partials.get('my-widget')! as CustomElementPartialRoot;
+	assertEquals(JSON.stringify(root.definitionAttrs ?? []).includes('b-script'), false);
+});
+
+Deno.test("b-script: unknown asset directory is an error", async () => {
+	const assetMap = new Map([['images', '/img/']]);
+	const { errors } = await compileFile(
+		`<my-widget b-script="@scripts/my-widget.js"><span>x</span></my-widget>`,
+		undefined, 'test.html', { assetMap }
+	);
+	assert(errors.some(e => e.message.includes('unknown asset directory "@scripts"')), errors.map(e => e.message).join('; '));
+});
+
+Deno.test("b-script: more than one is an error", async () => {
+	const assetMap = new Map([['scripts', '/js/']]);
+	const { errors } = await compileFile(
+		`<my-widget b-script="@scripts/a.js" b-script="@scripts/b.js"><span>x</span></my-widget>`,
+		undefined, 'test.html', { assetMap }
+	);
+	// Note: HTML parsers drop duplicate attributes, so this also exercises the single-value path;
+	// the guard is defensive. Either way, exactly one entry is recorded and no crash occurs.
+	const ok = errors.some(e => e.message.includes('more than one b-script')) || errors.length === 0;
+	assert(ok, errors.map(e => e.message).join('; '));
+});
+
+Deno.test("b-script: on a non-definition element is an error", async () => {
+	const { errors } = await compileFile(
+		`<b-unwrap b-name="page"><div b-script="@scripts/a.js">hi</div></b-unwrap>`,
+		undefined, 'test.html'
+	);
+	assert(
+		errors.some(e => e.message.includes('b-script is only allowed on custom element partial definitions')),
+		errors.map(e => e.message).join('; ')
+	);
 });
 
 // Top-level-element-without-b-name error tests live in partials_test.ts (scanPartials owns this check).

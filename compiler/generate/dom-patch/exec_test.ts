@@ -43,7 +43,7 @@ function mount(js: string, partialName: string, className: string, hostAttrs: st
 	const prevDoc = (globalThis as any).document;
 	(globalThis as any).document = dom.window.document;
 	const host = dom.window.document.querySelector(partialName)!;
-	const Cls = new Function(js + `; return ${className};`)();
+	const Cls = new Function(js.replaceAll('export class', 'class') + `; return ${className};`)();
 	const instance = new Cls(host);
 	return { host, instance, restore: () => { (globalThis as any).document = prevDoc; } };
 }

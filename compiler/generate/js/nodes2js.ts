@@ -55,12 +55,14 @@ export function nodeToJS(n :TNode|RootTNode, assetMap?: Map<string, string>) :st
 function rootToJS(n: RootTNode, assetMap?: Map<string, string>): string {
 	const body = n.tnodes!.map(nn => nodeToJS(nn, assetMap)).join(',\n');
 	if (n.kind === 'custom-element') {
-		const scriptUrl = n.scriptUrl !== undefined ? `, scriptUrl: '${escapeStr(n.scriptUrl)}'` : '';
+		const scripts = n.scripts && n.scripts.length > 0
+			? `, scripts: [${n.scripts.map(s => `{ url: '${escapeStr(s.url)}', kind: '${s.kind}' }`).join(', ')}]`
+			: '';
 		if (n.definitionAttrs && n.definitionAttrs.length > 0) {
 			const defAttrs = attrPartsToAttrsOnlyRNodeJS(n.definitionAttrs, assetMap);
-			return `{ type:"root", customElement: true${scriptUrl}, definitionAttrNodes: [\n${defAttrs}\n], nodes: [\n${body}\n] }`;
+			return `{ type:"root", customElement: true${scripts}, definitionAttrNodes: [\n${defAttrs}\n], nodes: [\n${body}\n] }`;
 		}
-		return `{ type:"root", customElement: true${scriptUrl}, definitionAttrNodes: [], nodes: [\n${body}\n] }`;
+		return `{ type:"root", customElement: true${scripts}, definitionAttrNodes: [], nodes: [\n${body}\n] }`;
 	}
 	return `{ type:"root", nodes: [\n${body}\n] }`;
 }

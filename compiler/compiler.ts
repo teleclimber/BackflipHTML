@@ -16,7 +16,7 @@ import {
 	isCustomElementTagName, effectiveAttrNames, parseBPartValue, parseBForValue,
 	dataLocAttr as dataLocAttrPure,
 	getSlotCollection as getSlotCollectionPure,
-	classifyOpenTagAttrs, buildAttrParts,
+	classifyOpenTagAttrs, buildAttrParts, validateStaticAssetAttr,
 	findPrecedingIfInFile, findPrecedingIfInSlot,
 	pushRaw, onText,
 	DOCUMENT_LEVEL_TAGS,
@@ -421,6 +421,12 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 						attrErrorLoc(tag, attr.name, filename)
 					));
 				}
+				if (attr.name === 'b-script') {
+					errors.push(new BackflipError(
+						`b-script is only allowed on custom element partial definitions`,
+						attrErrorLoc(tag, attr.name, filename)
+					));
+				}
 			}
 
 			const partialName = bNameAttr.value;
@@ -565,6 +571,27 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			const bAttrNameSet = new Set(bAttrs.map(b => b.name));
 			partialRoot.definitionAttrNames = effectiveAttrNames(tag.attrs).filter(n => !bAttrNameSet.has(n));
 			if (bAttrs.length > 0) partialRoot.bAttrs = bAttrs;
+
+			// Parse b-script: the hand-coded web-component module to auto-include. Its
+			// value is an @name/... asset path, validated and stored unresolved (an
+			// 'entry' script) — resolveAssetRefs rewrites the @prefix later, exactly as
+			// for asset attributes. Only one b-script is allowed per definition.
+			const bScriptAttrs = tag.attrs.filter(a => a.name === 'b-script');
+			if (bScriptAttrs.length > 1) {
+				errors.push(new BackflipError(
+					`more than one b-script on a custom element definition`,
+					attrErrorLoc(tag, 'b-script', filename) ?? errorLoc(filename, tagLoc(tag))
+				));
+			}
+			if (bScriptAttrs.length > 0) {
+				const { refs, originalValue, error } = validateStaticAssetAttr('b-script', bScriptAttrs[0].value, tag, 'b-script', assetCtx);
+				if (error) {
+					errors.push(error);
+				} else if (refs.length > 0) {
+					(partialRoot.scripts ??= []).push({ url: originalValue, kind: 'entry' });
+				}
+			}
+
 			compiledFile.partials.set(partialName, partialRoot);
 
 			currentPartialRoot = partialRoot;
@@ -574,7 +601,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			// with caller-side attrs into one tag), so no wrapping ElementTNode is constructed.
 			// The definition-side attrs are stored as a flat AttrPart[] for the call-site renderer
 			// to emit in childCtx.
-			partialRoot.definitionAttrs = buildAttrPartsFromTag(tag, ['b-export']);
+			partialRoot.definitionAttrs = buildAttrPartsFromTag(tag, ['b-export', 'b-script']);
 			cur_tnode = null;
 			cur_parent = partialRoot;
 			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
@@ -861,6 +888,12 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				if (attr.name.startsWith('b-attr:')) {
 					errors.push(new BackflipError(
 						`b-attr is only allowed on custom element partial definitions`,
+						attrErrorLoc(tag, attr.name, filename)
+					));
+				}
+				if (attr.name === 'b-script') {
+					errors.push(new BackflipError(
+						`b-script is only allowed on custom element partial definitions`,
 						attrErrorLoc(tag, attr.name, filename)
 					));
 				}

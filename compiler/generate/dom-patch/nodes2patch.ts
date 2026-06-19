@@ -14,10 +14,11 @@ export interface DomPatchResult {
 export interface DomPatchOptions {
 	bfidGen?: BfidGen;
 	/**
-	 * Public URL of the JS file this run produces. When set, every partial that
-	 * produces a patch class is stamped with `root.scriptUrl = scriptUrl` so the
-	 * renderer can auto-include the script. Partials that produce no class are
-	 * left unstamped, even when they share a file with one that does.
+	 * Public URL of the generated dom-patch module this run produces. When set,
+	 * every partial that produces a patch class gets a `{ url, kind: 'dependency' }`
+	 * entry appended to `root.scripts` so the renderer can preload it (it's imported
+	 * by the partial's hand-coded entry module). Partials that produce no class are
+	 * left untouched, even when they share a file with one that does.
 	 */
 	scriptUrl?: string;
 }
@@ -66,8 +67,15 @@ export function applyDomPatch(file: CompiledFile, opts?: DomPatchOptions): DomPa
 		const cls = generateClassForPartial(partialName, bAttrs, withBfids);
 		if (cls) {
 			classes.push(cls);
-			// Only partials that produce a patch class need (and get) a script URL.
-			if (opts?.scriptUrl !== undefined) root.scriptUrl = opts.scriptUrl;
+			// Only partials that produce a patch class need (and get) a generated module.
+			// Record it as a 'dependency' the renderer will <link rel="modulepreload">.
+			if (opts?.scriptUrl !== undefined) {
+				const url = opts.scriptUrl;
+				root.scripts ??= [];
+				if (!root.scripts.some(s => s.url === url && s.kind === 'dependency')) {
+					root.scripts.push({ url, kind: 'dependency' });
+				}
+			}
 		}
 	}
 

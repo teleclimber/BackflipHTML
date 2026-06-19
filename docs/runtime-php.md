@@ -49,13 +49,13 @@ foreach (backflip_streamRenderRoot($templates['greeting'], ['name' => 'Alice']) 
 
 ### dom-patch script auto-include
 
-When you build with a `dom-patch` output, each reactive custom-element partial is stamped at compile time with the public URL of its generated JS (derived from the asset prefix covering the dom-patch output dir — see [Assets](assets.md)). As the renderer walks the tree it collects the URLs of the reactive custom elements that **actually rendered** (deduped, in first-encounter order) and injects a `<script src="…" defer></script>` for each:
+When you build with a `dom-patch` output, a reactive custom-element partial can carry two scripts: an **entry** module (the hand-coded web component, declared with [`b-script`](partials.md#client-script-b-script)) injected as `<script type="module">`, and a **dependency** module (the generated dom-patch JS the entry imports, whose URL is derived from the asset prefix covering the dom-patch output dir — see [Assets](assets.md)) injected as `<link rel="modulepreload">`. As the renderer walks the tree it collects the scripts of the reactive custom elements that **actually rendered** (deduped by URL, in first-encounter order) and emits the dependency `<link>`s first, then the entry `<script>`s. This mirrors the [JS runtime](runtime-js.md#dom-patch-script-auto-include) exactly.
 
 - Placement: immediately before the first `</body>` (case-insensitive) when one exists; otherwise appended at the end of the output.
 - Only rendered elements count — a custom element in an untaken `b-if`/`b-else` branch, or a `b-for` over an empty iterable, contributes nothing.
-- No reactive custom elements rendered ⇒ no `<script>` block is added.
+- No reactive custom elements rendered ⇒ no block is added.
 
-Both `backflip_renderRoot` and `backflip_streamRenderRoot` auto-include scripts, with **byte-identical output** — `backflip_renderRoot` is simply the collected chunks of `backflip_streamRenderRoot`. Streaming achieves the same placement without buffering the whole document: it streams the body straight through and only withholds the trailing `</body>…` tail (normally just `</body></html>`), flushing the `<script>` block immediately before `</body>` once the full set of rendered scripts is known. Nested partials rendered inside a page never emit their own `<script>` block — auto-include is a page-level concern.
+Both `backflip_renderRoot` and `backflip_streamRenderRoot` auto-include scripts, with **byte-identical output** — `backflip_renderRoot` is simply the collected chunks of `backflip_streamRenderRoot`. Streaming achieves the same placement without buffering the whole document: it streams the body straight through and only withholds the trailing `</body>…` tail (normally just `</body></html>`), flushing the block immediately before `</body>` once the full set of rendered scripts is known. Nested partials rendered inside a page never emit their own block — auto-include is a page-level concern.
 
 ## Signatures
 

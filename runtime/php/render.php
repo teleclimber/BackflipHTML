@@ -243,34 +243,55 @@ function backflip_renderRoot(array $node, array $ctx, array $slots = []): string
 }
 
 /**
- * Build the auto-include <script> block from the (ordered, deduped) collector.
- * $scripts is an ordered set (URL => true). Empty collector → empty string.
+ * Add a partial's scripts to the collector. $scripts is an ordered set
+ * (URL => kind); first-seen kind wins, insertion order is preserved.
+ */
+function backflip_collectScripts(array &$scripts, ?array $list): void
+{
+    if ($list === null) {
+        return;
+    }
+    foreach ($list as $s) {
+        if (!isset($scripts[$s['url']])) {
+            $scripts[$s['url']] = $s['kind'];
+        }
+    }
+}
+
+/**
+ * Build the auto-include block from the (ordered, deduped) collector. Dependency
+ * modules are emitted first as <link rel="modulepreload"> so the browser can fetch
+ * them in parallel with the entry modules that import them; entry modules follow as
+ * <script type="module">. Empty collector → empty string.
  */
 function backflip_buildScriptBlock(array $scripts): string
 {
     if (count($scripts) === 0) {
         return '';
     }
-    $tags = [];
-    foreach (array_keys($scripts) as $url) {
+    $preloads = [];
+    $modules = [];
+    foreach ($scripts as $url => $kind) {
         $escaped = htmlspecialchars((string)$url, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-        $tags[] = '<script src="' . $escaped . '" defer></script>';
+        if ($kind === 'dependency') {
+            $preloads[] = '<link rel="modulepreload" href="' . $escaped . '">';
+        } else {
+            $modules[] = '<script src="' . $escaped . '" type="module"></script>';
+        }
     }
-    return implode("\n", $tags);
+    return implode("\n", array_merge($preloads, $modules));
 }
 
 /**
  * Public streaming page entry. Seeds the script collector with this root's own
- * scriptUrl, streams the body, and injects the dom-patch <script> tags before the
+ * scripts, streams the body, and injects the auto-include block before the
  * first </body> (see backflip_injectScriptsStreaming). Distinct from
  * backflip_streamRenderRootInner, the non-injecting primitive used for nested partials.
  */
 function backflip_streamRenderRoot(array $node, array $ctx, array $slots = []): Generator
 {
     $scripts = [];
-    if (isset($node['scriptUrl'])) {
-        $scripts[$node['scriptUrl']] = true;
-    }
+    backflip_collectScripts($scripts, $node['scripts'] ?? null);
     yield from backflip_injectScriptsStreaming(
         backflip_streamRenderRootInner($node, $ctx, $slots, $scripts),
         $scripts
@@ -478,10 +499,8 @@ function backflip_streamRenderCustomElementRef(array $node, array $ctx, array &$
         return;
     }
 
-    // This reactive partial actually rendered — record its script for auto-inclusion.
-    if (isset($node['partial']['scriptUrl'])) {
-        $scripts[$node['partial']['scriptUrl']] = true;
-    }
+    // This reactive partial actually rendered — record its scripts for auto-inclusion.
+    backflip_collectScripts($scripts, $node['partial']['scripts'] ?? null);
 
     // Bindings evaluated in caller ctx, applied to childCtx for body and definition attrs.
     $childCtx = $ctx;

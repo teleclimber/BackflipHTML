@@ -100,7 +100,7 @@ export function generateClassForPartial(
 		update,
 	].join('\n');
 
-	return `class ${className} {\n${methods}\n}`;
+	return `export class ${className} {\n${methods}\n}`;
 }
 
 export function generateFile(classes: (string | null)[]): string {

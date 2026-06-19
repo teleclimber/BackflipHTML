@@ -1,6 +1,6 @@
 import { assertEquals, assertThrows, assertStringIncludes } from "jsr:@std/assert";
 
-import type { RootRNode, RawRNode, PrintRNode, ForRNode, IfRNode, SlotRNode, PartialRefRNode, RNode, rfn } from "./render.ts";
+import type { RootRNode, RawRNode, PrintRNode, ForRNode, IfRNode, SlotRNode, PartialRefRNode, PartialScript, RNode, rfn } from "./render.ts";
 import { render, renderRoot, streamRenderRoot, escapeHtml } from "./render.ts";
 
 function streamToString(n: RootRNode, ctx: any): string {
@@ -343,14 +343,16 @@ Deno.test("print node escapes HTML", () => {
 // dom-patch script auto-include (renderRoot)
 // ---------------------------------------------------------------------------
 
-// A reactive custom-element partial-ref carrying a baked-in scriptUrl.
-function ceRef(tagName: string, scriptUrl: string, body: RNode[] = []): PartialRefRNode {
+// A reactive custom-element partial-ref carrying baked-in scripts. A bare string
+// is shorthand for a single 'entry' module (the common case in these tests).
+function ceRef(tagName: string, scripts: string | PartialScript[], body: RNode[] = []): PartialRefRNode {
+	const scriptList: PartialScript[] = typeof scripts === 'string' ? [{ url: scripts, kind: 'entry' }] : scripts;
 	return {
 		type: 'partial-ref',
 		customElement: true,
 		callerTagName: tagName,
 		callerOpenTag: [],
-		partial: { type: 'root', customElement: true, scriptUrl, definitionAttrNodes: [], nodes: body },
+		partial: { type: 'root', customElement: true, scripts: scriptList, definitionAttrNodes: [], nodes: body },
 		slots: {},
 		bindings: [],
 	};
@@ -367,12 +369,12 @@ Deno.test("auto-include: reactive custom element injects one script before </bod
 	};
 	const html = renderRoot(root, {});
 	assertEquals(html.match(/<script/g)?.length, 1);
-	assertStringIncludes(html, '</my-widget><script src="/bfdom/my-widget.js" defer></script></body></html>');
+	assertStringIncludes(html, '</my-widget><script src="/bfdom/my-widget.js" type="module"></script></body></html>');
 });
 
 Deno.test("auto-include: script appended at end when no </body>", () => {
 	const root: RootRNode = { type: 'root', nodes: [ceRef('my-widget', '/bfdom/w.js')] };
-	assertEquals(renderRoot(root, {}), '<my-widget></my-widget><script src="/bfdom/w.js" defer></script>');
+	assertEquals(renderRoot(root, {}), '<my-widget></my-widget><script src="/bfdom/w.js" type="module"></script>');
 });
 
 Deno.test("auto-include: script src is attribute-escaped", () => {
@@ -452,11 +454,36 @@ Deno.test("auto-include: top-level reactive root contributes its own script", ()
 	const root: RootRNode = {
 		type: 'root',
 		customElement: true,
-		scriptUrl: '/bfdom/self.js',
+		scripts: [{ url: '/bfdom/self.js', kind: 'entry' }],
 		definitionAttrNodes: [],
 		nodes: [{ type: 'raw', raw: 'hi' }],
 	};
-	assertEquals(renderRoot(root, {}), 'hi<script src="/bfdom/self.js" defer></script>');
+	assertEquals(renderRoot(root, {}), 'hi<script src="/bfdom/self.js" type="module"></script>');
+});
+
+Deno.test("auto-include: dependency script becomes a modulepreload link", () => {
+	const root: RootRNode = {
+		type: 'root',
+		nodes: [ceRef('my-widget', [{ url: '/bfdom/my-widget.js', kind: 'dependency' }])],
+	};
+	const html = renderRoot(root, {});
+	assertStringIncludes(html, '<link rel="modulepreload" href="/bfdom/my-widget.js">');
+	assertEquals(html.includes('<script'), false);  // a dependency is preloaded, not executed
+});
+
+Deno.test("auto-include: entry + dependency — preload precedes the module script", () => {
+	const root: RootRNode = {
+		type: 'root',
+		nodes: [ceRef('my-widget', [
+			{ url: '/script/my-widget.js', kind: 'entry' },
+			{ url: '/bfdom/my-widget.js', kind: 'dependency' },
+		])],
+	};
+	const html = renderRoot(root, {});
+	assertStringIncludes(
+		html,
+		'<link rel="modulepreload" href="/bfdom/my-widget.js">\n<script src="/script/my-widget.js" type="module"></script>',
+	);
 });
 
 // ---------------------------------------------------------------------------
@@ -477,7 +504,7 @@ Deno.test("stream auto-include: reactive custom element injects one script befor
 	};
 	const html = streamToString(root, {});
 	assertEquals(html.match(/<script/g)?.length, 1);
-	assertStringIncludes(html, '</my-widget><script src="/bfdom/my-widget.js" defer></script></body></html>');
+	assertStringIncludes(html, '</my-widget><script src="/bfdom/my-widget.js" type="module"></script></body></html>');
 	assertEquals(html, renderRoot(root, {}));
 });
 
@@ -494,13 +521,13 @@ Deno.test("stream auto-include: injects before </body> even when split across ch
 	};
 	const html = streamToString(root, {});
 	assertEquals(html.match(/<script/g)?.length, 1);
-	assertStringIncludes(html, '<script src="/bfdom/w.js" defer></script></body></html>');
+	assertStringIncludes(html, '<script src="/bfdom/w.js" type="module"></script></body></html>');
 	assertEquals(html, renderRoot(root, {}));
 });
 
 Deno.test("stream auto-include: appended at end when no </body>", () => {
 	const root: RootRNode = { type: 'root', nodes: [ceRef('my-widget', '/bfdom/w.js')] };
-	assertEquals(streamToString(root, {}), '<my-widget></my-widget><script src="/bfdom/w.js" defer></script>');
+	assertEquals(streamToString(root, {}), '<my-widget></my-widget><script src="/bfdom/w.js" type="module"></script>');
 });
 
 Deno.test("stream auto-include: dedup, b-if, and b-for match batch", () => {
@@ -540,7 +567,7 @@ Deno.test("stream auto-include: nested partials do not inject mid-document", () 
 	const html = streamToString(root, {});
 	// Both scripts collected, but emitted once, together, before </body>.
 	assertEquals(html.match(/<script/g)?.length, 2);
-	assertStringIncludes(html, '/bfdom/outer.js" defer></script>\n<script src="/bfdom/inner.js" defer></script></body>');
+	assertStringIncludes(html, '/bfdom/outer.js" type="module"></script>\n<script src="/bfdom/inner.js" type="module"></script></body>');
 	assertEquals(html, renderRoot(root, {}));
 });
 

@@ -61,7 +61,13 @@ When a `dom-patch` output produces scripts but its output directory is not cover
 warning: dom-patch output "<path>" is not covered by an asset prefix; generated scripts will not be auto-included. Add an asset entry whose directory contains this output dir.
 ```
 
-See [Configuration → `dom-patch`](configuration.md#lang-dom-patch) for how the script URL is derived.
+When a reactive partial produces dom-patch code but its definition has no [`b-script`](partials.md#client-script-b-script), nothing imports the generated module — so the component never registers. The build warns:
+
+```
+warning: <my-widget> has generated dom-patch code but no b-script; its client module won't be auto-injected. Add b-script="@asset/..." on the definition pointing at the hand-coded web component.
+```
+
+See [Configuration → `dom-patch`](configuration.md#lang-dom-patch) for how the generated module's URL is derived, and [Partials → Client script](partials.md#client-script-b-script) for `b-script`.
 
 ## Check mode
 
