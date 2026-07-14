@@ -1,36 +1,31 @@
 import { interpretBackcode } from './backcode.js';
 import type { Parsed } from './backcode.js';
 import { BackflipError } from './errors.js';
+import { visitTNodes } from './walk.js';
+import { interpolationLoc } from './loc.js';
 import type {
-	SourceLoc,
-	AssetRef,
 	TNode,
 	RawTNode,
-	CommentTNode,
 	PrintTNode,
-	ForTNode,
 	IfTNode,
-	IfBranch,
-	SlotTNode,
 	PartialRefTNode,
-	ElementTNode,
-	AttrPart,
 	ParentTNode,
-	RootTNode,
-	CustomElementPartialRoot,
-	CompiledFile,
 } from './types.js';
+
+// Re-export the domain modules helpers.ts was split into, so existing import
+// sites (compiler.ts, partials.ts, mod.ts, tests) that reach for these names via
+// './helpers.js' keep working unchanged.
+export * from './loc.js';
+export * from './attrs.js';
+export * from './assets.js';
 
 // --- tag sets ---
 
 export const DOCUMENT_LEVEL_TAGS = new Set(['html', 'head', 'body']);
 
-export const BOOLEAN_ATTRS = new Set([
-	'allowfullscreen','async','autofocus','autoplay','checked','controls',
-	'default','defer','disabled','formnovalidate','hidden','ismap','loop',
-	'multiple','muted','nomodule','novalidate','open','readonly','required',
-	'reversed','selected'
-]);
+// HTML void elements — no close tag, cannot contain children. Shared by the parser
+// (compiler.ts), the partial scanner (partials.ts), and codegen.
+export const VOID_ELEMENTS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
 
 // --- parser-state types ---
 
@@ -44,26 +39,6 @@ export type TagMatcher = {
 		partialRefParent: ParentTNode,   // container of the partialRef (replaces the dropped node.parent field)
 		currentSlot: string   // 'default' or named
 	}
-}
-
-// --- attribute classifiers ---
-
-export function isBindAttr(name: string): boolean {
-	return name.startsWith('b-bind:') || name.startsWith(':');
-}
-
-export function getBindAttrName(name: string): string {
-	if (name.startsWith('b-bind:')) return name.slice('b-bind:'.length);
-	if (name.startsWith(':')) return name.slice(1);
-	throw new Error(`Not a bind attr: ${name}`);
-}
-
-export function isAssetAttr(attrName: string): boolean {
-	return attrName.endsWith('~');
-}
-
-export function stripAssetSuffix(attrName: string): string {
-	return attrName.slice(0, -1);
 }
 
 /**
@@ -119,389 +94,6 @@ export function isCustomElementTagName(name: string): boolean {
 	return /^[a-z][a-z0-9]*-[a-z0-9-]*$/.test(name);
 }
 
-/**
- * Given a tag's attrs, return the list of attribute names that will end up on the
- * rendered HTML element (i.e. exclude backflip directives, but resolve b-bind:foo,
- * :foo, and foo~ to their effective HTML attribute name `foo`).
- */
-export function effectiveAttrNames(attrs: { name: string, value: string }[]): string[] {
-	const names: string[] = [];
-	for (const a of attrs) {
-		const n = a.name;
-		if (n === 'b-name' || n === 'b-export') continue;
-		if (n === 'b-if' || n === 'b-for' || n === 'b-else' || n === 'b-else-if') continue;
-		if (n === 'b-part' || n === 'b-slot' || n === 'b-in') continue;
-		if (n.startsWith('b-data:')) continue;
-		if (n.startsWith('b-attr:')) continue;
-		if (n.startsWith('b-bind:')) { names.push(n.slice('b-bind:'.length).replace(/~$/, '')); continue; }
-		if (n.startsWith(':')) { names.push(n.slice(1).replace(/~$/, '')); continue; }
-		if (n.endsWith('~')) { names.push(n.slice(0, -1)); continue; }
-		names.push(n);
-	}
-	return names;
-}
-
-// --- source-location helpers (parse5 sourceCodeLocation accessors) ---
-
-type LocAttrs = { attrs?: Record<string, { startLine: number; startCol: number; startOffset: number; endLine: number; endCol: number; endOffset: number }> };
-
-export function attrLoc(tag: { sourceCodeLocation?: unknown }, attrName: string): SourceLoc | undefined {
-	const loc = tag.sourceCodeLocation as LocAttrs | null | undefined;
-	const a = loc?.attrs?.[attrName];
-	if (!a) return undefined;
-	return { startLine: a.startLine, startCol: a.startCol, startOffset: a.startOffset,
-	         endLine: a.endLine, endCol: a.endCol, endOffset: a.endOffset };
-}
-
-export function tagLoc(tag: { sourceCodeLocation?: unknown }): { line?: number, col?: number } {
-	const loc = tag.sourceCodeLocation as { startLine?: number; startCol?: number } | null | undefined;
-	if (!loc) return {};
-	return { line: loc.startLine, col: loc.startCol };
-}
-
-export function errorLoc(filename?: string, loc?: { line?: number, col?: number }): { filename?: string, line?: number, col?: number } | undefined {
-	if (!filename && !loc?.line) return undefined;
-	return { filename, line: loc?.line, col: loc?.col };
-}
-
-export function attrErrorLoc(tag: { sourceCodeLocation?: unknown }, attrName: string, filename?: string): { filename?: string, line?: number, col?: number, endLine?: number, endCol?: number } | undefined {
-	const a = attrLoc(tag, attrName);
-	if (a) return { filename, line: a.startLine, col: a.startCol, endLine: a.endLine, endCol: a.endCol };
-	return errorLoc(filename, tagLoc(tag));
-}
-
-/**
- * Compute the source location of just the NAME portion of a `b-data:NAME` attribute,
- * starting after the `b-data:` prefix and ending at the close of the name. Returns
- * undefined when no parser-provided location is available.
- */
-export function bDataNameLoc(tag: { sourceCodeLocation?: unknown }, attrName: string, bindingName: string): SourceLoc | undefined {
-	const a = attrLoc(tag, attrName);
-	if (!a) return undefined;
-	const prefixLen = 'b-data:'.length;
-	return {
-		startLine: a.startLine,
-		startCol: a.startCol + prefixLen,
-		startOffset: a.startOffset + prefixLen,
-		endLine: a.startLine,
-		endCol: a.startCol + prefixLen + bindingName.length,
-		endOffset: a.startOffset + prefixLen + bindingName.length,
-	};
-}
-
-export function interpolationLoc(
-	textLoc: { startLine: number; startCol: number; startOffset: number },
-	rawBefore: string,
-	matchStr: string
-): SourceLoc {
-	const startOffset = textLoc.startOffset + rawBefore.length;
-	const endOffset = startOffset + matchStr.length;
-	const newlinesBefore = (rawBefore.match(/\n/g) ?? []).length;
-	const lastNl = rawBefore.lastIndexOf('\n');
-	const startLine = textLoc.startLine + newlinesBefore;
-	const startCol = lastNl === -1 ? textLoc.startCol + rawBefore.length : rawBefore.length - lastNl;
-	const endLine = startLine;
-	const endCol = startCol + matchStr.length;
-	return { startLine, startCol, startOffset, endLine, endCol, endOffset };
-}
-
-export class LineMap {
-	private lineStarts: number[] = [0];
-	constructor(html: string) {
-		for (let i = 0; i < html.length; i++) {
-			if (html[i] === '\n') this.lineStarts.push(i + 1);
-		}
-	}
-	getLoc(offset: number): { line: number, col: number } {
-		let l = 0, r = this.lineStarts.length - 1;
-		while (l <= r) {
-			const m = Math.floor((l + r) / 2);
-			if (this.lineStarts[m] <= offset) l = m + 1;
-			else r = m - 1;
-		}
-		return { line: r + 1, col: offset - this.lineStarts[r] + 1 };
-	}
-}
-
-// --- asset helpers ---
-
-export function parseAssetRef(value: string): AssetRef | null {
-	if (!value.startsWith('@')) return null;
-	const slashIdx = value.indexOf('/');
-	if (slashIdx === -1) return null;
-	return {
-		name: value.slice(1, slashIdx),
-		subpath: value.slice(slashIdx + 1),
-	};
-}
-
-export function validateAssetRef(
-	ref: AssetRef,
-	assetMap: Map<string, string> | undefined,
-	assetDirs: Map<string, string> | undefined,
-	loc: { filename?: string; line?: number; col?: number } | undefined,
-): BackflipError | null {
-	if (assetMap && !assetMap.has(ref.name)) {
-		return new BackflipError(`unknown asset directory "@${ref.name}"`, { ...(loc || {}), severity: 'error' });
-	}
-	if (ref.subpath.split('/').some(seg => seg === '..')) {
-		return new BackflipError(`path traversal is not allowed in asset path`, { ...(loc || {}), severity: 'error' });
-	}
-	return null;
-}
-
-export function replaceAssetRef(value: string, assetMap: Map<string, string>): string {
-	for (const [name, prefix] of assetMap) {
-		value = value.replaceAll(`@${name}/`, prefix);
-	}
-	return value;
-}
-
-export function parseSrcsetEntriesWithOffsets(value: string): { url: string, offset: number }[] {
-	const entries: { url: string, offset: number }[] = [];
-	let lastIndex = 0;
-	while (lastIndex < value.length) {
-		const commaIdx = value.indexOf(',', lastIndex);
-		const endIdx = commaIdx === -1 ? value.length : commaIdx;
-		const part = value.substring(lastIndex, endIdx);
-
-		const match = part.match(/^\s*([^\s]+)/);
-		if (match) {
-			entries.push({ url: match[1], offset: lastIndex + match.index! + (match[0].length - match[1].length) });
-		}
-
-		if (commaIdx === -1) break;
-		lastIndex = commaIdx + 1;
-	}
-	return entries;
-}
-
-export interface AssetAttrCtx {
-	html: string;
-	lineMap: LineMap;
-	assetMap?: Map<string, string>;
-	assetDirs?: Map<string, string>;
-	filename?: string;
-}
-
-/**
- * Validate a static asset attribute value, returning the parsed refs (no replacement).
- * The returned `error` is non-null when the attribute is malformed or the asset directory
- * is unknown; otherwise `refs` carries one entry per URL (1 for src~, N for srcset~).
- */
-export function validateStaticAssetAttr(
-	attrName: string,
-	value: string,
-	tag: { sourceCodeLocation?: unknown },
-	origAttrName: string,
-	ctx: AssetAttrCtx,
-): { refs: AssetRef[], originalValue: string, error?: BackflipError } {
-	const { html, lineMap, assetMap, assetDirs, filename } = ctx;
-	if (!assetMap) {
-		return { refs: [], originalValue: value, error: new BackflipError(`${attrName}~ used but no asset directories are configured`, attrErrorLoc(tag, origAttrName, filename)) };
-	}
-	if (attrName === 'style') {
-		return { refs: [], originalValue: value, error: new BackflipError(`style~ is not supported`, attrErrorLoc(tag, origAttrName, filename)) };
-	}
-
-	const attrLocation = attrLoc(tag, origAttrName);
-	let valueStartOffset = 0;
-	if (attrLocation) {
-		const attrText = html.substring(attrLocation.startOffset, attrLocation.endOffset);
-		const relativeValueOffset = attrText.indexOf(value);
-		if (relativeValueOffset !== -1) {
-			valueStartOffset = attrLocation.startOffset + relativeValueOffset;
-		} else {
-			valueStartOffset = attrLocation.startOffset; // fallback
-		}
-	}
-
-	function createAssetRef(val: string, localOffset: number): AssetRef | null {
-		if (!val.startsWith('@')) return null;
-		const slashIdx = val.indexOf('/');
-		if (slashIdx === -1) return null;
-
-		const name = val.slice(1, slashIdx);
-		const subpath = val.slice(slashIdx + 1);
-
-		const ref: AssetRef = { name, subpath };
-
-		if (attrLocation && valueStartOffset > 0) {
-			const absStart = valueStartOffset + localOffset;
-			const absEnd = absStart + val.length;
-			const startLoc = lineMap.getLoc(absStart);
-			const endLoc = lineMap.getLoc(absEnd);
-			ref.loc = {
-				startLine: startLoc.line, startCol: startLoc.col, startOffset: absStart,
-				endLine: endLoc.line, endCol: endLoc.col, endOffset: absEnd
-			};
-
-			const subpathAbsStart = absStart + slashIdx + 1;
-			const subpathStartLoc = lineMap.getLoc(subpathAbsStart);
-			ref.subpathLoc = {
-				startLine: subpathStartLoc.line, startCol: subpathStartLoc.col, startOffset: subpathAbsStart,
-				endLine: endLoc.line, endCol: endLoc.col, endOffset: absEnd
-			};
-		}
-		return ref;
-	}
-
-	function getErrLoc(refLoc: SourceLoc | undefined): { filename?: string, line?: number, col?: number, endLine?: number, endCol?: number } | undefined {
-		if (refLoc) {
-			return { filename, line: refLoc.startLine, col: refLoc.startCol, endLine: refLoc.endLine, endCol: refLoc.endCol };
-		}
-		return attrErrorLoc(tag, origAttrName, filename);
-	}
-
-	if (attrName === 'srcset') {
-		const entries = parseSrcsetEntriesWithOffsets(value);
-		const refs: AssetRef[] = [];
-		for (const { url, offset } of entries) {
-			const ref = createAssetRef(url, offset);
-			if (!ref) {
-				return { refs: [], originalValue: value, error: new BackflipError(`asset path must start with @name: "${url}"`, attrErrorLoc(tag, origAttrName, filename)) };
-			}
-			const errLoc = getErrLoc(ref.loc);
-			const err = validateAssetRef(ref, assetMap, assetDirs, errLoc);
-			if (err) return { refs: [], originalValue: value, error: err };
-			refs.push(ref);
-		}
-		return { refs, originalValue: value };
-	}
-
-	// Single URL attribute
-	const ref = createAssetRef(value, 0);
-	if (!ref) {
-		return { refs: [], originalValue: value, error: new BackflipError(`asset path must start with @name`, attrErrorLoc(tag, origAttrName, filename)) };
-	}
-	const errLoc = getErrLoc(ref.loc);
-	const err = validateAssetRef(ref, assetMap, assetDirs, errLoc);
-	if (err) return { refs: [], originalValue: value, error: err };
-	return { refs: [ref], originalValue: value };
-}
-
-// --- tag reconstruction ---
-
-/**
- * Build the `data-loc="file#partial:line:col"` attribute appended to rendered open tags
- * when source-location tracking is on. Returns '' when locations are disabled, when no
- * partial is currently being compiled, or when the parser didn't provide a location.
- */
-export function dataLocAttr(
-	tag: { sourceCodeLocation?: unknown },
-	ctx: { includeLocs: boolean; currentPartialName: string | null; filename?: string },
-): string {
-	if (!ctx.includeLocs || !ctx.currentPartialName) return '';
-	const loc = tag.sourceCodeLocation as { startLine?: number; startCol?: number } | null | undefined;
-	if (!loc?.startLine) return '';
-	const file = ctx.filename ?? '';
-	return ` data-loc="${file}#${ctx.currentPartialName}:${loc.startLine}:${loc.startCol}"`;
-}
-
-// --- open-tag attr classification & assembly ---
-
-/**
- * Normalized stream produced by classifyOpenTagAttrs. The same segment list
- * feeds both full-open-tag and attrs-only emitters, so we never build the
- * brackets up just to slice them off later.
- */
-export type AttrSegment =
-	| { kind: 'static', text: string }
-	| { kind: 'asset', attrName: string, originalValue: string, refs: AssetRef[], loc: SourceLoc | undefined }
-	| { kind: 'bind', name: string, expr: Parsed, isBoolean: boolean, isAsset: boolean, loc: SourceLoc | undefined };
-
-/**
- * Walk a tag's attrs once, filtering b-name/b-export/etc. (`excludeAttrs`),
- * b-data:*, and b-attr:*, validating any static asset attrs, and emitting a
- * normalized AttrSegment stream. `hasBind` tells the caller whether the
- * output should be a Raw + AssetRef sequence (no binds) or a single
- * AttrBindTNode (binds present). Validation errors are returned as data
- * rather than thrown or mutated into a shared array.
- */
-export function classifyOpenTagAttrs(
-	tag: { attrs: { name: string, value: string }[], sourceCodeLocation?: unknown },
-	excludeAttrs: string[],
-	ctx: AssetAttrCtx,
-): { segments: AttrSegment[], hasBind: boolean, errors: BackflipError[] } {
-	const segments: AttrSegment[] = [];
-	const errors: BackflipError[] = [];
-	let hasBind = false;
-	for (const attr of tag.attrs) {
-		if (excludeAttrs.includes(attr.name) || attr.name.startsWith('b-data:') || attr.name.startsWith('b-attr:') || attr.name === 'b-script') continue;
-		if (isBindAttr(attr.name)) {
-			let bindName = getBindAttrName(attr.name);
-			let isAsset = false;
-			if (isAssetAttr(bindName)) {
-				bindName = stripAssetSuffix(bindName);
-				if (!ctx.assetMap) {
-					errors.push(new BackflipError(`${bindName}~ used but no asset directories are configured`, attrErrorLoc(tag, attr.name, ctx.filename)));
-					continue;
-				}
-				if (bindName === 'style') {
-					errors.push(new BackflipError(`style~ is not supported`, attrErrorLoc(tag, attr.name, ctx.filename)));
-					continue;
-				}
-				isAsset = true;
-			}
-			hasBind = true;
-			const expr = interpretBackcode(attr.value);
-			for (const err of expr.errs) {
-				errors.push(new BackflipError(err, attrErrorLoc(tag, attr.name, ctx.filename)));
-			}
-			segments.push({
-				kind: 'bind',
-				name: bindName,
-				expr,
-				isBoolean: BOOLEAN_ATTRS.has(bindName),
-				isAsset,
-				loc: attrLoc(tag, attr.name),
-			});
-		} else if (isAssetAttr(attr.name)) {
-			const realName = stripAssetSuffix(attr.name);
-			const { refs, originalValue, error } = validateStaticAssetAttr(realName, attr.value, tag, attr.name, ctx);
-			if (error) { errors.push(error); continue; }
-			segments.push({
-				kind: 'asset',
-				attrName: realName,
-				originalValue,
-				refs,
-				loc: attrLoc(tag, attr.name),
-			});
-		} else {
-			segments.push({ kind: 'static', text: ` ${attr.name}="${attr.value}"` });
-		}
-	}
-	return { segments, hasBind, errors };
-}
-
-/**
- * Convert a normalized `AttrSegment[]` (from classifyOpenTagAttrs) into an `AttrPart[]`
- * suitable for `ElementTNode.attrs` (or `definitionAttrs` / `callerAttrs` on custom-element
- * roots/calls). `trailingStatic` is appended into the final static part (used to inject
- * the `data-loc=...` attribute when source-location tracking is on).
- */
-export function buildAttrParts(segments: AttrSegment[], trailingStatic: string = ''): AttrPart[] {
-	const parts: AttrPart[] = [];
-	let staticBuf = '';
-	for (const seg of segments) {
-		if (seg.kind === 'static') {
-			staticBuf += seg.text;
-		} else {
-			if (staticBuf) { parts.push({ type: 'static', raw: staticBuf }); staticBuf = ''; }
-			if (seg.kind === 'asset') {
-				parts.push({ type: 'asset', attrName: seg.attrName, originalValue: seg.originalValue, refs: seg.refs, loc: seg.loc });
-			} else {
-				const part: AttrPart = { type: 'dynamic', name: seg.name, expr: seg.expr, isBoolean: seg.isBoolean, loc: seg.loc };
-				if (seg.isAsset) part.isAsset = true;
-				parts.push(part);
-			}
-		}
-	}
-	if (trailingStatic) staticBuf += trailingStatic;
-	if (staticBuf) parts.push({ type: 'static', raw: staticBuf });
-	return parts;
-}
-
 // --- if-branch lookup ---
 
 // This should be renamed to InPartial?
@@ -529,11 +121,15 @@ export function findPrecedingIfInSlot(arr: TNode[], loc?: { filename?: string, l
 
 // --- text / raw node helpers ---
 
-const text_regex = new RegExp("({{[^{}]*}})", 'g');
+// Matches a single `{{ expr }}` interpolation. Shared by onText (here) and the
+// slot-text handler in compiler.ts. Safe to share the `/g` instance because both
+// call sites use `String.prototype.matchAll`, which does not advance the regex's
+// `lastIndex`.
+export const INTERPOLATION_RE = new RegExp("({{[^{}]*}})", 'g');
 
 export function onText(cur:TNode, parent: ParentTNode, raw :string, textLoc?: {startLine:number;startCol:number;startOffset:number}, errors?: BackflipError[]) :TNode {
 	// later match string against {{ }}
-	const matches = raw.matchAll(text_regex);
+	const matches = raw.matchAll(INTERPOLATION_RE);
 
 	let raw_it = 0;
 	for( const m of matches ) {
@@ -611,206 +207,15 @@ export function getSlotCollection(tag_stack: TagMatcher[]): { partialRef: Partia
 
 /**
  * Collect slot names declared (via b-slot) in a list of tnodes.
+ *
+ * `skipPartialRefSlots` is used because slot content passed to a *child* partial
+ * (inside a partial-ref's slots) belongs to that other partial's call, not to
+ * this one — so its b-slot declarations must not be collected here.
  */
 export function collectSlots(tnodes: TNode[]): string[] {
 	const slots: string[] = [];
-	walkForSlots(tnodes, slots);
+	visitTNodes(tnodes, (tnode) => {
+		if (tnode.type === 'slot') slots.push(tnode.name ?? 'default');
+	}, { skipPartialRefSlots: true });
 	return slots;
-}
-
-function walkForSlots(tnodes: TNode[], slots: string[]): void {
-	for (const tnode of tnodes) {
-		if (tnode.type === 'slot') {
-			slots.push((tnode as SlotTNode).name ?? 'default');
-		} else if (tnode.type === 'for') {
-			walkForSlots((tnode as ForTNode).tnodes, slots);
-		} else if (tnode.type === 'if') {
-			for (const branch of (tnode as IfTNode).branches) {
-				walkForSlots(branch.tnodes, slots);
-			}
-		} else if (tnode.type === 'element') {
-			walkForSlots((tnode as ElementTNode).tnodes, slots);
-		}
-	}
-}
-
-// --- asset resolution (stage 2) ---
-
-/**
- * Stage 2: Resolve `asset` AttrParts in a compiled AST using an asset map.
- * Returns a new CompiledFile with `asset` parts replaced by `static` parts
- * (their fully-resolved URLs). The input CompiledFile is not mutated.
- */
-export function resolveAssetRefs(compiled: CompiledFile, assetMap: Map<string, string>): CompiledFile {
-	const newPartials = new Map<string, RootTNode>();
-	for (const [name, root] of compiled.partials) {
-		const newRoot: RootTNode = root.kind === 'custom-element'
-			? {
-				type: 'root',
-				kind: 'custom-element',
-				tnodes: [],
-				...(root.loc ? { loc: root.loc } : {}),
-				...(root.exported !== undefined ? { exported: root.exported } : {}),
-				...(root.definitionAttrNames ? { definitionAttrNames: root.definitionAttrNames } : {}),
-				...(root.bAttrs ? { bAttrs: root.bAttrs } : {}),
-				// Rewrite each script's @name/... prefix (no-op for already-absolute dependency URLs).
-				...(root.scripts ? { scripts: root.scripts.map(s => ({ ...s, url: replaceAssetRef(s.url, assetMap) })) } : {}),
-				...(root.meta ? { meta: root.meta } : {}),
-			}
-			: {
-				type: 'root',
-				kind: 'named',
-				tnodes: [],
-				...(root.loc ? { loc: root.loc } : {}),
-				...(root.exported !== undefined ? { exported: root.exported } : {}),
-				...(root.meta ? { meta: root.meta } : {}),
-			};
-		newRoot.tnodes = resolveTNodes(root.tnodes, assetMap);
-		if (root.kind === 'custom-element' && root.definitionAttrs) {
-			(newRoot as CustomElementPartialRoot).definitionAttrs = resolveAttrParts(root.definitionAttrs, assetMap);
-		}
-		newPartials.set(name, newRoot);
-	}
-	return { partials: newPartials };
-}
-
-function resolveTNodes(tnodes: TNode[], assetMap: Map<string, string>): TNode[] {
-	const result: TNode[] = [];
-	for (const node of tnodes) {
-		switch (node.type) {
-			case 'raw': {
-				const n = node as RawTNode;
-				// Merge into preceding RawTNode if possible
-				const prev = result[result.length - 1];
-				if (prev && prev.type === 'raw') {
-					(prev as RawTNode).raw += n.raw;
-				} else {
-					result.push({ type: 'raw', raw: n.raw } as RawTNode);
-				}
-				break;
-			}
-			case 'comment': {
-				const n = node as CommentTNode;
-				const newNode: CommentTNode = { type: 'comment', text: n.text };
-				if (n.loc) newNode.loc = n.loc;
-				result.push(newNode);
-				break;
-			}
-			case 'print': {
-				const n = node as PrintTNode;
-				const newNode: PrintTNode = { type: 'print', data: n.data };
-				if (n.loc) newNode.loc = n.loc;
-				result.push(newNode);
-				break;
-			}
-			case 'slot': {
-				const n = node as SlotTNode;
-				const newNode: SlotTNode = { type: 'slot', name: n.name };
-				if (n.loc) newNode.loc = n.loc;
-				result.push(newNode);
-				break;
-			}
-			case 'for': {
-				const n = node as ForTNode;
-				const newNode: ForTNode = { type: 'for', iterable: n.iterable, valName: n.valName, tnodes: [] };
-				if (n.loc) newNode.loc = n.loc;
-				newNode.tnodes = resolveTNodes(n.tnodes, assetMap);
-				result.push(newNode);
-				break;
-			}
-			case 'if': {
-				const n = node as IfTNode;
-				const newNode: IfTNode = { type: 'if', branches: [] };
-				for (const branch of n.branches) {
-					const newBranch: IfBranch = { condition: branch.condition, tnodes: [] };
-					if (branch.loc) newBranch.loc = branch.loc;
-					newBranch.tnodes = resolveTNodes(branch.tnodes, assetMap);
-					newNode.branches.push(newBranch);
-				}
-				result.push(newNode);
-				break;
-			}
-			case 'partial-ref': {
-				const n = node as PartialRefTNode;
-				const newSlots: { [slotName: string]: TNode[] } = {};
-				for (const [slotName, slotTnodes] of Object.entries(n.slots)) {
-					newSlots[slotName] = resolveTNodes(slotTnodes, assetMap);
-				}
-				const newNode: PartialRefTNode = n.kind === 'custom-element'
-					? {
-						type: 'partial-ref',
-						kind: 'custom-element',
-						file: n.file,
-						partialName: n.partialName,
-						slots: newSlots,
-						bindings: n.bindings,
-					}
-					: {
-						type: 'partial-ref',
-						kind: 'b-part',
-						file: n.file,
-						partialName: n.partialName,
-						slots: newSlots,
-						bindings: n.bindings,
-					};
-				if (n.slotLocs) newNode.slotLocs = n.slotLocs;
-				if (n.loc) newNode.loc = n.loc;
-				if (n.kind === 'custom-element' && newNode.kind === 'custom-element') {
-					if (n.callerTagName) newNode.callerTagName = n.callerTagName;
-					if (n.callerAttrNames) newNode.callerAttrNames = n.callerAttrNames;
-					if (n.callerAttrInfos) newNode.callerAttrInfos = n.callerAttrInfos;
-					if (n.unresolvedRaw) newNode.unresolvedRaw = n.unresolvedRaw;
-					if (n.callerAttrs) newNode.callerAttrs = resolveAttrParts(n.callerAttrs, assetMap);
-				}
-				result.push(newNode);
-				break;
-			}
-			case 'element': {
-				const n = node as ElementTNode;
-				const newNode: ElementTNode = {
-					type: 'element',
-					tagName: n.tagName,
-					attrs: resolveAttrParts(n.attrs, assetMap),
-					tnodes: resolveTNodes(n.tnodes, assetMap),
-				};
-				if (n.selfClosing) newNode.selfClosing = n.selfClosing;
-				if (n.isVoid) newNode.isVoid = n.isVoid;
-				if (n.loc) newNode.loc = n.loc;
-				if (n.openTagLoc) newNode.openTagLoc = n.openTagLoc;
-				if (n.closeTagLoc) newNode.closeTagLoc = n.closeTagLoc;
-				result.push(newNode);
-				break;
-			}
-		}
-	}
-	return result;
-}
-
-export function resolveAttrParts(parts: AttrPart[], assetMap: Map<string, string>): AttrPart[] {
-	const result: AttrPart[] = [];
-	for (const part of parts) {
-		if (part.type === 'asset') {
-			const resolved = replaceAssetRef(part.originalValue, assetMap);
-			const raw = ` ${part.attrName}="${resolved}"`;
-			// Merge into preceding static part if possible
-			const prev = result[result.length - 1];
-			if (prev && prev.type === 'static') {
-				prev.raw += raw;
-			} else {
-				result.push({ type: 'static', raw });
-			}
-		} else if (part.type === 'static') {
-			// Merge into preceding static part if possible
-			const prev = result[result.length - 1];
-			if (prev && prev.type === 'static') {
-				prev.raw += part.raw;
-			} else {
-				result.push({ type: 'static', raw: part.raw });
-			}
-		} else {
-			// dynamic parts pass through unchanged
-			result.push({ ...part });
-		}
-	}
-	return result;
 }

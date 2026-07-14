@@ -4,12 +4,11 @@ import * as path from 'node:path';
 import stream from 'node:stream';
 import { RewritingStream } from 'parse5-html-rewriting-stream';
 import { compilePartial } from './compiler.js';
-import { collectSlots, isCustomElementTagName, parseBPartValue } from './helpers.js';
-import type { CompiledFile, CompileOptions, PartialRegistry, PartialRefTNode, RootTNode, PartialDef, PartialBinding, TNode, RawTNode, SourceLoc, ForTNode, IfTNode } from './types.js';
+import { collectSlots, isCustomElementTagName, parseBPartValue, VOID_ELEMENTS } from './helpers.js';
+import { resolvePartial, resolveCustomElementCalls, linkBAttrBindings } from './link.js';
+import type { CompiledFile, CompileOptions, PartialRegistry, PartialRefTNode, PartialDef, TNode, RawTNode, SourceLoc } from './types.js';
 import { BackflipError } from './errors.js';
 import { validateBAttrUsage, inferDataShape } from './data-shape.js';
-
-const VOID_ELEMENTS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
 
 export interface CompiledDirectory {
     files: Map<string, CompiledFile>  // key: relative file path e.g. "blog/general.html"
@@ -244,6 +243,11 @@ interface ValidationContext {
  * - Same-file partial existence
  * - Cross-file partial existence and export
  * - Slot existence (b-in references matching b-slot declarations)
+ *
+ * No-mutation contract: this pass (and `validateTNode` below) is strictly
+ * read-only over the AST. All resolution/mutation (custom-element call target
+ * resolution and b-attr binding synthesis) happens earlier, in the link stage
+ * (link.ts). Do not add AST mutation here — validators only read and report.
  */
 function validateRefs(
     compiledFile: CompiledFile,
@@ -270,19 +274,6 @@ function validateRootTNode(
 function errorLoc(filename: string, loc?: SourceLoc): { filename: string, line?: number, col?: number, endLine?: number, endCol?: number } | undefined {
     if (!loc) return { filename };
     return { filename, line: loc.startLine, col: loc.startCol, endLine: loc.endLine, endCol: loc.endCol };
-}
-
-/**
- * Resolve the target partial's RootTNode for a partial-ref, or null if not found.
- */
-function resolvePartial(ref: PartialRefTNode, ctx: ValidationContext): RootTNode | null {
-    if (ref.file === null) {
-        return ctx.compiledFile.partials.get(ref.partialName) ?? null;
-    } else {
-        const targetFile = ctx.allFiles.get(ref.file);
-        if (!targetFile) return null;
-        return targetFile.partials.get(ref.partialName) ?? null;
-    }
 }
 
 function hasSlotContent(nodes: TNode[]): boolean {
@@ -360,7 +351,7 @@ function validateTNode(
 
         // --- Validate attribute conflicts for custom element calls ---
         if (ref.kind === 'custom-element' && ref.file !== '__unresolved_custom_element__') {
-            const targetForAttrs = resolvePartial(ref, ctx);
+            const targetForAttrs = resolvePartial(ref, ctx.compiledFile, ctx.allFiles);
             if (targetForAttrs && targetForAttrs.kind === 'custom-element' && targetForAttrs.definitionAttrNames && ref.callerAttrNames) {
                 const defNames = new Set(targetForAttrs.definitionAttrNames);
                 for (const callerName of ref.callerAttrNames) {
@@ -372,101 +363,13 @@ function validateTNode(
                     }
                 }
             }
-
-            // --- Validate b-attr declarations against caller-side attributes ---
-            if (targetForAttrs && targetForAttrs.kind === 'custom-element' && targetForAttrs.bAttrs && targetForAttrs.bAttrs.length > 0) {
-                const bAttrs = targetForAttrs.bAttrs;
-                const bAttrNameSet = new Set(bAttrs.map(b => b.name));
-                const callerInfos = ref.callerAttrInfos ?? [];
-                const synthesized: PartialBinding[] = [];
-
-                // Reject b-data:NAME on caller when target declares b-attr:NAME.
-                for (const binding of ref.bindings) {
-                    if (bAttrNameSet.has(binding.name)) {
-                        ctx.errors.push(new BackflipError(
-                            `b-data:${binding.name} on <${ref.callerTagName}> conflicts with b-attr:${binding.name} declared on the partial definition; pass the value as an attribute instead`,
-                            errorLoc(ctx.sourceRelPath, ref.loc)
-                        ));
-                    }
-                }
-
-                // Determine whether a 'plain' caller attribute was written bare (just `name`)
-                // or with a value (`name="..."`, including empty `name=""`). parse5 reports
-                // `attr.value === ''` for both, but the source-location range distinguishes
-                // them: bare attrs have a location range equal to the name length.
-                const isBareAttr = (caller: { name: string; value: string; loc?: SourceLoc }): boolean => {
-                    if (caller.value !== '') return false;
-                    if (!caller.loc) return true; // best effort: no loc → assume bare since value is empty
-                    const span = caller.loc.endOffset - caller.loc.startOffset;
-                    return span === caller.name.length;
-                };
-
-                for (const bAttr of bAttrs) {
-                    const caller = callerInfos.find(c => c.name === bAttr.name);
-                    if (!caller) {
-                        ctx.errors.push(new BackflipError(
-                            `b-attr "${bAttr.name}" required by custom element <${ref.partialName}> but not provided at call site`,
-                            errorLoc(ctx.sourceRelPath, ref.loc)
-                        ));
-                        continue;
-                    }
-
-                    if (!bAttr.isBool) {
-                        // Non-bool b-attr
-                        if (caller.kind === 'plain' && isBareAttr(caller)) {
-                            ctx.errors.push(new BackflipError(
-                                `attribute "${bAttr.name}" on <${ref.callerTagName}> requires a string value (declared as non-bool b-attr in the partial definition)`,
-                                errorLoc(ctx.sourceRelPath, caller.loc ?? ref.loc)
-                            ));
-                            // Even though invalid, continue and don't synthesize this one.
-                            continue;
-                        }
-                        // Synthesize binding
-                        if (caller.kind === 'plain') {
-                            synthesized.push({ kind: 'literal', name: bAttr.name, value: caller.value });
-                        } else {
-                            // expr
-                            synthesized.push({ kind: 'expr', name: bAttr.name, data: caller.expr!, cast: 'string' });
-                        }
-                    } else {
-                        // Bool b-attr
-                        if (caller.kind === 'plain' && !isBareAttr(caller)) {
-                            // premium="..." or premium="" — both warn (string-where-bool-expected)
-                            ctx.errors.push(new BackflipError(
-                                `attribute "${bAttr.name}" on <${ref.callerTagName}> has a string value but the partial definition declares it as bool; the value will be coerced to true`,
-                                { ...(errorLoc(ctx.sourceRelPath, caller.loc ?? ref.loc) ?? { filename: ctx.sourceRelPath }), severity: 'warning' }
-                            ));
-                            synthesized.push({ kind: 'literal', name: bAttr.name, value: true });
-                        } else if (caller.kind === 'plain') {
-                            // bare attribute — premium
-                            synthesized.push({ kind: 'literal', name: bAttr.name, value: true });
-                        } else {
-                            // expr — :premium="..."
-                            synthesized.push({ kind: 'expr', name: bAttr.name, data: caller.expr!, cast: 'bool' });
-                        }
-                    }
-                }
-
-                // Append synthesized bindings to ref.bindings.
-                if (synthesized.length > 0) {
-                    ref.bindings.push(...synthesized);
-                }
-
-                // Patch caller-side AttrPart isBoolean for .bool b-attrs so that the
-                // rendered attribute is suppressed when the bound expression is falsy.
-                const boolBAttrNames = new Set(bAttrs.filter(b => b.isBool).map(b => b.name));
-                if (boolBAttrNames.size > 0 && ref.callerAttrs) {
-                    for (const part of ref.callerAttrs) {
-                        if (part.type === 'dynamic' && boolBAttrNames.has(part.name)) {
-                            part.isBoolean = true;
-                        }
-                    }
-                }
-            }
+            // b-attr binding synthesis and the associated diagnostics have moved to
+            // the link stage (link.ts `linkBAttrBindings`); by the time validation
+            // runs, ref.bindings already carries the synthesized bindings.
         }
 
         // --- Validate slots ---
-        const targetPartial = resolvePartial(ref, ctx);
+        const targetPartial = resolvePartial(ref, ctx.compiledFile, ctx.allFiles);
         if (targetPartial) {
             const declaredSlots = new Set(collectSlots(targetPartial.tnodes));
 
@@ -523,95 +426,6 @@ function validateTNode(
     } else if (tnode.type === 'element') {
         validateRootTNode(tnode, ctx);
     }
-}
-
-/**
- * Find an exported custom element partial with this name in the registry.
- * Returns the file path that defines it, or null.
- */
-function findExportedCustomElement(
-    name: string,
-    registry: PartialRegistry
-): string | null {
-    for (const [file, defs] of registry) {
-        for (const def of defs) {
-            if (def.customElement && def.exported && def.name === name) return file;
-        }
-    }
-    return null;
-}
-
-/**
- * Walk a TNode tree and call the visitor on every partial-ref node.
- */
-function visitPartialRefs(
-    nodes: TNode[],
-    visit: (ref: PartialRefTNode) => void
-): void {
-    for (const n of nodes) {
-        if (n.type === 'partial-ref') {
-            visit(n as PartialRefTNode);
-            for (const slotNodes of Object.values((n as PartialRefTNode).slots)) {
-                visitPartialRefs(slotNodes, visit);
-            }
-        } else if (n.type === 'for') {
-            visitPartialRefs((n as ForTNode).tnodes, visit);
-        } else if (n.type === 'if') {
-            for (const branch of (n as IfTNode).branches) {
-                visitPartialRefs(branch.tnodes, visit);
-            }
-        } else if (n.type === 'element') {
-            visitPartialRefs(n.tnodes, visit);
-        }
-    }
-}
-
-/**
- * Resolve custom element call sites (partial-ref with customElement: true) against
- * same-file partials first, then the global exported custom-element registry.
- *
- * - Same-file: if the file defines a custom-element partial with the matching name,
- *   leave file = null (same-file reference).
- * - Cross-file: if an exported custom-element partial with this name exists in some
- *   other file, set file to that file's path.
- * - Unresolved: mark the ref's `file` to a sentinel that codegen will detect, and emit
- *   a warning. Stage 6 codegen falls back to rendering the raw tag.
- */
-function resolveCustomElementCalls(
-    files: Map<string, CompiledFile>,
-    registry: PartialRegistry
-): BackflipError[] {
-    const warnings: BackflipError[] = [];
-
-    for (const [filePath, compiled] of files) {
-        for (const [, root] of compiled.partials) {
-            visitPartialRefs(root.tnodes, (ref) => {
-                if (ref.kind !== 'custom-element') return;
-                if (ref.file !== null) return; // already resolved (shouldn't happen at this stage)
-
-                const sameFilePartial = compiled.partials.get(ref.partialName);
-                if (sameFilePartial && sameFilePartial.kind === 'custom-element') {
-                    // Resolves to same-file definition; keep file = null
-                    return;
-                }
-
-                const exportedFile = findExportedCustomElement(ref.partialName, registry);
-                if (exportedFile && exportedFile !== filePath) {
-                    ref.file = exportedFile;
-                    return;
-                }
-
-                // Unresolved — emit a warning. Codegen treats unresolvedRaw as the fallback.
-                ref.file = '__unresolved_custom_element__';
-                warnings.push(new BackflipError(
-                    `unknown custom element <${ref.partialName}> — no matching partial found in this file or among exported custom element partials. Treating as raw HTML.`,
-                    { filename: filePath, line: ref.loc?.startLine, col: ref.loc?.startCol, severity: 'warning' }
-                ));
-            });
-        }
-    }
-
-    return warnings;
 }
 
 /**
@@ -750,12 +564,16 @@ export async function compileDirectory(dir: string, options?: CompileOptions): P
 
     const files = new Map<string, CompiledFile>(compiledPairs);
 
-    // Resolve custom element call sites against same-file partials and the global
-    // exported custom-element registry. Mutates partial-ref nodes in place. May emit
-    // warnings for unresolved hyphenated tags.
+    // Link stage (all AST mutation): resolve custom-element call sites against
+    // same-file partials and the global exported custom-element registry, then
+    // synthesize b-attr bindings on those call sites. Runs across all files before
+    // validation so that read-only validators (below) see the fully linked trees —
+    // in particular, the b-data-vs-data-shape check depends on the synthesized
+    // bindings. May emit warnings for unresolved hyphenated tags and b-attr errors.
     allErrors.push(...resolveCustomElementCalls(files, registry));
+    allErrors.push(...linkBAttrBindings(files, registry));
 
-    // Validate references and slots
+    // Validate references and slots (read-only; see validateRefs contract)
     for (const [relPath, compiled] of compiledPairs) {
         const refErrors = validateRefs(compiled, relPath, registry, files);
         allErrors.push(...refErrors);

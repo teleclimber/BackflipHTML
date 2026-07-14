@@ -4,6 +4,7 @@ import stream from 'node:stream';
 import { interpretBackcode } from './backcode.js';
 import type { Parsed } from './backcode.js';
 import { BackflipError } from './errors.js';
+import { appendCoalesced } from './walk.js';
 import type {
 	SourceLoc, TNode, RawTNode, PrintTNode, ForTNode, IfTNode, IfBranch,
 	SlotTNode, PartialRefTNode, BPartCallTNode, CustomElementCallTNode, ParentTNode,
@@ -12,14 +13,14 @@ import type {
 } from './types.js';
 import {
 	attrLoc, tagLoc, errorLoc, attrErrorLoc, bDataNameLoc, interpolationLoc,
-	LineMap,
+	tagSrcLoc, LineMap,
 	isCustomElementTagName, effectiveAttrNames, parseBPartValue, parseBForValue,
 	dataLocAttr as dataLocAttrPure,
 	getSlotCollection as getSlotCollectionPure,
 	classifyOpenTagAttrs, buildAttrParts, validateStaticAssetAttr,
 	findPrecedingIfInFile, findPrecedingIfInSlot,
 	pushRaw, onText,
-	DOCUMENT_LEVEL_TAGS,
+	DOCUMENT_LEVEL_TAGS, VOID_ELEMENTS, INTERPOLATION_RE,
 	type TagMatcher, type AssetAttrCtx,
 } from './helpers.js';
 export { BackflipError };
@@ -109,15 +110,8 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 					sc.partialRef.slots[slotName] = [];
 				}
 				const arr = sc.partialRef.slots[slotName];
-				const lastNode = arr.length > 0 ? arr[arr.length - 1] : null;
-				if (lastNode && lastNode.type === 'raw') {
-					(lastNode as RawTNode).raw += raw;
-					return lastNode;
-				} else {
-					const raw_node: RawTNode = { type: 'raw', raw };
-					arr.push(raw_node);
-					return raw_node;
-				}
+				appendCoalesced(arr, { type: 'raw', raw });
+				return arr[arr.length - 1];
 			}
 			const container: ParentTNode | null = cur_parent ?? currentPartialRoot;
 			if (container === null) return null;
@@ -162,25 +156,8 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			return { segments, hasBind };
 		}
 
-		const void_elements = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
-
 		type StartTag = { tagName: string, attrs: { name: string, value: string }[], selfClosing: boolean, sourceCodeLocation?: unknown };
 		type Attr = { name: string, value: string };
-
-		// Convert parse5's tag.sourceCodeLocation into our SourceLoc (best effort —
-		// returns undefined if the parser didn't supply line/col info).
-		function tagSrcLoc(tag: { sourceCodeLocation?: unknown }): SourceLoc | undefined {
-			const loc = tag.sourceCodeLocation as { startLine?: number; startCol?: number; startOffset?: number; endLine?: number; endCol?: number; endOffset?: number } | null | undefined;
-			if (!loc || loc.startLine == null) return undefined;
-			return {
-				startLine: loc.startLine,
-				startCol: loc.startCol ?? 1,
-				startOffset: loc.startOffset ?? 0,
-				endLine: loc.endLine ?? loc.startLine,
-				endCol: loc.endCol ?? (loc.startCol ?? 1),
-				endOffset: loc.endOffset ?? (loc.startOffset ?? 0),
-			};
-		}
 
 		// Build an ElementTNode for a regular HTML element. Attrs are produced via
 		// classifyOpenTagAttrs (which already filters b-data:* / b-attr:* and validates
@@ -198,7 +175,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				attrs,
 				tnodes: [],
 			};
-			if (void_elements.has(tag.tagName)) elem.isVoid = true;
+			if (VOID_ELEMENTS.has(tag.tagName)) elem.isVoid = true;
 			if (tag.selfClosing) elem.selfClosing = true;
 			const openLoc = tagSrcLoc(tag);
 			if (openLoc) {
@@ -225,7 +202,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				cur_tnode = new_cur;
 				// cur_parent unchanged: pushRawHere appends a sibling within the same container.
 			}
-			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+			if (!tag.selfClosing && !VOID_ELEMENTS.has(tag.tagName)) {
 				tag_stack.push({ tag: tag.tagName });
 			}
 		}
@@ -374,17 +351,8 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				callerAttrInfos,
 				unresolvedRaw: raw,
 			};
-			const tagSrcLoc = tag.sourceCodeLocation as { startLine?: number; startCol?: number; startOffset?: number; endLine?: number; endCol?: number; endOffset?: number } | null | undefined;
-			if (tagSrcLoc?.startLine != null) {
-				partialRef.loc = {
-					startLine: tagSrcLoc.startLine,
-					startCol: tagSrcLoc.startCol ?? 1,
-					startOffset: tagSrcLoc.startOffset ?? 0,
-					endLine: tagSrcLoc.endLine ?? tagSrcLoc.startLine,
-					endCol: tagSrcLoc.endCol ?? (tagSrcLoc.startCol ?? 1),
-					endOffset: tagSrcLoc.endOffset ?? (tagSrcLoc.startOffset ?? 0) + raw.length,
-				};
-			}
+			const loc = tagSrcLoc(tag, raw.length);
+			if (loc) partialRef.loc = loc;
 			return partialRef;
 		}
 
@@ -399,7 +367,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				// Treat as raw tag within current partial
 				const new_cur = pushRawHere(raw);
 				if (cur_tnode !== null) cur_tnode = new_cur;
-				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+				if (!tag.selfClosing && !VOID_ELEMENTS.has(tag.tagName)) {
 					tag_stack.push({ tag: tag.tagName });
 				}
 				return;
@@ -430,12 +398,12 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			}
 
 			const partialName = bNameAttr.value;
-			const tagSrcLoc = tag.sourceCodeLocation as { startOffset?: number; startLine?: number; startCol?: number } | null | undefined;
+			const srcLoc = tag.sourceCodeLocation as { startOffset?: number; startLine?: number; startCol?: number } | null | undefined;
 			const partialRoot: NamedPartialRoot = { type: 'root', kind: 'named', tnodes: [], meta: {
-				startOffset: tagSrcLoc?.startOffset ?? 0,
-				endOffset: tagSrcLoc?.startOffset ?? 0, // updated on close
-				startLine: tagSrcLoc?.startLine ?? 1,
-				startCol: tagSrcLoc?.startCol ?? 1,
+				startOffset: srcLoc?.startOffset ?? 0,
+				endOffset: srcLoc?.startOffset ?? 0, // updated on close
+				startLine: srcLoc?.startLine ?? 1,
+				startCol: srcLoc?.startCol ?? 1,
 				isDocumentLevel: DOCUMENT_LEVEL_TAGS.has(tag.tagName),
 			} };
 			partialRoot.loc = attrLoc(tag, 'b-name');
@@ -457,11 +425,11 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				partialRoot.tnodes.push(elem);
 				cur_tnode = elem;
 				cur_parent = elem;
-				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+				if (!tag.selfClosing && !VOID_ELEMENTS.has(tag.tagName)) {
 					tag_stack.push({ tag: tag.tagName, tnode: elem, parent: partialRoot, hasParent: true });
 				} else {
 					// Self-closing or void element: end offset is end of this tag
-					partialRoot.meta!.endOffset = (tagSrcLoc?.startOffset ?? 0) + raw.length;
+					partialRoot.meta!.endOffset = (srcLoc?.startOffset ?? 0) + raw.length;
 				}
 			}
 		}
@@ -478,24 +446,16 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			}
 
 			const partialName = tag.tagName;
-			const tagSrcLoc = tag.sourceCodeLocation as { startOffset?: number; endOffset?: number; startLine?: number; startCol?: number; endLine?: number; endCol?: number } | null | undefined;
+			const srcLoc = tag.sourceCodeLocation as { startOffset?: number; endOffset?: number; startLine?: number; startCol?: number; endLine?: number; endCol?: number } | null | undefined;
 			const partialRoot: CustomElementPartialRoot = { type: 'root', kind: 'custom-element', tnodes: [], meta: {
-				startOffset: tagSrcLoc?.startOffset ?? 0,
-				endOffset: tagSrcLoc?.startOffset ?? 0, // updated on close
-				startLine: tagSrcLoc?.startLine ?? 1,
-				startCol: tagSrcLoc?.startCol ?? 1,
+				startOffset: srcLoc?.startOffset ?? 0,
+				endOffset: srcLoc?.startOffset ?? 0, // updated on close
+				startLine: srcLoc?.startLine ?? 1,
+				startCol: srcLoc?.startCol ?? 1,
 				isDocumentLevel: false,
 			} };
-			if (tagSrcLoc?.startLine != null) {
-				partialRoot.loc = {
-					startLine: tagSrcLoc.startLine,
-					startCol: tagSrcLoc.startCol ?? 1,
-					startOffset: tagSrcLoc.startOffset ?? 0,
-					endLine: tagSrcLoc.endLine ?? tagSrcLoc.startLine,
-					endCol: tagSrcLoc.endCol ?? (tagSrcLoc.startCol ?? 1),
-					endOffset: tagSrcLoc.endOffset ?? (tagSrcLoc.startOffset ?? 0) + raw.length,
-				};
-			}
+			const loc = tagSrcLoc(tag, raw.length);
+			if (loc) partialRoot.loc = loc;
 			partialRoot.exported = tag.attrs.some(a => a.name === 'b-export');
 
 			// Parse b-attr:* declarations on the custom element definition tag.
@@ -604,10 +564,10 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			partialRoot.definitionAttrs = buildAttrPartsFromTag(tag, ['b-export', 'b-script']);
 			cur_tnode = null;
 			cur_parent = partialRoot;
-			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+			if (!tag.selfClosing && !VOID_ELEMENTS.has(tag.tagName)) {
 				tag_stack.push({ tag: tag.tagName });
 			} else {
-				partialRoot.meta!.endOffset = (tagSrcLoc?.startOffset ?? 0) + raw.length;
+				partialRoot.meta!.endOffset = (srcLoc?.startOffset ?? 0) + raw.length;
 			}
 		}
 
@@ -621,7 +581,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			const partialRef = buildCustomElementPartialRef(tag, raw);
 			pushNodeHere(partialRef);
 
-			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+			if (!tag.selfClosing && !VOID_ELEMENTS.has(tag.tagName)) {
 				// Switch to slot mode: cur_parent = null so body content routes into the
 				// partial-ref's default slot via slot collection (until a child opens a new
 				// container which sets its own cur_parent).
@@ -651,7 +611,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			if (!fc) return;
 			const partialRef = buildCustomElementPartialRef(tag, raw);
 			fc.container.tnodes!.push(partialRef);
-			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+			if (!tag.selfClosing && !VOID_ELEMENTS.has(tag.tagName)) {
 				// Slot mode for body content (routes into partial-ref.slots.default).
 				// On endTag, cur_tnode is repositioned at fc.outer so that a following
 				// b-else can chain to this if_node among siblings of fc.outerParent.
@@ -674,7 +634,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 		function handleBPart(tag: StartTag, raw: string, bPartAttr: Attr) {
 			// b-part outside any b-name partial is ignored
 			if (currentPartialRoot === null) {
-				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+				if (!tag.selfClosing && !VOID_ELEMENTS.has(tag.tagName)) {
 					tag_stack.push({ tag: tag.tagName });
 				}
 				return;
@@ -720,7 +680,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				outerNode = elem;
 			}
 
-			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+			if (!tag.selfClosing && !VOID_ELEMENTS.has(tag.tagName)) {
 				// Slot mode: cur_parent = null routes body content into partialRef.slots.default.
 				cur_parent = null;
 				cur_tnode = null;
@@ -741,7 +701,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 		function handleBSlot(tag: StartTag, _raw: string, bSlotAttr: Attr) {
 			// b-slot outside any b-name partial is ignored
 			if (currentPartialRoot === null) {
-				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+				if (!tag.selfClosing && !VOID_ELEMENTS.has(tag.tagName)) {
 					tag_stack.push({ tag: tag.tagName });
 				}
 				return;
@@ -768,7 +728,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				pushNodeHere(elem);
 				cur_parent = elem;
 				cur_tnode = slot_node;
-				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+				if (!tag.selfClosing && !VOID_ELEMENTS.has(tag.tagName)) {
 					tag_stack.push({ tag: tag.tagName, tnode: elem, parent: oldParent, hasParent: true });
 				}
 			}
@@ -805,7 +765,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				const oldParent: ParentTNode | null = cur_parent;
 				cur_parent = elem;
 				cur_tnode = elem;
-				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+				if (!tag.selfClosing && !VOID_ELEMENTS.has(tag.tagName)) {
 					tag_stack.push({
 						tag: tag.tagName,
 						tnode: elem,
@@ -845,7 +805,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				fc.container.tnodes!.push(elem);
 				cur_parent = elem;
 				cur_tnode = elem;
-				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+				if (!tag.selfClosing && !VOID_ELEMENTS.has(tag.tagName)) {
 					// On close, resume at fc.outer (the wrapping if_node/for_node) so that
 					// b-else-if/b-else can chain to it among siblings of fc.outerParent.
 					tag_stack.push({ tag: tag.tagName, tnode: fc.outer, parent: fc.outerParent, hasParent: true });
@@ -862,7 +822,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 			pushNodeHere(elem);
 			cur_parent = elem;
 			cur_tnode = elem;
-			if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+			if (!tag.selfClosing && !VOID_ELEMENTS.has(tag.tagName)) {
 				tag_stack.push({ tag: tag.tagName, tnode: elem, parent: oldParent, hasParent: true });
 			} else {
 				// Self-closing or void: no body to process; restore.
@@ -910,7 +870,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 
 			// Skip everything outside a partial
 			if (currentPartialRoot === null) {
-				if (!tag.selfClosing && !void_elements.has(tag.tagName)) {
+				if (!tag.selfClosing && !VOID_ELEMENTS.has(tag.tagName)) {
 					tag_stack.push({ tag: tag.tagName });
 				}
 				return;
@@ -1020,20 +980,15 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 				}
 				const arr = sc.partialRef.slots[slotName];
 
-				const matches = raw.matchAll(cf_text_regex);
+				const matches = raw.matchAll(INTERPOLATION_RE);
 				let raw_it = 0;
 				for (const m of matches) {
 					if (m.index > raw_it) {
-						const sub = raw.substring(raw_it, m.index);
-						const last = arr.length > 0 ? arr[arr.length - 1] : null;
-						if (last && last.type === 'raw') { (last as RawTNode).raw += sub; }
-						else { arr.push({ type: 'raw', raw: sub }); }
+						appendCoalesced(arr, { type: 'raw', raw: raw.substring(raw_it, m.index) });
 					}
 					const code_str = m[0].substring(2, m[0].length - 2).trim();
 					if (!code_str) {
-						const last = arr.length > 0 ? arr[arr.length - 1] : null;
-						if (last && last.type === 'raw') { (last as RawTNode).raw += m[0]; }
-						else { arr.push({ type: 'raw', raw: m[0] }); }
+						appendCoalesced(arr, { type: 'raw', raw: m[0] });
 						raw_it = m.index + m[0].length;
 						continue;
 					}
@@ -1044,10 +999,7 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 					raw_it = m.index + m[0].length;
 				}
 				if (raw_it < raw.length) {
-					const sub = raw.substring(raw_it);
-					const last = arr.length > 0 ? arr[arr.length - 1] : null;
-					if (last && last.type === 'raw') { (last as RawTNode).raw += sub; }
-					else { arr.push({ type: 'raw', raw: sub }); }
+					appendCoalesced(arr, { type: 'raw', raw: raw.substring(raw_it) });
 				}
 			} else {
 				const container: ParentTNode | null = cur_parent ?? currentPartialRoot;
@@ -1092,5 +1044,4 @@ export function compilePartial(htmlSlice: string, partialDef: PartialDef, option
 	});
 }
 
-const cf_text_regex = new RegExp("({{[^{}]*}})", 'g');
 

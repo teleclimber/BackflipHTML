@@ -1,0 +1,120 @@
+import type { SourceLoc } from './types.js';
+
+// --- source-location helpers (parse5 sourceCodeLocation accessors) ---
+
+type LocAttrs = { attrs?: Record<string, { startLine: number; startCol: number; startOffset: number; endLine: number; endCol: number; endOffset: number }> };
+
+export function attrLoc(tag: { sourceCodeLocation?: unknown }, attrName: string): SourceLoc | undefined {
+	const loc = tag.sourceCodeLocation as LocAttrs | null | undefined;
+	const a = loc?.attrs?.[attrName];
+	if (!a) return undefined;
+	return { startLine: a.startLine, startCol: a.startCol, startOffset: a.startOffset,
+	         endLine: a.endLine, endCol: a.endCol, endOffset: a.endOffset };
+}
+
+export function tagLoc(tag: { sourceCodeLocation?: unknown }): { line?: number, col?: number } {
+	const loc = tag.sourceCodeLocation as { startLine?: number; startCol?: number } | null | undefined;
+	if (!loc) return {};
+	return { line: loc.startLine, col: loc.startCol };
+}
+
+/**
+ * Convert parse5's tag.sourceCodeLocation into our SourceLoc (best effort —
+ * returns undefined if the parser didn't supply line/col info). `fallbackLen`
+ * is the length added to `startOffset` when the parser didn't supply an
+ * `endOffset` (defaults to 0). Call sites that reconstruct a tag from its raw
+ * text pass `raw.length` so the fallback span covers the whole tag.
+ */
+export function tagSrcLoc(tag: { sourceCodeLocation?: unknown }, fallbackLen: number = 0): SourceLoc | undefined {
+	const loc = tag.sourceCodeLocation as { startLine?: number; startCol?: number; startOffset?: number; endLine?: number; endCol?: number; endOffset?: number } | null | undefined;
+	if (!loc || loc.startLine == null) return undefined;
+	const startOffset = loc.startOffset ?? 0;
+	return {
+		startLine: loc.startLine,
+		startCol: loc.startCol ?? 1,
+		startOffset,
+		endLine: loc.endLine ?? loc.startLine,
+		endCol: loc.endCol ?? (loc.startCol ?? 1),
+		endOffset: loc.endOffset ?? (startOffset + fallbackLen),
+	};
+}
+
+export function errorLoc(filename?: string, loc?: { line?: number, col?: number }): { filename?: string, line?: number, col?: number } | undefined {
+	if (!filename && !loc?.line) return undefined;
+	return { filename, line: loc?.line, col: loc?.col };
+}
+
+export function attrErrorLoc(tag: { sourceCodeLocation?: unknown }, attrName: string, filename?: string): { filename?: string, line?: number, col?: number, endLine?: number, endCol?: number } | undefined {
+	const a = attrLoc(tag, attrName);
+	if (a) return { filename, line: a.startLine, col: a.startCol, endLine: a.endLine, endCol: a.endCol };
+	return errorLoc(filename, tagLoc(tag));
+}
+
+/**
+ * Compute the source location of just the NAME portion of a `b-data:NAME` attribute,
+ * starting after the `b-data:` prefix and ending at the close of the name. Returns
+ * undefined when no parser-provided location is available.
+ */
+export function bDataNameLoc(tag: { sourceCodeLocation?: unknown }, attrName: string, bindingName: string): SourceLoc | undefined {
+	const a = attrLoc(tag, attrName);
+	if (!a) return undefined;
+	const prefixLen = 'b-data:'.length;
+	return {
+		startLine: a.startLine,
+		startCol: a.startCol + prefixLen,
+		startOffset: a.startOffset + prefixLen,
+		endLine: a.startLine,
+		endCol: a.startCol + prefixLen + bindingName.length,
+		endOffset: a.startOffset + prefixLen + bindingName.length,
+	};
+}
+
+export function interpolationLoc(
+	textLoc: { startLine: number; startCol: number; startOffset: number },
+	rawBefore: string,
+	matchStr: string
+): SourceLoc {
+	const startOffset = textLoc.startOffset + rawBefore.length;
+	const endOffset = startOffset + matchStr.length;
+	const newlinesBefore = (rawBefore.match(/\n/g) ?? []).length;
+	const lastNl = rawBefore.lastIndexOf('\n');
+	const startLine = textLoc.startLine + newlinesBefore;
+	const startCol = lastNl === -1 ? textLoc.startCol + rawBefore.length : rawBefore.length - lastNl;
+	const endLine = startLine;
+	const endCol = startCol + matchStr.length;
+	return { startLine, startCol, startOffset, endLine, endCol, endOffset };
+}
+
+export class LineMap {
+	private lineStarts: number[] = [0];
+	constructor(html: string) {
+		for (let i = 0; i < html.length; i++) {
+			if (html[i] === '\n') this.lineStarts.push(i + 1);
+		}
+	}
+	getLoc(offset: number): { line: number, col: number } {
+		let l = 0, r = this.lineStarts.length - 1;
+		while (l <= r) {
+			const m = Math.floor((l + r) / 2);
+			if (this.lineStarts[m] <= offset) l = m + 1;
+			else r = m - 1;
+		}
+		return { line: r + 1, col: offset - this.lineStarts[r] + 1 };
+	}
+}
+
+/**
+ * Build the `data-loc="file#partial:line:col"` attribute appended to rendered open tags
+ * when source-location tracking is on. Returns '' when locations are disabled, when no
+ * partial is currently being compiled, or when the parser didn't provide a location.
+ */
+export function dataLocAttr(
+	tag: { sourceCodeLocation?: unknown },
+	ctx: { includeLocs: boolean; currentPartialName: string | null; filename?: string },
+): string {
+	if (!ctx.includeLocs || !ctx.currentPartialName) return '';
+	const loc = tag.sourceCodeLocation as { startLine?: number; startCol?: number } | null | undefined;
+	if (!loc?.startLine) return '';
+	const file = ctx.filename ?? '';
+	return ` data-loc="${file}#${ctx.currentPartialName}:${loc.startLine}:${loc.startCol}"`;
+}
