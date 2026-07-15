@@ -1,6 +1,6 @@
 import { BackflipError } from './errors.js';
 import { mapTNodes } from './walk.js';
-import { LineMap, attrLoc, attrErrorLoc } from './loc.js';
+import { LineMap, attrErrorLoc } from './loc.js';
 import type {
 	SourceLoc,
 	AssetRef,
@@ -76,23 +76,26 @@ export interface AssetAttrCtx {
  * Validate a static asset attribute value, returning the parsed refs (no replacement).
  * The returned `error` is non-null when the attribute is malformed or the asset directory
  * is unknown; otherwise `refs` carries one entry per URL (1 for src~, N for srcset~).
+ *
+ * `attrLocation` is the attribute's pre-converted SourceLoc (from
+ * parse-tree.ts); `openLoc` is the open tag's, used as the error-location
+ * fallback when the attr has none.
  */
 export function validateStaticAssetAttr(
 	attrName: string,
 	value: string,
-	tag: { sourceCodeLocation?: unknown },
-	origAttrName: string,
+	attrLocation: SourceLoc | undefined,
+	openLoc: SourceLoc | undefined,
 	ctx: AssetAttrCtx,
 ): { refs: AssetRef[], originalValue: string, error?: BackflipError } {
 	const { html, lineMap, assetMap, assetDirs, filename } = ctx;
 	if (!assetMap) {
-		return { refs: [], originalValue: value, error: new BackflipError(`${attrName}~ used but no asset directories are configured`, attrErrorLoc(tag, origAttrName, filename)) };
+		return { refs: [], originalValue: value, error: new BackflipError(`${attrName}~ used but no asset directories are configured`, attrErrorLoc(attrLocation, openLoc, filename)) };
 	}
 	if (attrName === 'style') {
-		return { refs: [], originalValue: value, error: new BackflipError(`style~ is not supported`, attrErrorLoc(tag, origAttrName, filename)) };
+		return { refs: [], originalValue: value, error: new BackflipError(`style~ is not supported`, attrErrorLoc(attrLocation, openLoc, filename)) };
 	}
 
-	const attrLocation = attrLoc(tag, origAttrName);
 	let valueStartOffset = 0;
 	if (attrLocation) {
 		const attrText = html.substring(attrLocation.startOffset, attrLocation.endOffset);
@@ -138,7 +141,7 @@ export function validateStaticAssetAttr(
 		if (refLoc) {
 			return { filename, line: refLoc.startLine, col: refLoc.startCol, endLine: refLoc.endLine, endCol: refLoc.endCol };
 		}
-		return attrErrorLoc(tag, origAttrName, filename);
+		return attrErrorLoc(attrLocation, openLoc, filename);
 	}
 
 	if (attrName === 'srcset') {
@@ -147,7 +150,7 @@ export function validateStaticAssetAttr(
 		for (const { url, offset } of entries) {
 			const ref = createAssetRef(url, offset);
 			if (!ref) {
-				return { refs: [], originalValue: value, error: new BackflipError(`asset path must start with @name: "${url}"`, attrErrorLoc(tag, origAttrName, filename)) };
+				return { refs: [], originalValue: value, error: new BackflipError(`asset path must start with @name: "${url}"`, attrErrorLoc(attrLocation, openLoc, filename)) };
 			}
 			const errLoc = getErrLoc(ref.loc);
 			const err = validateAssetRef(ref, assetMap, assetDirs, errLoc);
@@ -160,7 +163,7 @@ export function validateStaticAssetAttr(
 	// Single URL attribute
 	const ref = createAssetRef(value, 0);
 	if (!ref) {
-		return { refs: [], originalValue: value, error: new BackflipError(`asset path must start with @name`, attrErrorLoc(tag, origAttrName, filename)) };
+		return { refs: [], originalValue: value, error: new BackflipError(`asset path must start with @name`, attrErrorLoc(attrLocation, openLoc, filename)) };
 	}
 	const errLoc = getErrLoc(ref.loc);
 	const err = validateAssetRef(ref, assetMap, assetDirs, errLoc);

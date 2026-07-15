@@ -4,13 +4,16 @@ The compiler takes HTML templates with `b-*` directive attributes and `{{ expres
 
 ## Components
 
-### Parser (`compiler.ts`)
+### Parser (`compiler.ts`, `parse-tree.ts`, `lower.ts`)
 
-The main compilation entry point. Uses `parse5`'s streaming HTML parser to handle real HTML (void elements, self-closing tags, etc.). As it walks the HTML, it recognizes `b-for`, `b-if`, `b-else-if`, `b-else`, `b-bind:`, `b-name`, `b-part`, `b-slot`, `b-in`, `b-data:`, and `b-unwrap` directives and builds tree nodes for each. Anything that isn't a directive is stored as a raw HTML string node.
+Compilation of one partial runs in two passes:
 
-Key function:
+1. **Parse (`parse-tree.ts`)** — `buildSourceTree()` consumes `parse5`'s SAX events (so real HTML — void elements, self-closing tags, etc. — is handled correctly) and builds a dumb, faithful source tree of elements and text with attributes, raw tag text, and source locations. It has no directive knowledge. This is also the single place where parse5 source locations are converted to `SourceLoc`.
+2. **Lower (`lower.ts`)** — `lowerSlice()` recursively transforms the source tree into the compiled TNode AST. All directive semantics live here: `b-for`, `b-if`, `b-else-if`, `b-else`, `b-bind:`, `b-name`, `b-part`, `b-slot`, `b-in`, `b-data:`, `b-unwrap`, and `{{ }}` interpolation. Anything that isn't a directive is stored as a raw HTML string node.
 
-- `compilePartial()` — compiles a single partial's HTML slice (paired with its `PartialDef`) into a `RootTNode`. The file-level pipeline lives in `partials.ts` (`scanPartials` → slice per def → `compilePartial`).
+`compiler.ts` is the thin public wrapper:
+
+- `compilePartial()` — compiles a single partial's HTML slice (paired with its `PartialDef`) into a `RootTNode` by running the two passes and validating the result against the `PartialDef`. The file-level pipeline lives in `partials.ts` (`scanPartials` → slice per def → `compilePartial`).
 
 ### TNode taxonomy (`types.ts`)
 

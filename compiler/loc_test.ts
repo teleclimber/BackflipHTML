@@ -56,21 +56,26 @@ Deno.test("errorLoc: builds a loc object, undefined when there's nothing to poin
 	assertEquals(errorLoc(undefined, { col: 2 }), undefined);
 });
 
+// Pre-converted SourceLocs, as parse-tree.ts hands them to lowering.
+const openLoc = tagSrcLoc(tagWithAttrs);
+const classLoc = attrLoc(tagWithAttrs, 'class');
+const bDataTitleLoc = attrLoc(tagWithAttrs, 'b-data:title');
+
 Deno.test("attrErrorLoc: uses the attr span when present", () => {
-	assertEquals(attrErrorLoc(tagWithAttrs, 'class', 'f.html'), {
+	assertEquals(attrErrorLoc(classLoc, openLoc, 'f.html'), {
 		filename: 'f.html', line: 2, col: 8, endLine: 2, endCol: 20,
 	});
 });
 
-Deno.test("attrErrorLoc: falls back to the tag location when the attr has none", () => {
-	assertEquals(attrErrorLoc(tagWithAttrs, 'id', 'f.html'), {
+Deno.test("attrErrorLoc: falls back to the open tag location when the attr has none", () => {
+	assertEquals(attrErrorLoc(undefined, openLoc, 'f.html'), {
 		filename: 'f.html', line: 2, col: 3,
 	});
 });
 
 Deno.test("bDataNameLoc: spans just the NAME after the b-data: prefix", () => {
 	// 'b-data:' is 7 chars; the name 'title' is 5 chars.
-	const loc = bDataNameLoc(tagWithAttrs, 'b-data:title', 'title')!;
+	const loc = bDataNameLoc(bDataTitleLoc, 'title')!;
 	assertEquals(loc.startCol, 22 + 7);
 	assertEquals(loc.startOffset, 39 + 7);
 	assertEquals(loc.endCol, 22 + 7 + 5);
@@ -103,10 +108,10 @@ Deno.test("LineMap: maps offsets to 1-based line/col", () => {
 
 Deno.test("dataLocAttr: emits data-loc only when enabled and inside a partial", () => {
 	assertEquals(
-		dataLocAttr(tagWithAttrs, { includeLocs: true, currentPartialName: 'card', filename: 'f.html' }),
+		dataLocAttr(openLoc, { includeLocs: true, currentPartialName: 'card', filename: 'f.html' }),
 		' data-loc="f.html#card:2:3"'
 	);
-	assertEquals(dataLocAttr(tagWithAttrs, { includeLocs: false, currentPartialName: 'card', filename: 'f.html' }), '');
-	assertEquals(dataLocAttr(tagWithAttrs, { includeLocs: true, currentPartialName: null, filename: 'f.html' }), '');
-	assertEquals(dataLocAttr({}, { includeLocs: true, currentPartialName: 'card', filename: 'f.html' }), '');
+	assertEquals(dataLocAttr(openLoc, { includeLocs: false, currentPartialName: 'card', filename: 'f.html' }), '');
+	assertEquals(dataLocAttr(openLoc, { includeLocs: true, currentPartialName: null, filename: 'f.html' }), '');
+	assertEquals(dataLocAttr(undefined, { includeLocs: true, currentPartialName: 'card', filename: 'f.html' }), '');
 });

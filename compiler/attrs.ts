@@ -1,7 +1,7 @@
 import { interpretBackcode } from './backcode.js';
 import type { Parsed } from './backcode.js';
 import { BackflipError } from './errors.js';
-import { attrLoc, attrErrorLoc } from './loc.js';
+import { attrErrorLoc } from './loc.js';
 import { validateStaticAssetAttr, type AssetAttrCtx } from './assets.js';
 import type { SourceLoc, AssetRef, AttrPart } from './types.js';
 
@@ -69,22 +69,25 @@ export type AttrSegment =
 	| { kind: 'bind', name: string, expr: Parsed, isBoolean: boolean, isAsset: boolean, loc: SourceLoc | undefined };
 
 /**
- * Walk a tag's attrs once, filtering b-name/b-export/etc. (`excludeAttrs`),
+ * Walk an element's attrs once, filtering b-name/b-export/etc. (`excludeAttrs`),
  * b-data:*, and b-attr:*, validating any static asset attrs, and emitting a
  * normalized AttrSegment stream. `hasBind` tells the caller whether the
  * output should be a Raw + AssetRef sequence (no binds) or a single
  * AttrBindTNode (binds present). Validation errors are returned as data
  * rather than thrown or mutated into a shared array.
+ *
+ * `el` is the SourceElement shape produced by parse-tree.ts (attrs with
+ * pre-converted locs, plus the open tag's loc for error fallbacks).
  */
 export function classifyOpenTagAttrs(
-	tag: { attrs: { name: string, value: string }[], sourceCodeLocation?: unknown },
+	el: { attrs: { name: string, value: string, loc?: SourceLoc }[], openLoc?: SourceLoc },
 	excludeAttrs: string[],
 	ctx: AssetAttrCtx,
 ): { segments: AttrSegment[], hasBind: boolean, errors: BackflipError[] } {
 	const segments: AttrSegment[] = [];
 	const errors: BackflipError[] = [];
 	let hasBind = false;
-	for (const attr of tag.attrs) {
+	for (const attr of el.attrs) {
 		if (excludeAttrs.includes(attr.name) || attr.name.startsWith('b-data:') || attr.name.startsWith('b-attr:') || attr.name === 'b-script') continue;
 		if (isBindAttr(attr.name)) {
 			let bindName = getBindAttrName(attr.name);
@@ -92,11 +95,11 @@ export function classifyOpenTagAttrs(
 			if (isAssetAttr(bindName)) {
 				bindName = stripAssetSuffix(bindName);
 				if (!ctx.assetMap) {
-					errors.push(new BackflipError(`${bindName}~ used but no asset directories are configured`, attrErrorLoc(tag, attr.name, ctx.filename)));
+					errors.push(new BackflipError(`${bindName}~ used but no asset directories are configured`, attrErrorLoc(attr.loc, el.openLoc, ctx.filename)));
 					continue;
 				}
 				if (bindName === 'style') {
-					errors.push(new BackflipError(`style~ is not supported`, attrErrorLoc(tag, attr.name, ctx.filename)));
+					errors.push(new BackflipError(`style~ is not supported`, attrErrorLoc(attr.loc, el.openLoc, ctx.filename)));
 					continue;
 				}
 				isAsset = true;
@@ -104,7 +107,7 @@ export function classifyOpenTagAttrs(
 			hasBind = true;
 			const expr = interpretBackcode(attr.value);
 			for (const err of expr.errs) {
-				errors.push(new BackflipError(err, attrErrorLoc(tag, attr.name, ctx.filename)));
+				errors.push(new BackflipError(err, attrErrorLoc(attr.loc, el.openLoc, ctx.filename)));
 			}
 			segments.push({
 				kind: 'bind',
@@ -112,18 +115,18 @@ export function classifyOpenTagAttrs(
 				expr,
 				isBoolean: BOOLEAN_ATTRS.has(bindName),
 				isAsset,
-				loc: attrLoc(tag, attr.name),
+				loc: attr.loc,
 			});
 		} else if (isAssetAttr(attr.name)) {
 			const realName = stripAssetSuffix(attr.name);
-			const { refs, originalValue, error } = validateStaticAssetAttr(realName, attr.value, tag, attr.name, ctx);
+			const { refs, originalValue, error } = validateStaticAssetAttr(realName, attr.value, attr.loc, el.openLoc, ctx);
 			if (error) { errors.push(error); continue; }
 			segments.push({
 				kind: 'asset',
 				attrName: realName,
 				originalValue,
 				refs,
-				loc: attrLoc(tag, attr.name),
+				loc: attr.loc,
 			});
 		} else {
 			segments.push({ kind: 'static', text: ` ${attr.name}="${attr.value}"` });

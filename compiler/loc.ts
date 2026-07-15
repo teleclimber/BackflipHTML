@@ -44,19 +44,24 @@ export function errorLoc(filename?: string, loc?: { line?: number, col?: number 
 	return { filename, line: loc?.line, col: loc?.col };
 }
 
-export function attrErrorLoc(tag: { sourceCodeLocation?: unknown }, attrName: string, filename?: string): { filename?: string, line?: number, col?: number, endLine?: number, endCol?: number } | undefined {
-	const a = attrLoc(tag, attrName);
+/**
+ * Error location for a diagnostic about one attribute: the attr's own span when
+ * the parser provided one, else the open tag's position. Both locations are
+ * pre-converted `SourceLoc`s (from parse-tree.ts) — this module no longer
+ * reaches into parse5 objects for error positions.
+ */
+export function attrErrorLoc(a: SourceLoc | undefined, openLoc: SourceLoc | undefined, filename?: string): { filename?: string, line?: number, col?: number, endLine?: number, endCol?: number } | undefined {
 	if (a) return { filename, line: a.startLine, col: a.startCol, endLine: a.endLine, endCol: a.endCol };
-	return errorLoc(filename, tagLoc(tag));
+	return errorLoc(filename, { line: openLoc?.startLine, col: openLoc?.startCol });
 }
 
 /**
  * Compute the source location of just the NAME portion of a `b-data:NAME` attribute,
  * starting after the `b-data:` prefix and ending at the close of the name. Returns
- * undefined when no parser-provided location is available.
+ * undefined when no parser-provided location is available. `a` is the location
+ * of the whole attribute.
  */
-export function bDataNameLoc(tag: { sourceCodeLocation?: unknown }, attrName: string, bindingName: string): SourceLoc | undefined {
-	const a = attrLoc(tag, attrName);
+export function bDataNameLoc(a: SourceLoc | undefined, bindingName: string): SourceLoc | undefined {
 	if (!a) return undefined;
 	const prefixLen = 'b-data:'.length;
 	return {
@@ -109,11 +114,10 @@ export class LineMap {
  * partial is currently being compiled, or when the parser didn't provide a location.
  */
 export function dataLocAttr(
-	tag: { sourceCodeLocation?: unknown },
+	loc: { startLine?: number; startCol?: number } | undefined,
 	ctx: { includeLocs: boolean; currentPartialName: string | null; filename?: string },
 ): string {
 	if (!ctx.includeLocs || !ctx.currentPartialName) return '';
-	const loc = tag.sourceCodeLocation as { startLine?: number; startCol?: number } | null | undefined;
 	if (!loc?.startLine) return '';
 	const file = ctx.filename ?? '';
 	return ` data-loc="${file}#${ctx.currentPartialName}:${loc.startLine}:${loc.startCol}"`;

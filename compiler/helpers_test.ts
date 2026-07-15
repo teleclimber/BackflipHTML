@@ -1,7 +1,9 @@
 import { assertEquals } from "jsr:@std/assert";
 
-import type { RootTNode, RawTNode } from "./types.ts";
-import { isCustomElementTagName, onText, parseBPartValue, pushRaw } from "./helpers.ts";
+import type { RawTNode, TNode, PartialDef } from "./types.ts";
+import type { SourceNode, SourceText } from "./parse-tree.ts";
+import { isCustomElementTagName, parseBPartValue } from "./helpers.ts";
+import { lowerSlice } from "./lower.ts";
 import { interpretBackcode } from "./backcode.ts";
 
 // ---- isCustomElementTagName unit tests ----
@@ -65,133 +67,76 @@ Deno.test("parseBPartValue: empty string", () => {
 	assertEquals(parseBPartValue(''), { partialName: '', file: null });
 });
 
-// ---- pushRaw unit tests ----
+// ---- text lowering ({{ }} splitting) unit tests ----
+// Ported from the old onText / pushRaw unit tests. The old tests seeded a
+// container with an empty RawTNode and called onText against it; lowering text
+// into a b-unwrap partial root does exactly that (the "seed" anchor), so these
+// drive lowerSlice with a hand-built source tree containing one text node.
 
-Deno.test("pushRaw: appends to existing raw node", () => {
-	const root :RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
-	const child_node :RawTNode = { type: 'raw', raw: 'hello' };
-	root.tnodes.push(child_node);
+function lowerTextRuns(...raws: string[]): TNode[] {
+	const children: SourceText[] = raws.map(raw => ({ kind: 'text', raw }));
+	const nodes: SourceNode[] = [{
+		kind: 'element',
+		tagName: 'b-unwrap',
+		attrs: [{ name: 'b-name', value: 't' }],
+		selfClosing: false,
+		isVoid: false,
+		rawOpenTag: '<b-unwrap b-name="t">',
+		rawCloseTag: '</b-unwrap>',
+		children,
+	}];
+	const def: PartialDef = { name: 't', exported: false, customElement: false, loc: { filename: 'test.html', from: 1, to: 1 } };
+	const { compiledFile } = lowerSlice(nodes, def, undefined, raws.join(''));
+	return compiledFile.partials.get('t')!.tnodes;
+}
 
-	const ret_node = pushRaw(root.tnodes[0], root, "world");
-	const ret_raw = ret_node.type === 'raw' ? ret_node.raw : '';
-	assertEquals(ret_raw, 'helloworld');
+Deno.test("lowerText: plain text appended to the seeded raw node", () => {
+	assertEquals(lowerTextRuns('world'), [{ type: 'raw', raw: 'world' }]);
 });
 
-// ---- onText unit tests ----
-
-Deno.test("onText: plain text appended to raw node", () => {
-	const root :RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
-	const child_node :RawTNode = { type: 'raw', raw: '' };
-	root.tnodes.push(child_node);
-
-	onText(root.tnodes![0], root,'world');
-
-	assertEquals(root, {
-		type: 'root',
-		kind: 'named',
-		tnodes: [{
-			type: 'raw',
-			raw: 'world'		}]
-	});
+Deno.test("lowerText: adjacent text runs coalesce into one raw node", () => {
+	assertEquals(lowerTextRuns('hello', 'world'), [{ type: 'raw', raw: 'helloworld' }]);
 });
 
-Deno.test("onText: single interpolation", () => {
-	const root :RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
-	const child_node :RawTNode = { type: 'raw', raw: '' };
-	root.tnodes.push(child_node);
-
-	onText(root.tnodes![0], root,'{{ g }}');
-
-	assertEquals(root, {
-		type: 'root',
-		kind: 'named',
-		tnodes: [{
-			type: 'raw',
-			raw: ''		}, {
-			type: 'print',
-			data: interpretBackcode('g')		}]
-	});
+Deno.test("lowerText: single interpolation (seed raw stays)", () => {
+	assertEquals(lowerTextRuns('{{ g }}'), [
+		{ type: 'raw', raw: '' },
+		{ type: 'print', data: interpretBackcode('g') },
+	]);
 });
 
-Deno.test("onText: text before interpolation", () => {
-	const root :RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
-	const child_node :RawTNode = { type: 'raw', raw: '' };
-	root.tnodes.push(child_node);
-
-	onText(root.tnodes![0], root,'hello {{ g }}');
-
-	assertEquals(root, {
-		type: 'root',
-		kind: 'named',
-		tnodes: [{
-			type: 'raw',
-			raw: 'hello '		}, {
-			type: 'print',
-			data: interpretBackcode('g')		}]
-	});
+Deno.test("lowerText: text before interpolation", () => {
+	assertEquals(lowerTextRuns('hello {{ g }}'), [
+		{ type: 'raw', raw: 'hello ' },
+		{ type: 'print', data: interpretBackcode('g') },
+	]);
 });
 
-Deno.test("onText: text around interpolation", () => {
-	const root :RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
-	const child_node :RawTNode = { type: 'raw', raw: '' };
-	root.tnodes.push(child_node);
-
-	onText(root.tnodes![0], root,'hello {{ g }} world');
-
-	assertEquals(root, {
-		type: 'root',
-		kind: 'named',
-		tnodes: [{
-			type: 'raw',
-			raw: 'hello '		}, {
-			type: 'print',
-			data: interpretBackcode('g')		}, {
-			type: 'raw',
-			raw: ' world'		}]
-	});
+Deno.test("lowerText: text around interpolation", () => {
+	assertEquals(lowerTextRuns('hello {{ g }} world'), [
+		{ type: 'raw', raw: 'hello ' },
+		{ type: 'print', data: interpretBackcode('g') },
+		{ type: 'raw', raw: ' world' },
+	]);
 });
 
-Deno.test("onText: two interpolations with surrounding text", () => {
-	const root :RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
-	const child_node :RawTNode = { type: 'raw', raw: '' };
-	root.tnodes.push(child_node);
-
-	onText(root.tnodes![0], root,'hello {{ g }}{{ k }} world');
-
-	assertEquals(root, {
-		type: 'root',
-		kind: 'named',
-		tnodes: [{
-			type: 'raw',
-			raw: 'hello '		}, {
-			type: 'print',
-			data: interpretBackcode('g')		}, {
-			type: 'print',
-			data: interpretBackcode('k')		}, {
-			type: 'raw',
-			raw: ' world'		}]
-	});
+Deno.test("lowerText: two interpolations with surrounding text", () => {
+	assertEquals(lowerTextRuns('hello {{ g }}{{ k }} world'), [
+		{ type: 'raw', raw: 'hello ' },
+		{ type: 'print', data: interpretBackcode('g') },
+		{ type: 'print', data: interpretBackcode('k') },
+		{ type: 'raw', raw: ' world' },
+	]);
 });
 
-Deno.test("onText: parentheses in expression", () => {
-	const root :RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
-	const child_node :RawTNode = { type: 'raw', raw: '' };
-	root.tnodes.push(child_node);
-
-	onText(root.tnodes![0], root,'{{ func() }}');
-
-	assertEquals(root.tnodes.length, 2);
-	assertEquals(root.tnodes[1].type, 'print');
+Deno.test("lowerText: parentheses in expression still produce a print node", () => {
+	const tnodes = lowerTextRuns('{{ func() }}');
+	assertEquals(tnodes.length, 2);
+	assertEquals(tnodes[1].type, 'print');
 });
 
-Deno.test("onText: empty braces skipped", () => {
-	const root :RootTNode = { type: 'root', kind: 'named' as const, tnodes: [] };
-	const child_node :RawTNode = { type: 'raw', raw: '' };
-	root.tnodes.push(child_node);
-
-	onText(root.tnodes![0], root,'before{{  }}after');
-
-	// Should skip the empty expression, treating it as raw text
-	assertEquals(root.tnodes.length, 1);
-	assertEquals((root.tnodes[0] as RawTNode).raw, 'before{{  }}after');
+Deno.test("lowerText: empty braces skipped, treated as raw text", () => {
+	const tnodes = lowerTextRuns('before{{  }}after');
+	assertEquals(tnodes.length, 1);
+	assertEquals((tnodes[0] as RawTNode).raw, 'before{{  }}after');
 });
