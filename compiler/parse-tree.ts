@@ -4,7 +4,7 @@ import stream from 'node:stream';
 import { BackflipError } from './errors.js';
 import { attrLoc, tagLoc, tagSrcLoc, errorLoc } from './loc.js';
 import { VOID_ELEMENTS } from './helpers.js';
-import type { SourceLoc } from './types.js';
+import type { LocBase, SourceLoc } from './types.js';
 
 /**
  * Pass A of the compiler: build a dumb, faithful source tree from an HTML
@@ -13,7 +13,9 @@ import type { SourceLoc } from './types.js';
  *
  * This is also the single point where parse5 `sourceCodeLocation` objects are
  * converted to our `SourceLoc` (via the loc.ts converters). Everything
- * downstream consumes `SourceLoc` only.
+ * downstream consumes `SourceLoc` only. When a `locBase` is supplied (see
+ * `LocBase` in types.ts), it is added here, as each loc is converted — so
+ * every location leaving this module already carries the base exactly once.
  */
 
 export interface SourceAttr {
@@ -95,8 +97,22 @@ export type SourceNode = SourceElement | SourceText;
  * tree builder treats all self-closing tags uniformly (no children), so the
  * cascade is gone; lowering still records the named slot.
  */
-export function buildSourceTree(html: string, filename?: string): Promise<{ nodes: SourceNode[], errors: BackflipError[] }> {
+export function buildSourceTree(html: string, filename?: string, locBase?: LocBase): Promise<{ nodes: SourceNode[], errors: BackflipError[] }> {
 	return new Promise((resolve, reject) => {
+		const base: LocBase = locBase ?? { line: 0, offset: 0 };
+		// Rebase a freshly converted SourceLoc by the caller-supplied base
+		// (slice-relative → file-relative). Columns are never shifted: slices
+		// are complete lines, so columns are already file-correct.
+		const rebase = (loc: SourceLoc): SourceLoc => ({
+			...loc,
+			startLine: loc.startLine + base.line,
+			endLine: loc.endLine + base.line,
+			startOffset: loc.startOffset + base.offset,
+			endOffset: loc.endOffset + base.offset,
+		});
+		const rebaseLineCol = (lc: { line?: number, col?: number }): { line?: number, col?: number } =>
+			lc.line == null ? lc : { line: lc.line + base.line, col: lc.col };
+
 		const nodes: SourceNode[] = [];
 		const errors: BackflipError[] = [];
 		const stack: SourceElement[] = [];
@@ -115,7 +131,7 @@ export function buildSourceTree(html: string, filename?: string): Promise<{ node
 				attrs: tag.attrs.map((a) => {
 					const attr: SourceAttr = { name: a.name, value: a.value };
 					const loc = attrLoc(tag, a.name);
-					if (loc) attr.loc = loc;
+					if (loc) attr.loc = rebase(loc);
 					return attr;
 				}),
 				selfClosing: !!tag.selfClosing,
@@ -126,7 +142,7 @@ export function buildSourceTree(html: string, filename?: string): Promise<{ node
 			// fallbackLen = raw.length only matters if the parser ever omitted
 			// endOffset; RewritingStream always supplies full locations.
 			const openLoc = tagSrcLoc(tag, raw.length);
-			if (openLoc) el.openLoc = openLoc;
+			if (openLoc) el.openLoc = rebase(openLoc);
 			container().push(el);
 			if (!el.selfClosing && !el.isVoid) stack.push(el);
 		} catch (e) { reject(e); } });
@@ -136,7 +152,7 @@ export function buildSourceTree(html: string, filename?: string): Promise<{ node
 			if (!open) {
 				container().push({
 					kind: 'text', raw, verbatim: true,
-					error: new BackflipError("popped the last tagMatcher prematurely", errorLoc(filename, tagLoc(tag))),
+					error: new BackflipError("popped the last tagMatcher prematurely", errorLoc(filename, rebaseLineCol(tagLoc(tag)))),
 				});
 				return;
 			}
@@ -146,19 +162,19 @@ export function buildSourceTree(html: string, filename?: string): Promise<{ node
 				stack.push(open);
 				container().push({
 					kind: 'text', raw, verbatim: true,
-					error: new BackflipError(`mismatched start/end tags: ${open.tagName} ${tag.tagName}`, errorLoc(filename, tagLoc(tag))),
+					error: new BackflipError(`mismatched start/end tags: ${open.tagName} ${tag.tagName}`, errorLoc(filename, rebaseLineCol(tagLoc(tag)))),
 				});
 				return;
 			}
 			open.rawCloseTag = raw;
 			const closeLoc = tagSrcLoc(tag);
-			if (closeLoc) open.closeLoc = closeLoc;
+			if (closeLoc) open.closeLoc = rebase(closeLoc);
 		} catch (e) { reject(e); } });
 
 		rewriteStream.on('text', (textToken, raw) => { try {
 			const node: SourceText = { kind: 'text', raw };
 			const loc = textToken.sourceCodeLocation;
-			if (loc) node.loc = { startLine: loc.startLine, startCol: loc.startCol, startOffset: loc.startOffset };
+			if (loc) node.loc = { startLine: loc.startLine + base.line, startCol: loc.startCol, startOffset: loc.startOffset + base.offset };
 			// NOTE: adjacent text tokens are deliberately NOT merged. The old
 			// compiler ran `{{ }}` splitting per text event, so an interpolation
 			// split across two tokens never matched; merging here would change that.

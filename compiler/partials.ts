@@ -59,6 +59,9 @@ async function collectHtmlFiles(dir: string, base: string = dir): Promise<string
  * Uses parse5's streaming SAX rewriter so comments, doctype, quoted attribute values,
  * and self-closing/void tags are handled correctly. `sourceCodeLocationInfo` is always
  * enabled on RewritingStream, so the line/col are taken from the parser.
+ *
+ * Coordinate space: this scan runs over FULL file contents (not slices), so all
+ * sourceCodeLocation reads here are file-relative already — no locBase applies.
  */
 export function scanPartials(html: string, filename: string): Promise<{ defs: PartialDef[], errors: BackflipError[] }> {
     return new Promise((resolve, reject) => {
@@ -474,14 +477,18 @@ export function validateCustomElementUniqueness(
  * Slice complete lines [from..to] (1-based, inclusive) from `html`. Used to
  * extract a single partial's source for compilePartial. The returned slice
  * preserves trailing newlines so parse5's line tracking inside the slice lines
- * up cleanly.
+ * up cleanly. `startOffset` is the char offset of the slice's first character
+ * in `html` (the sum of the lengths + newlines of the lines before `from`),
+ * used as the offset part of the compile `locBase`.
  */
-function sliceLines(html: string, from: number, to: number): string {
+function sliceLines(html: string, from: number, to: number): { slice: string, startOffset: number } {
     const lines = html.split('\n');
     // Clamp to valid range (defensive — scanPartials should produce in-range loc).
     const lo = Math.max(1, from) - 1;
     const hi = Math.min(lines.length, to);
-    return lines.slice(lo, hi).join('\n');
+    let startOffset = 0;
+    for (let i = 0; i < lo; i++) startOffset += lines[i].length + 1; // +1 for the '\n'
+    return { slice: lines.slice(lo, hi).join('\n'), startOffset };
 }
 
 /**
@@ -490,9 +497,9 @@ function sliceLines(html: string, from: number, to: number): string {
  * Pass 1: Build the PartialRegistry by scanning all .html files for b-export attributes.
  * Cycle check: Build dependency graph and detect circular cross-file references.
  * Pass 2: For each file, slice each partial out by line range and compile it
- *         independently via compilePartial. Locs in the resulting trees and
- *         errors stay slice-relative; consumers translate via PartialDef when
- *         they need file-relative coordinates.
+ *         independently via compilePartial, passing a `locBase` for the slice's
+ *         position. All coordinates in the resulting trees, errors, root.meta,
+ *         and data-loc strings are file-relative.
  */
 export async function compileDirectory(dir: string, options?: CompileOptions): Promise<{ directory: CompiledDirectory, errors: BackflipError[] }> {
     const allErrors: BackflipError[] = [];
@@ -538,11 +545,14 @@ export async function compileDirectory(dir: string, options?: CompileOptions): P
             const defs = registry.get(relPath) ?? [];
             const compiledFile: CompiledFile = { partials: new Map() };
 
-            // Compile all partials in this file in parallel.
+            // Compile all partials in this file in parallel. Each compile gets a
+            // locBase for its slice's position so every emitted location is
+            // file-relative.
             const results = await Promise.all(defs.map(async (def) => {
-                const slice = sliceLines(html, def.loc.from, def.loc.to);
+                const { slice, startOffset } = sliceLines(html, def.loc.from, def.loc.to);
+                const perPartialOptions: CompileOptions = { ...options, locBase: { line: def.loc.from - 1, offset: startOffset } };
                 try {
-                    return { def, ...(await compilePartial(slice, def, options)) };
+                    return { def, ...(await compilePartial(slice, def, perPartialOptions)) };
                 } catch (e) {
                     // compilePartial only rejects on internal precondition violations
                     // (slice/PartialDef mismatch). Surface as an error and skip the partial.

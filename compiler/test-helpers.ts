@@ -7,10 +7,10 @@
 import type {
 	TNode, RawTNode, ElementTNode, ForTNode, IfTNode,
 	CompiledFile, CompileOptions, PartialDef,
-} from "./types.ts";
-import { compilePartial } from "./compiler.ts";
-import { flattenStatics } from "./flatten.ts";
-import type { BackflipError } from "./errors.ts";
+} from "./types.js";
+import { compilePartial } from "./compiler.js";
+import { flattenStatics } from "./flatten.js";
+import type { BackflipError } from "./errors.js";
 
 /**
  * Serialize a TNode subtree back to its expected rendered HTML for *static* content

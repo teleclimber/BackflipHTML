@@ -16,7 +16,7 @@ import type { SourceNode, SourceElement, SourceText, SourceAttr, TextLoc } from 
 import type {
 	SourceLoc, TNode, RawTNode, PrintTNode, ForTNode, IfTNode, IfBranch,
 	SlotTNode, PartialRefTNode, BPartCallTNode, CustomElementCallTNode, ParentTNode,
-	RootTNode, NamedPartialRoot, CustomElementPartialRoot, CompiledFile, CompileOptions, PartialDef, PartialBinding,
+	RootTNode, NamedPartialRoot, CustomElementPartialRoot, CompiledFile, CompileOptions, LocBase, PartialDef, PartialBinding,
 	ElementTNode, AttrPart,
 } from './types.js';
 
@@ -53,6 +53,10 @@ interface Ctx {
 	filename?: string;
 	html: string;
 	includeLocs: boolean;
+	// Rebase applied to all locs by buildSourceTree. Needed here (and in
+	// assets.ts) to translate already-rebased offsets back into `html` (the
+	// slice text) for substring arithmetic.
+	locBase: LocBase;
 	assetCtx: AssetAttrCtx;
 	errors: BackflipError[];
 	compiledFile: CompiledFile;
@@ -91,11 +95,13 @@ export function lowerSlice(
 	html: string,
 ): { compiledFile: CompiledFile, errors: BackflipError[] } {
 	const filename = partialDef.loc.filename;
+	const locBase: LocBase = options?.locBase ?? { line: 0, offset: 0 };
 	const ctx: Ctx = {
 		filename,
 		html,
 		includeLocs: options?.includeLocs ?? false,
-		assetCtx: { html, lineMap: new LineMap(html), assetMap: options?.assetMap, assetDirs: options?.assetDirs, filename },
+		locBase,
+		assetCtx: { html, lineMap: new LineMap(html), locBase, assetMap: options?.assetMap, assetDirs: options?.assetDirs, filename },
 		errors: [],
 		compiledFile: { partials: new Map() },
 	};
@@ -639,9 +645,11 @@ function lowerCustomElementDefinition(el: SourceElement, st: St, sc: SlotCollect
 		// HTML lowercases attribute names, so a b-attr name written with
 		// uppercase letters won't match when referenced inside the partial body.
 		// Recover the original-case name from the source via the parser's
-		// attribute offset (lowercasing preserves length).
+		// attribute offset (lowercasing preserves length). attr.loc offsets are
+		// rebased (file-relative); subtract the base to index into the slice.
 		if (attr.loc) {
-			const rawAttrName = ctx.html.slice(attr.loc.startOffset, attr.loc.startOffset + attr.name.length);
+			const sliceStart = attr.loc.startOffset - ctx.locBase.offset;
+			const rawAttrName = ctx.html.slice(sliceStart, sliceStart + attr.name.length);
 			const afterPrefix = rawAttrName.slice('b-attr:'.length);
 			const dotIdx = afterPrefix.indexOf('.');
 			const namePart = dotIdx === -1 ? afterPrefix : afterPrefix.slice(0, dotIdx);

@@ -13,9 +13,10 @@ export { BackflipError };
  * `partialDef` (name + customElement flag); a mismatch rejects the promise.
  *
  * All `SourceLoc` values in the returned tree, all error locations, and any
- * `data-loc` strings baked into raw HTML are SLICE-RELATIVE. Callers translate
- * to file coordinates by adding `partialDef.loc.from - 1` to line numbers when
- * needed.
+ * `data-loc` strings baked into raw HTML are slice-relative by default. When
+ * `options.locBase` is supplied (see `LocBase` in types.ts), every location is
+ * rebased by it at the loc-conversion point, making them file-relative.
+ * `compileDirectory` always supplies it.
  *
  * Two passes: `buildSourceTree` (parse-tree.ts) turns the slice into a
  * faithful source tree with no directive knowledge; `lowerSlice` (lower.ts)
@@ -23,7 +24,7 @@ export { BackflipError };
  */
 export async function compilePartial(htmlSlice: string, partialDef: PartialDef, options?: CompileOptions): Promise<{ compiled: RootTNode, errors: BackflipError[] }> {
 	const filename = partialDef.loc.filename;
-	const { nodes } = await buildSourceTree(htmlSlice, filename);
+	const { nodes } = await buildSourceTree(htmlSlice, filename, options?.locBase);
 	const { compiledFile, errors } = lowerSlice(nodes, partialDef, options, htmlSlice);
 
 	// Validate that the slice produced exactly one partial matching partialDef.

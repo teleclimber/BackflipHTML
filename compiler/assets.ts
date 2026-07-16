@@ -9,6 +9,7 @@ import type {
 	RootTNode,
 	CustomElementPartialRoot,
 	CompiledFile,
+	LocBase,
 } from './types.js';
 
 // --- asset helpers ---
@@ -65,8 +66,12 @@ export function parseSrcsetEntriesWithOffsets(value: string): { url: string, off
 }
 
 export interface AssetAttrCtx {
-	html: string;
-	lineMap: LineMap;
+	html: string;      // the partial's slice text
+	lineMap: LineMap;  // over `html`, so slice-relative
+	// Rebase buildSourceTree applied to all locs (see LocBase in types.ts).
+	// Incoming attr/tag locs already carry it; locs computed here from `html`
+	// and `lineMap` are slice-relative and must add it before being emitted.
+	locBase: LocBase;
 	assetMap?: Map<string, string>;
 	assetDirs?: Map<string, string>;
 	filename?: string;
@@ -88,7 +93,7 @@ export function validateStaticAssetAttr(
 	openLoc: SourceLoc | undefined,
 	ctx: AssetAttrCtx,
 ): { refs: AssetRef[], originalValue: string, error?: BackflipError } {
-	const { html, lineMap, assetMap, assetDirs, filename } = ctx;
+	const { html, lineMap, locBase, assetMap, assetDirs, filename } = ctx;
 	if (!assetMap) {
 		return { refs: [], originalValue: value, error: new BackflipError(`${attrName}~ used but no asset directories are configured`, attrErrorLoc(attrLocation, openLoc, filename)) };
 	}
@@ -96,14 +101,18 @@ export function validateStaticAssetAttr(
 		return { refs: [], originalValue: value, error: new BackflipError(`style~ is not supported`, attrErrorLoc(attrLocation, openLoc, filename)) };
 	}
 
+	// Slice-relative offset of the attr value inside `html`. attrLocation is
+	// already rebased (file-relative), so the base is subtracted for the
+	// substring arithmetic and added back when locs are emitted below.
 	let valueStartOffset = 0;
 	if (attrLocation) {
-		const attrText = html.substring(attrLocation.startOffset, attrLocation.endOffset);
+		const attrStart = attrLocation.startOffset - locBase.offset;
+		const attrText = html.substring(attrStart, attrLocation.endOffset - locBase.offset);
 		const relativeValueOffset = attrText.indexOf(value);
 		if (relativeValueOffset !== -1) {
-			valueStartOffset = attrLocation.startOffset + relativeValueOffset;
+			valueStartOffset = attrStart + relativeValueOffset;
 		} else {
-			valueStartOffset = attrLocation.startOffset; // fallback
+			valueStartOffset = attrStart; // fallback
 		}
 	}
 
@@ -118,20 +127,21 @@ export function validateStaticAssetAttr(
 		const ref: AssetRef = { name, subpath };
 
 		if (attrLocation && valueStartOffset > 0) {
+			// Slice-relative offsets into html/lineMap; rebased on emit.
 			const absStart = valueStartOffset + localOffset;
 			const absEnd = absStart + val.length;
 			const startLoc = lineMap.getLoc(absStart);
 			const endLoc = lineMap.getLoc(absEnd);
 			ref.loc = {
-				startLine: startLoc.line, startCol: startLoc.col, startOffset: absStart,
-				endLine: endLoc.line, endCol: endLoc.col, endOffset: absEnd
+				startLine: startLoc.line + locBase.line, startCol: startLoc.col, startOffset: absStart + locBase.offset,
+				endLine: endLoc.line + locBase.line, endCol: endLoc.col, endOffset: absEnd + locBase.offset
 			};
 
 			const subpathAbsStart = absStart + slashIdx + 1;
 			const subpathStartLoc = lineMap.getLoc(subpathAbsStart);
 			ref.subpathLoc = {
-				startLine: subpathStartLoc.line, startCol: subpathStartLoc.col, startOffset: subpathAbsStart,
-				endLine: endLoc.line, endCol: endLoc.col, endOffset: absEnd
+				startLine: subpathStartLoc.line + locBase.line, startCol: subpathStartLoc.col, startOffset: subpathAbsStart + locBase.offset,
+				endLine: endLoc.line + locBase.line, endCol: endLoc.col, endOffset: absEnd + locBase.offset
 			};
 		}
 		return ref;

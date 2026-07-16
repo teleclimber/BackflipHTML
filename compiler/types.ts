@@ -172,8 +172,19 @@ export interface AssetRef {
 	subpathLoc?: SourceLoc; // location of the subpath part
 }
 
+/**
+ * Rebase deltas applied to every location the compiler emits, translating
+ * slice-relative coordinates to file-relative ones. Columns are NOT shifted:
+ * slices are complete lines, so column values are already file-correct.
+ */
+export interface LocBase {
+	line: number;    // 0-based delta added to every startLine/endLine (def.loc.from - 1)
+	offset: number;  // char delta added to every startOffset/endOffset
+}
+
 export interface CompileOptions {
 	includeLocs?: boolean;
+	locBase?: LocBase;                 // absent = {line: 0, offset: 0}: locations stay slice-relative
 	assetMap?: Map<string, string>;    // @name -> replacement prefix
 	assetDirs?: Map<string, string>;   // @name -> absolute dir path (for file existence checks)
 }

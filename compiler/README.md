@@ -13,7 +13,7 @@ Compilation of one partial runs in two passes:
 
 `compiler.ts` is the thin public wrapper:
 
-- `compilePartial()` — compiles a single partial's HTML slice (paired with its `PartialDef`) into a `RootTNode` by running the two passes and validating the result against the `PartialDef`. The file-level pipeline lives in `partials.ts` (`scanPartials` → slice per def → `compilePartial`).
+- `compilePartial()` — compiles a single partial's HTML slice (paired with its `PartialDef`) into a `RootTNode` by running the two passes and validating the result against the `PartialDef`. Source locations in its output are slice-relative by default; passing `CompileOptions.locBase` rebases them (applied once, at loc conversion in `parse-tree.ts`). The file-level pipeline lives in `partials.ts` (`scanPartials` → slice per def → `compilePartial` with a `locBase` for each slice), so everything `compileDirectory` returns — errors, AST `SourceLoc`s, `root.meta`, `data-loc` strings — is file-relative.
 
 ### TNode taxonomy (`types.ts`)
 

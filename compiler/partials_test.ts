@@ -6,7 +6,8 @@ import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { compileDirectory, scanPartials, validateCustomElementUniqueness } from './partials.ts';
-import type { PartialRegistry, PartialRefTNode, TNode } from './types.ts';
+import type { ElementTNode, PartialRegistry, PartialRefTNode, PrintTNode, TNode } from './types.ts';
+import { findElement } from './test-helpers.ts';
 
 // Use /tmp/claude-1000/ as the writable temp dir in this sandbox environment.
 // Deno.env.get('TMPDIR') may point to a read-only path; /tmp/claude-1000/ is always writable.
@@ -1388,10 +1389,10 @@ Deno.test("compileDirectory - b-data:NAME unknown to same-file b-name partial is
     assertStringIncludes(fatal[0].message, 'variable bogus is unused');
     assertStringIncludes(fatal[0].message, '<card>');
     // The error span should cover only the NAME portion of `b-data:bogus`, not the whole tag.
-    // Locs are slice-relative: the `page` partial starts on file line 2, so within its slice
-    // the b-data attr is on line 1 of the slice. Columns are unchanged by slicing.
+    // Locs are file-relative: the `page` partial starts on file line 2, so the b-data attr
+    // is on file line 2. Columns are unchanged by slicing.
     const err = fatal[0];
-    assertEquals(err.line, 1);
+    assertEquals(err.line, 2);
     const lines = content.split('\n');
     const bogusCol = lines[1].indexOf('b-data:bogus') + 'b-data:'.length + 1; // 1-based
     assertEquals(err.col, bogusCol);
@@ -1513,4 +1514,148 @@ Deno.test("compileDirectory - b-data:NAME on unresolved custom element does not 
     const { errors } = await compileDirectory(dir);
     const fatal = errors.filter(e => e.severity !== 'warning');
     assertEquals(fatal.length, 0, `unexpected fatals: ${JSON.stringify(fatal.map(e => e.message))}`);
+});
+
+// --- file-relative source locations (phase 7.3) ---
+//
+// compileDirectory compiles each partial from a line-sliced chunk of its file;
+// every location it emits (errors, AST SourceLocs, root.meta, data-loc strings)
+// must be FILE-relative, not slice-relative. These tests pin that for a partial
+// that does NOT start on line 1.
+
+// Fixture built line-by-line so expected offsets can be computed from the
+// string instead of hand-counted.
+const LOC_FIXTURE_LINES = [
+    '<div b-name="first">',              // line 1
+    '  <p>hello</p>',                    // line 2
+    '</div>',                            // line 3
+    '<div b-name="second" class="x">',   // line 4  (second partial starts here)
+    '  <span>hi</span>',                 // line 5
+    '  {{ msg }}',                       // line 6
+    '  <p b-if="">bad</p>',              // line 7  (compile error)
+    '  <img src~="@bogus/x.png">',       // line 8  (unknown asset directory)
+    '</div>',                            // line 9
+];
+const LOC_FIXTURE = LOC_FIXTURE_LINES.join('\n');
+
+function findPrint(tnodes: TNode[]): PrintTNode | undefined {
+    for (const n of tnodes) {
+        if (n.type === 'print') return n as PrintTNode;
+        if (n.type === 'element') {
+            const found = findPrint((n as ElementTNode).tnodes);
+            if (found) return found;
+        }
+    }
+    return undefined;
+}
+
+function collectStaticAttrRaws(tnodes: TNode[], out: string[] = []): string[] {
+    for (const n of tnodes) {
+        if (n.type === 'element') {
+            for (const a of (n as ElementTNode).attrs) {
+                if (a.type === 'static') out.push(a.raw);
+            }
+            collectStaticAttrRaws((n as ElementTNode).tnodes, out);
+        } else if (n.type === 'if') {
+            for (const b of n.branches) collectStaticAttrRaws(b.tnodes, out);
+        } else if (n.type === 'for') {
+            collectStaticAttrRaws(n.tnodes, out);
+        }
+    }
+    return out;
+}
+
+async function compileLocFixture() {
+    const dir = await makeTempDir("filerel_locs");
+    await writeFile(path.join(dir, "page.html"), LOC_FIXTURE);
+    return await compileDirectory(dir, {
+        includeLocs: true,
+        assetMap: new Map([["images", "/img/"]]),
+    });
+}
+
+Deno.test("compileDirectory - error locations in a second partial are file-relative", async () => {
+    const { errors } = await compileLocFixture();
+
+    const bIfErr = errors.find(e => e.message.includes('body has no statements'));
+    if (!bIfErr) throw new Error(`b-if error not reported: ${JSON.stringify(errors.map(e => e.message))}`);
+    assertEquals(bIfErr.line, 7);
+    assertEquals(bIfErr.col, LOC_FIXTURE_LINES[6].indexOf('b-if') + 1);
+
+    const assetErr = errors.find(e => e.message.includes('unknown asset directory'));
+    if (!assetErr) throw new Error(`asset error not reported: ${JSON.stringify(errors.map(e => e.message))}`);
+    assertEquals(assetErr.line, 8);
+    assertEquals(assetErr.col, LOC_FIXTURE_LINES[7].indexOf('@bogus') + 1);
+});
+
+Deno.test("compileDirectory - root.loc and root.meta of a second partial are file-relative", async () => {
+    const { directory } = await compileLocFixture();
+    const root = directory.files.get("page.html")!.partials.get("second")!;
+
+    // root.loc for a b-name partial is the b-name attribute's loc.
+    assertEquals(root.loc?.startLine, 4);
+    assertEquals(root.loc?.startOffset, LOC_FIXTURE.indexOf('b-name="second"'));
+
+    assertEquals(root.meta?.startLine, 4);
+    assertEquals(root.meta?.startOffset, LOC_FIXTURE.indexOf('<div b-name="second"'));
+    // The partial's close tag is the last </div> in the file.
+    assertEquals(root.meta?.endOffset, LOC_FIXTURE.lastIndexOf('</div>') + '</div>'.length);
+});
+
+Deno.test("compileDirectory - element and print locs in a second partial are file-relative", async () => {
+    const { directory } = await compileLocFixture();
+    const root = directory.files.get("page.html")!.partials.get("second")!;
+
+    const span = findElement(root.tnodes, 'span');
+    if (!span) throw new Error("span element not found in second partial");
+    assertEquals(span.loc?.startLine, 5);
+    assertEquals(span.loc?.startOffset, LOC_FIXTURE.indexOf('<span>'));
+    assertEquals(span.loc?.endOffset, LOC_FIXTURE.indexOf('</span>') + '</span>'.length);
+
+    const print = findPrint(root.tnodes);
+    if (!print) throw new Error("print node not found in second partial");
+    assertEquals(print.loc?.startLine, 6);
+    assertEquals(print.loc?.startOffset, LOC_FIXTURE.indexOf('{{ msg }}'));
+});
+
+Deno.test("compileDirectory - asset ref locs in a second partial are file-relative", async () => {
+    const lines = [
+        '<div b-name="first">x</div>',       // line 1
+        '<div b-name="second">',             // line 2
+        '  <img src~="@images/ok.png">',     // line 3
+        '</div>',                            // line 4
+    ];
+    const html = lines.join('\n');
+    const dir = await makeTempDir("filerel_assetref");
+    await writeFile(path.join(dir, "page.html"), html);
+    const { directory, errors } = await compileDirectory(dir, { assetMap: new Map([["images", "/img/"]]) });
+    assertEquals(errors.length, 0, `unexpected errors: ${JSON.stringify(errors.map(e => e.message))}`);
+
+    const root = directory.files.get("page.html")!.partials.get("second")!;
+    const img = findElement(root.tnodes, 'img');
+    if (!img) throw new Error("img element not found in second partial");
+    const assetPart = img.attrs.find(a => a.type === 'asset');
+    if (!assetPart || assetPart.type !== 'asset') throw new Error("asset AttrPart not found on img");
+
+    const ref = assetPart.refs[0];
+    assertEquals(ref.loc?.startLine, 3);
+    assertEquals(ref.loc?.startOffset, html.indexOf('@images/ok.png'));
+    assertEquals(ref.loc?.endOffset, html.indexOf('@images/ok.png') + '@images/ok.png'.length);
+    assertEquals(ref.subpathLoc?.startLine, 3);
+    assertEquals(ref.subpathLoc?.startOffset, html.indexOf('ok.png'));
+});
+
+Deno.test("compileDirectory - data-loc strings in a second partial are file-relative", async () => {
+    const { directory } = await compileLocFixture();
+    const root = directory.files.get("page.html")!.partials.get("second")!;
+
+    const raws = collectStaticAttrRaws(root.tnodes).join('');
+    const locs = [...raws.matchAll(/data-loc="([^"]*)"/g)].map(m => m[1]).sort();
+    // One data-loc per element of the second partial, each at its file line:col.
+    assertEquals(locs, [
+        'page.html#second:4:1',   // <div b-name="second">
+        'page.html#second:5:3',   // <span>
+        'page.html#second:7:3',   // <p b-if="">
+        'page.html#second:8:3',   // <img>
+    ]);
 });

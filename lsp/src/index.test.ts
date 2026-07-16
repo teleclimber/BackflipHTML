@@ -1,6 +1,12 @@
 import { describe, it } from 'node:test';
 import { strictEqual, deepStrictEqual } from 'node:assert';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import { buildIndex } from './index.js';
+import { findDefinition } from './definition.js';
+// Runs against the built @backflip/html dist (like the LSP server itself);
+// rebuild the root package (`npm run build`) after compiler changes.
+import { compileDirectory } from '@backflip/html';
 import type { CompiledDirectory, RootTNode, PartialRefTNode, SlotTNode, SourceLoc } from '@backflip/html';
 
 function makeLoc(startLine: number, startCol: number, endLine: number, endCol: number): SourceLoc {
@@ -135,6 +141,38 @@ describe('buildIndex', () => {
 		const index = buildIndex(dir);
 		const def = index.partialDefs.get('card')![0];
 		deepStrictEqual(def.slots, ['header', 'default', 'footer']);
+	});
+
+	it('indexes file-relative locs for partials after the first in a file', async () => {
+		// Regression test: compileDirectory used to emit slice-relative
+		// locations, so go-to-definition for any partial after the first in a
+		// file pointed at the top of the file.
+		const dir = path.join('/tmp/claude-1000', `lsp_index_filerel_${Date.now()}`);
+		await fs.mkdir(dir, { recursive: true });
+		try {
+			const html = [
+				'<div b-name="first">',   // line 1
+				'  <p>hello</p>',
+				'</div>',
+				'<div b-name="second">',  // line 4
+				'  <p>world</p>',
+				'</div>',
+			].join('\n');
+			await fs.writeFile(path.join(dir, 'page.html'), html, 'utf-8');
+
+			const { directory } = await compileDirectory(dir);
+			const index = buildIndex(directory as CompiledDirectory);
+
+			const defs = index.partialDefs.get('second')!;
+			strictEqual(defs.length, 1);
+			strictEqual(defs[0].loc!.startLine, 4);
+
+			const result = findDefinition('second', null, 'page.html', index, '/workspace');
+			// LSP ranges are 0-based: line 4 in the file is range line 3.
+			strictEqual(result!.range.start.line, 3);
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
 	});
 
 	it('collects dataBindings and slotsFilled from refs', () => {
