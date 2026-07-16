@@ -1,7 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
 	attrLoc, tagLoc, tagSrcLoc, errorLoc, attrErrorLoc, bDataNameLoc,
-	interpolationLoc, LineMap, dataLocAttr,
+	interpolationLoc, dataLocAttr,
 } from "./loc.ts";
 
 // A parse5-shaped tag with attribute source locations.
@@ -96,14 +96,6 @@ Deno.test("interpolationLoc: accounts for newlines in the preceding text", () =>
 	assertEquals(loc.startLine, 2);
 	// col resets relative to the last newline
 	assertEquals(loc.startCol, 3);
-});
-
-Deno.test("LineMap: maps offsets to 1-based line/col", () => {
-	const lm = new LineMap('a\nbb\nccc');
-	assertEquals(lm.getLoc(0), { line: 1, col: 1 });
-	assertEquals(lm.getLoc(2), { line: 2, col: 1 });
-	assertEquals(lm.getLoc(3), { line: 2, col: 2 });
-	assertEquals(lm.getLoc(5), { line: 3, col: 1 });
 });
 
 Deno.test("dataLocAttr: emits data-loc only when enabled and inside a partial", () => {

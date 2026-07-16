@@ -3,7 +3,7 @@ import type { Parsed } from './backcode.js';
 import { BackflipError } from './errors.js';
 import { appendCoalesced } from './walk.js';
 import {
-	attrErrorLoc, bDataNameLoc, errorLoc, interpolationLoc, LineMap,
+	attrErrorLoc, bDataNameLoc, errorLoc, interpolationLoc,
 	dataLocAttr as dataLocAttrPure,
 } from './loc.js';
 import {
@@ -16,7 +16,7 @@ import type { SourceNode, SourceElement, SourceText, SourceAttr, TextLoc } from 
 import type {
 	SourceLoc, TNode, RawTNode, PrintTNode, ForTNode, IfTNode, IfBranch,
 	SlotTNode, PartialRefTNode, BPartCallTNode, CustomElementCallTNode, ParentTNode,
-	RootTNode, NamedPartialRoot, CustomElementPartialRoot, CompiledFile, CompileOptions, LocBase, PartialDef, PartialBinding,
+	RootTNode, NamedPartialRoot, CustomElementPartialRoot, CompiledFile, CompileOptions, PartialDef, PartialBinding,
 	ElementTNode, AttrPart,
 } from './types.js';
 
@@ -51,12 +51,7 @@ import type {
 // appended into).
 interface Ctx {
 	filename?: string;
-	html: string;
 	includeLocs: boolean;
-	// Rebase applied to all locs by buildSourceTree. Needed here (and in
-	// assets.ts) to translate already-rebased offsets back into `html` (the
-	// slice text) for substring arithmetic.
-	locBase: LocBase;
 	assetCtx: AssetAttrCtx;
 	errors: BackflipError[];
 	compiledFile: CompiledFile;
@@ -85,23 +80,18 @@ interface SlotCollection {
 /**
  * Lower a faithful SourceNode tree for one partial slice into the compiled
  * TNode AST. Errors accumulate into the returned list; the source tree is not
- * mutated. `html` is the slice text (LineMap / asset validation / b-attr
- * original-case recovery need it).
+ * mutated.
  */
 export function lowerSlice(
 	nodes: SourceNode[],
 	partialDef: PartialDef,
 	options: CompileOptions | undefined,
-	html: string,
 ): { compiledFile: CompiledFile, errors: BackflipError[] } {
 	const filename = partialDef.loc.filename;
-	const locBase: LocBase = options?.locBase ?? { line: 0, offset: 0 };
 	const ctx: Ctx = {
 		filename,
-		html,
 		includeLocs: options?.includeLocs ?? false,
-		locBase,
-		assetCtx: { html, lineMap: new LineMap(html), locBase, assetMap: options?.assetMap, assetDirs: options?.assetDirs, filename },
+		assetCtx: { assetMap: options?.assetMap, assetDirs: options?.assetDirs, filename },
 		errors: [],
 		compiledFile: { partials: new Map() },
 	};
@@ -644,13 +634,9 @@ function lowerCustomElementDefinition(el: SourceElement, st: St, sc: SlotCollect
 		if (!attr.name.startsWith('b-attr:')) continue;
 		// HTML lowercases attribute names, so a b-attr name written with
 		// uppercase letters won't match when referenced inside the partial body.
-		// Recover the original-case name from the source via the parser's
-		// attribute offset (lowercasing preserves length). attr.loc offsets are
-		// rebased (file-relative); subtract the base to index into the slice.
-		if (attr.loc) {
-			const sliceStart = attr.loc.startOffset - ctx.locBase.offset;
-			const rawAttrName = ctx.html.slice(sliceStart, sliceStart + attr.name.length);
-			const afterPrefix = rawAttrName.slice('b-attr:'.length);
+		// parse-tree.ts preserves the original-case name as `rawName`.
+		if (attr.rawName) {
+			const afterPrefix = attr.rawName.slice('b-attr:'.length);
 			const dotIdx = afterPrefix.indexOf('.');
 			const namePart = dotIdx === -1 ? afterPrefix : afterPrefix.slice(0, dotIdx);
 			if (/[A-Z]/.test(namePart)) {
@@ -724,7 +710,7 @@ function lowerCustomElementDefinition(el: SourceElement, st: St, sc: SlotCollect
 		));
 	}
 	if (bScriptAttrs.length > 0) {
-		const { refs, originalValue, error } = validateStaticAssetAttr('b-script', bScriptAttrs[0].value, bScriptAttrs[0].loc, el.openLoc, ctx.assetCtx);
+		const { refs, originalValue, error } = validateStaticAssetAttr('b-script', bScriptAttrs[0], el.openLoc, ctx.assetCtx);
 		if (error) {
 			ctx.errors.push(error);
 		} else if (refs.length > 0) {

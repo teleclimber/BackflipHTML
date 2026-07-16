@@ -86,7 +86,7 @@ function lowerTextRuns(...raws: string[]): TNode[] {
 		children,
 	}];
 	const def: PartialDef = { name: 't', exported: false, customElement: false, loc: { filename: 'test.html', from: 1, to: 1 } };
-	const { compiledFile } = lowerSlice(nodes, def, undefined, raws.join(''));
+	const { compiledFile } = lowerSlice(nodes, def, undefined);
 	return compiledFile.partials.get('t')!.tnodes;
 }
 

@@ -2,7 +2,7 @@ import { RewritingStream } from 'parse5-html-rewriting-stream';
 import stream from 'node:stream';
 
 import { BackflipError } from './errors.js';
-import { attrLoc, tagLoc, tagSrcLoc, errorLoc } from './loc.js';
+import { attrLoc, tagLoc, tagSrcLoc, errorLoc, advanceLoc } from './loc.js';
 import { VOID_ELEMENTS } from './helpers.js';
 import type { LocBase, SourceLoc } from './types.js';
 
@@ -16,12 +16,21 @@ import type { LocBase, SourceLoc } from './types.js';
  * downstream consumes `SourceLoc` only. When a `locBase` is supplied (see
  * `LocBase` in types.ts), it is added here, as each loc is converted — so
  * every location leaving this module already carries the base exactly once.
+ *
+ * Anything derived from raw source text at a location (an attr's original-case
+ * `rawName`, its `valueLoc` anchor) is likewise captured here, while offsets
+ * are still slice-relative and can index into the slice text directly. Nothing
+ * downstream ever maps a rebased location back into the slice.
  */
 
 export interface SourceAttr {
 	name: string;             // as reported by parse5 (lowercased)
 	value: string;
 	loc?: SourceLoc;          // from sourceCodeLocation.attrs — converted here, once
+	rawName?: string;         // original-case name as written in source; only set when `loc` is
+	                          // (absent means no location info — treat as equal to `name`)
+	valueLoc?: TextLoc;       // start of the value text; anchors sub-value locs (asset refs)
+	                          // without re-deriving them from the source text downstream
 }
 
 export interface SourceElement {
@@ -131,7 +140,19 @@ export function buildSourceTree(html: string, filename?: string, locBase?: LocBa
 				attrs: tag.attrs.map((a) => {
 					const attr: SourceAttr = { name: a.name, value: a.value };
 					const loc = attrLoc(tag, a.name);
-					if (loc) attr.loc = rebase(loc);
+					if (loc) {
+						// `loc` is still slice-relative here, so it can index into
+						// `html` directly — the one place both coordinate systems
+						// agree. Capture everything derived from raw text now.
+						attr.rawName = html.slice(loc.startOffset, loc.startOffset + a.name.length);
+						// Locate the (entity-decoded) value inside the raw attr
+						// text; anchor at the attr start when the search fails.
+						const attrText = html.slice(loc.startOffset, loc.endOffset);
+						const valueIdx = attrText.indexOf(a.value);
+						const vLoc = advanceLoc(loc, valueIdx === -1 ? '' : attrText.slice(0, valueIdx));
+						attr.valueLoc = { startLine: vLoc.startLine + base.line, startCol: vLoc.startCol, startOffset: vLoc.startOffset + base.offset };
+						attr.loc = rebase(loc);
+					}
 					return attr;
 				}),
 				selfClosing: !!tag.selfClosing,

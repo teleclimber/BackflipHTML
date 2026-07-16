@@ -25,7 +25,7 @@ export { BackflipError };
 export async function compilePartial(htmlSlice: string, partialDef: PartialDef, options?: CompileOptions): Promise<{ compiled: RootTNode, errors: BackflipError[] }> {
 	const filename = partialDef.loc.filename;
 	const { nodes } = await buildSourceTree(htmlSlice, filename, options?.locBase);
-	const { compiledFile, errors } = lowerSlice(nodes, partialDef, options, htmlSlice);
+	const { compiledFile, errors } = lowerSlice(nodes, partialDef, options);
 
 	// Validate that the slice produced exactly one partial matching partialDef.
 	// A mismatch here means the caller sliced incorrectly or fed the wrong def —

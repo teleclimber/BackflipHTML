@@ -4,6 +4,7 @@ import { BackflipError } from './errors.js';
 import { attrErrorLoc } from './loc.js';
 import { validateStaticAssetAttr, type AssetAttrCtx } from './assets.js';
 import type { SourceLoc, AssetRef, AttrPart } from './types.js';
+import type { SourceAttr } from './parse-tree.js';
 
 // --- tag sets ---
 
@@ -80,7 +81,7 @@ export type AttrSegment =
  * pre-converted locs, plus the open tag's loc for error fallbacks).
  */
 export function classifyOpenTagAttrs(
-	el: { attrs: { name: string, value: string, loc?: SourceLoc }[], openLoc?: SourceLoc },
+	el: { attrs: Pick<SourceAttr, 'name' | 'value' | 'loc' | 'valueLoc'>[], openLoc?: SourceLoc },
 	excludeAttrs: string[],
 	ctx: AssetAttrCtx,
 ): { segments: AttrSegment[], hasBind: boolean, errors: BackflipError[] } {
@@ -119,7 +120,7 @@ export function classifyOpenTagAttrs(
 			});
 		} else if (isAssetAttr(attr.name)) {
 			const realName = stripAssetSuffix(attr.name);
-			const { refs, originalValue, error } = validateStaticAssetAttr(realName, attr.value, attr.loc, el.openLoc, ctx);
+			const { refs, originalValue, error } = validateStaticAssetAttr(realName, attr, el.openLoc, ctx);
 			if (error) { errors.push(error); continue; }
 			segments.push({
 				kind: 'asset',

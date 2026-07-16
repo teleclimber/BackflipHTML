@@ -1,6 +1,6 @@
 import { BackflipError } from './errors.js';
 import { mapTNodes } from './walk.js';
-import { LineMap, attrErrorLoc } from './loc.js';
+import { attrErrorLoc, interpolationLoc } from './loc.js';
 import type {
 	SourceLoc,
 	AssetRef,
@@ -9,8 +9,8 @@ import type {
 	RootTNode,
 	CustomElementPartialRoot,
 	CompiledFile,
-	LocBase,
 } from './types.js';
+import type { SourceAttr } from './parse-tree.js';
 
 // --- asset helpers ---
 
@@ -66,12 +66,6 @@ export function parseSrcsetEntriesWithOffsets(value: string): { url: string, off
 }
 
 export interface AssetAttrCtx {
-	html: string;      // the partial's slice text
-	lineMap: LineMap;  // over `html`, so slice-relative
-	// Rebase buildSourceTree applied to all locs (see LocBase in types.ts).
-	// Incoming attr/tag locs already carry it; locs computed here from `html`
-	// and `lineMap` are slice-relative and must add it before being emitted.
-	locBase: LocBase;
 	assetMap?: Map<string, string>;
 	assetDirs?: Map<string, string>;
 	filename?: string;
@@ -82,38 +76,24 @@ export interface AssetAttrCtx {
  * The returned `error` is non-null when the attribute is malformed or the asset directory
  * is unknown; otherwise `refs` carries one entry per URL (1 for src~, N for srcset~).
  *
- * `attrLocation` is the attribute's pre-converted SourceLoc (from
- * parse-tree.ts); `openLoc` is the open tag's, used as the error-location
- * fallback when the attr has none.
+ * `attr` is the SourceAttr shape from parse-tree.ts: its `valueLoc` anchors
+ * the emitted ref locs; `openLoc` is the open tag's loc, used as the
+ * error-location fallback when the attr has none. `attrName` is the display
+ * name (the real name, `~` stripped).
  */
 export function validateStaticAssetAttr(
 	attrName: string,
-	value: string,
-	attrLocation: SourceLoc | undefined,
+	attr: Pick<SourceAttr, 'value' | 'loc' | 'valueLoc'>,
 	openLoc: SourceLoc | undefined,
 	ctx: AssetAttrCtx,
 ): { refs: AssetRef[], originalValue: string, error?: BackflipError } {
-	const { html, lineMap, locBase, assetMap, assetDirs, filename } = ctx;
+	const { assetMap, assetDirs, filename } = ctx;
+	const { value, loc: attrLocation, valueLoc } = attr;
 	if (!assetMap) {
 		return { refs: [], originalValue: value, error: new BackflipError(`${attrName}~ used but no asset directories are configured`, attrErrorLoc(attrLocation, openLoc, filename)) };
 	}
 	if (attrName === 'style') {
 		return { refs: [], originalValue: value, error: new BackflipError(`style~ is not supported`, attrErrorLoc(attrLocation, openLoc, filename)) };
-	}
-
-	// Slice-relative offset of the attr value inside `html`. attrLocation is
-	// already rebased (file-relative), so the base is subtracted for the
-	// substring arithmetic and added back when locs are emitted below.
-	let valueStartOffset = 0;
-	if (attrLocation) {
-		const attrStart = attrLocation.startOffset - locBase.offset;
-		const attrText = html.substring(attrStart, attrLocation.endOffset - locBase.offset);
-		const relativeValueOffset = attrText.indexOf(value);
-		if (relativeValueOffset !== -1) {
-			valueStartOffset = attrStart + relativeValueOffset;
-		} else {
-			valueStartOffset = attrStart; // fallback
-		}
 	}
 
 	function createAssetRef(val: string, localOffset: number): AssetRef | null {
@@ -126,23 +106,9 @@ export function validateStaticAssetAttr(
 
 		const ref: AssetRef = { name, subpath };
 
-		if (attrLocation && valueStartOffset > 0) {
-			// Slice-relative offsets into html/lineMap; rebased on emit.
-			const absStart = valueStartOffset + localOffset;
-			const absEnd = absStart + val.length;
-			const startLoc = lineMap.getLoc(absStart);
-			const endLoc = lineMap.getLoc(absEnd);
-			ref.loc = {
-				startLine: startLoc.line + locBase.line, startCol: startLoc.col, startOffset: absStart + locBase.offset,
-				endLine: endLoc.line + locBase.line, endCol: endLoc.col, endOffset: absEnd + locBase.offset
-			};
-
-			const subpathAbsStart = absStart + slashIdx + 1;
-			const subpathStartLoc = lineMap.getLoc(subpathAbsStart);
-			ref.subpathLoc = {
-				startLine: subpathStartLoc.line + locBase.line, startCol: subpathStartLoc.col, startOffset: subpathAbsStart + locBase.offset,
-				endLine: endLoc.line + locBase.line, endCol: endLoc.col, endOffset: absEnd + locBase.offset
-			};
+		if (valueLoc) {
+			ref.loc = interpolationLoc(valueLoc, value.slice(0, localOffset), val);
+			ref.subpathLoc = interpolationLoc(valueLoc, value.slice(0, localOffset + slashIdx + 1), subpath);
 		}
 		return ref;
 	}

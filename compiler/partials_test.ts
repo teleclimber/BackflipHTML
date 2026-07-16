@@ -1645,6 +1645,39 @@ Deno.test("compileDirectory - asset ref locs in a second partial are file-relati
     assertEquals(ref.subpathLoc?.startOffset, html.indexOf('ok.png'));
 });
 
+Deno.test("compileDirectory - multi-line srcset~ ref locs in a second partial are file-relative", async () => {
+    const lines = [
+        '<div b-name="first">x</div>',       // line 1
+        '<div b-name="second">',             // line 2
+        '  <img srcset~="@images/a.png 1x,', // line 3
+        '    @images/b.png 2x">',            // line 4
+        '</div>',                            // line 5
+    ];
+    const html = lines.join('\n');
+    const dir = await makeTempDir("filerel_srcset");
+    await writeFile(path.join(dir, "page.html"), html);
+    const { directory, errors } = await compileDirectory(dir, { assetMap: new Map([["images", "/img/"]]) });
+    assertEquals(errors.length, 0, `unexpected errors: ${JSON.stringify(errors.map(e => e.message))}`);
+
+    const root = directory.files.get("page.html")!.partials.get("second")!;
+    const img = findElement(root.tnodes, 'img');
+    if (!img) throw new Error("img element not found in second partial");
+    const assetPart = img.attrs.find(a => a.type === 'asset');
+    if (!assetPart || assetPart.type !== 'asset') throw new Error("asset AttrPart not found on img");
+
+    const [refA, refB] = assetPart.refs;
+    assertEquals(refA.loc?.startLine, 3);
+    assertEquals(refA.loc?.startCol, lines[2].indexOf('@images/a.png') + 1);
+    assertEquals(refA.loc?.startOffset, html.indexOf('@images/a.png'));
+    assertEquals(refA.subpathLoc?.startOffset, html.indexOf('a.png'));
+    assertEquals(refB.loc?.startLine, 4);
+    assertEquals(refB.loc?.startCol, lines[3].indexOf('@images/b.png') + 1);
+    assertEquals(refB.loc?.startOffset, html.indexOf('@images/b.png'));
+    assertEquals(refB.loc?.endOffset, html.indexOf('@images/b.png') + '@images/b.png'.length);
+    assertEquals(refB.subpathLoc?.startLine, 4);
+    assertEquals(refB.subpathLoc?.startOffset, html.indexOf('b.png'));
+});
+
 Deno.test("compileDirectory - data-loc strings in a second partial are file-relative", async () => {
     const { directory } = await compileLocFixture();
     const root = directory.files.get("page.html")!.partials.get("second")!;

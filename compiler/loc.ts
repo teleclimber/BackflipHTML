@@ -74,38 +74,34 @@ export function bDataNameLoc(a: SourceLoc | undefined, bindingName: string): Sou
 	};
 }
 
+/**
+ * Advance a start anchor over `prefix` text: lines by the newline count,
+ * column restarting after the last newline (1-based). Slices are complete
+ * lines, so an advanced anchor stays file-correct when the input one was.
+ */
+export function advanceLoc(
+	start: { startLine: number; startCol: number; startOffset: number },
+	prefix: string,
+): { startLine: number; startCol: number; startOffset: number } {
+	const newlines = (prefix.match(/\n/g) ?? []).length;
+	const lastNl = prefix.lastIndexOf('\n');
+	return {
+		startLine: start.startLine + newlines,
+		startCol: lastNl === -1 ? start.startCol + prefix.length : prefix.length - lastNl,
+		startOffset: start.startOffset + prefix.length,
+	};
+}
+
 export function interpolationLoc(
 	textLoc: { startLine: number; startCol: number; startOffset: number },
 	rawBefore: string,
 	matchStr: string
 ): SourceLoc {
-	const startOffset = textLoc.startOffset + rawBefore.length;
-	const endOffset = startOffset + matchStr.length;
-	const newlinesBefore = (rawBefore.match(/\n/g) ?? []).length;
-	const lastNl = rawBefore.lastIndexOf('\n');
-	const startLine = textLoc.startLine + newlinesBefore;
-	const startCol = lastNl === -1 ? textLoc.startCol + rawBefore.length : rawBefore.length - lastNl;
-	const endLine = startLine;
-	const endCol = startCol + matchStr.length;
-	return { startLine, startCol, startOffset, endLine, endCol, endOffset };
-}
-
-export class LineMap {
-	private lineStarts: number[] = [0];
-	constructor(html: string) {
-		for (let i = 0; i < html.length; i++) {
-			if (html[i] === '\n') this.lineStarts.push(i + 1);
-		}
-	}
-	getLoc(offset: number): { line: number, col: number } {
-		let l = 0, r = this.lineStarts.length - 1;
-		while (l <= r) {
-			const m = Math.floor((l + r) / 2);
-			if (this.lineStarts[m] <= offset) l = m + 1;
-			else r = m - 1;
-		}
-		return { line: r + 1, col: offset - this.lineStarts[r] + 1 };
-	}
+	const { startLine, startCol, startOffset } = advanceLoc(textLoc, rawBefore);
+	return {
+		startLine, startCol, startOffset,
+		endLine: startLine, endCol: startCol + matchStr.length, endOffset: startOffset + matchStr.length,
+	};
 }
 
 /**
