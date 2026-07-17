@@ -697,6 +697,32 @@ Deno.test("compileFile: non-b-unwrap b-slot followed by text compiles cleanly", 
 	assertStringIncludes(trailing, 'tail');
 });
 
+Deno.test("compileFile: self-closing b-slot carrier does not swallow following siblings", async () => {
+	// Matches the explicit-close form above: `after` is a sibling of the span,
+	// not a child of it.
+	const { compiled, errors } = await compileFile('<div b-name="page"><span b-slot/>after</div>');
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get("page")!;
+	const pageDiv = root.tnodes[0] as ElementTNode;
+	assertEquals(pageDiv.tnodes.length, 2);
+	const spanEl = pageDiv.tnodes[0] as ElementTNode;
+	assertEquals(spanEl.tagName, 'span');
+	assertEquals(spanEl.tnodes.length, 1);
+	assertEquals(spanEl.tnodes[0].type, 'slot');
+	assertEquals(pageDiv.tnodes[1], { type: 'raw', raw: 'after' });
+});
+
+Deno.test("compileFile: self-closing b-unwrap b-in in a call body creates an empty named slot", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><my-card><b-unwrap b-in="side"/></my-card></div>'
+	);
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get("page")!;
+	const ref = findPartialRef(root);
+	assertEquals(ref.slots['side'], []);
+	assertExists(ref.slotLocs!['side']);
+});
+
 Deno.test("compileFile: default slot content captured", async () => {
 	const { compiled: result } = await compileFile('<div b-name="page"><b-unwrap b-part="#card"><p>default content</p></b-unwrap></div>');
 	const root = result.partials.get("page")!;
@@ -1363,11 +1389,11 @@ Deno.test("custom element call: existing b-unwrap b-for wrap continues to work (
 	assertEquals(ref.bindings[0].name, 'item');
 });
 
-// ---- error recovery / cursor-model characterization ----
-// These pin the exact observable behavior of compilePartial's recovery paths and
-// cursor quirks (added before the Phase 7.2 parse-then-lower rewrite so the
-// rewrite can prove parity). Several of them pin behavior that is odd but
-// long-standing; changing it is out of scope for a refactor.
+// ---- error recovery / lowering behavior ----
+// These pin the observable behavior of the recovery paths (malformed input never
+// throws: broken structure degrades to raw text plus an error) and of the
+// lowering rules that are easy to regress — document order around self-closing
+// tags, slot routing, and where a partial's extent ends.
 
 Deno.test("recovery: mismatched end tag becomes raw text inside the open element", async () => {
 	const { compiled, errors } = await compileFile('<div b-name="x">hi</span> there</div>');
@@ -1380,16 +1406,44 @@ Deno.test("recovery: mismatched end tag becomes raw text inside the open element
 	assertExists(divEl.closeTagLoc);
 });
 
-Deno.test("recovery: stray end tag with empty stack becomes raw text in the still-open partial", async () => {
-	// A self-closing b-unwrap b-name root leaves the partial "open" with an empty
-	// tag stack; a stray close tag then errors and lands as text in the root.
+Deno.test("recovery: stray end tag after a self-closing b-unwrap definition root reports error, adds nothing", async () => {
+	// The definition ends at its own open tag, so nothing that follows is inside
+	// the partial; the stray close tag still reports, but contributes no content.
 	const { compiled, errors } = await compileFile('<b-unwrap b-name="x"/>hi</span>done');
 	assertEquals(errors.length, 1);
 	assertStringIncludes(errors[0].message, "popped the last tagMatcher prematurely");
 	const root = compiled.partials.get("x")!;
-	assertEquals(root.tnodes, [{ type: 'raw', raw: 'hi</span>done' }]);
-	// The partial never saw a close tag, so endOffset keeps its initial value.
-	assertEquals(root.meta!.endOffset, 0);
+	assertEquals(root.tnodes, []);
+	assertEquals(root.meta!.endOffset, '<b-unwrap b-name="x"/>'.length);
+});
+
+Deno.test("a void b-name definition root ends the partial at its open tag", async () => {
+	const { compiled, errors } = await compileFile('<img b-name="icon">text');
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get("icon")!;
+	// The void element is the whole body; `text` is outside the partial.
+	assertEquals(root.tnodes.length, 1);
+	const imgEl = root.tnodes[0] as ElementTNode;
+	assertEquals(imgEl.tagName, 'img');
+	assertEquals(imgEl.tnodes, []);
+	assertEquals(root.meta!.endOffset, '<img b-name="icon">'.length);
+});
+
+Deno.test("a self-closing custom element definition root ends the partial at its open tag", async () => {
+	const { compiled, errors } = await compileFile('<my-widget/>text');
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get("my-widget")!;
+	assertEquals(root.tnodes, []);
+	assertEquals(root.meta!.endOffset, '<my-widget/>'.length);
+});
+
+Deno.test("content after a self-closing definition root does not leak into the partial", async () => {
+	// A later top-level definition still starts its own partial (compilePartial
+	// only returns the sliced one); what matters here is that nothing following
+	// the self-closed root flows into it.
+	const { compiled, errors } = await compileFile('<b-unwrap b-name="x"/>mid<div b-name="y">hi</div>');
+	assertEquals(errors.length, 0);
+	assertEquals(compiled.partials.get("x")!.tnodes, []);
 });
 
 Deno.test("recovery: stray end tag after the partial closed reports error, adds nothing", async () => {
@@ -1471,25 +1525,73 @@ Deno.test("recovery: more than one flow directive falls back to raw open tag", a
 	assertEquals(divEl.tnodes, [{ type: 'raw', raw: '<p b-for="i in is" b-if="c">atail' }]);
 });
 
-// -- cursor-model quirks (pre-existing; pinned for behavior parity) --
+// -- slot routing, document order, and location spans --
 
-Deno.test("quirk: content after a closed flow element inside slot content escapes the slot", async () => {
-	// After `</p>` the compiler's cursor is restored to the flow node's outer
-	// parent (the container holding the <my-card> call), so TAIL lands as a
-	// sibling AFTER the partial-ref, not in the slot.
+Deno.test("text after a closed flow element inside slot content stays in the slot", async () => {
 	const { compiled, errors } = await compileFile('<div b-name="x"><my-card><p b-if="c">y</p>TAIL</my-card></div>');
 	assertEquals(errors.length, 0);
 	const root = compiled.partials.get("x")!;
 	const divEl = root.tnodes[0] as ElementTNode;
-	assertEquals(divEl.tnodes.length, 2);
+	assertEquals(divEl.tnodes.length, 1);
 	assertEquals(divEl.tnodes[0].type, 'partial-ref');
-	assertEquals(divEl.tnodes[1], { type: 'raw', raw: 'TAIL' });
 	const ref = divEl.tnodes[0] as PartialRefTNode;
-	assertEquals(ref.slots['default'].length, 1);
+	assertEquals(ref.slots['default'].length, 2);
 	assertEquals(ref.slots['default'][0].type, 'if');
+	assertEquals(ref.slots['default'][1], { type: 'raw', raw: 'TAIL' });
 });
 
-Deno.test("quirk: content after a nested element containing flow stays in the slot", async () => {
+Deno.test("a second b-if after a flow element inside slot content stays in the slot", async () => {
+	const { compiled, errors } = await compileFile('<div b-name="x"><my-card><p b-if="c">y</p><p b-if="d">z</p></my-card></div>');
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get("x")!;
+	const ref = findPartialRef(root);
+	assertEquals(ref.slots['default'].length, 2);
+	assertEquals(ref.slots['default'][0].type, 'if');
+	assertEquals(ref.slots['default'][1].type, 'if');
+});
+
+Deno.test("b-else still chains to a b-if inside slot content", async () => {
+	const { compiled, errors } = await compileFile('<div b-name="x"><my-card><p b-if="c">y</p><p b-else>n</p></my-card></div>');
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get("x")!;
+	const ref = findPartialRef(root);
+	assertEquals(ref.slots['default'].length, 1);
+	assertEquals((ref.slots['default'][0] as IfTNode).branches.length, 2);
+});
+
+Deno.test("an element after a flow element inside slot content stays in the slot", async () => {
+	const { compiled, errors } = await compileFile('<div b-name="x"><my-card><p b-if="c">y</p><em>t</em></my-card></div>');
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get("x")!;
+	const ref = findPartialRef(root);
+	assertEquals(ref.slots['default'].length, 2);
+	assertEquals(ref.slots['default'][0].type, 'if');
+	assertEquals((ref.slots['default'][1] as ElementTNode).tagName, 'em');
+});
+
+Deno.test("b-unwrap b-in content after a flow element routes into its named slot", async () => {
+	const { compiled, errors } = await compileFile('<div b-name="x"><my-card><p b-if="c">y</p><b-unwrap b-in="side">S</b-unwrap></my-card></div>');
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get("x")!;
+	const ref = findPartialRef(root);
+	assertEquals(ref.slots['default'].length, 1);
+	assertEquals(ref.slots['default'][0].type, 'if');
+	assertEquals(ref.slots['side'], [{ type: 'raw', raw: 'S' }]);
+});
+
+Deno.test("text after a with-flow custom element call inside slot content stays in the slot", async () => {
+	const { compiled, errors } = await compileFile('<div b-name="x"><my-a><my-b b-if="c">y</my-b>TAIL</my-a></div>');
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get("x")!;
+	const divEl = root.tnodes[0] as ElementTNode;
+	const outer = divEl.tnodes[0] as PartialRefTNode;
+	assertEquals(outer.partialName, 'my-a');
+	assertEquals(outer.slots['default'].length, 2);
+	assertEquals(outer.slots['default'][0].type, 'if');
+	assertEquals(outer.slots['default'][1], { type: 'raw', raw: 'TAIL' });
+});
+
+Deno.test("content after a nested element containing flow stays in the slot", async () => {
 	// Unlike the direct-flow case above, a regular element restores the
 	// slot-boundary cursor on close, so TAIL stays in the slot.
 	const { compiled, errors } = await compileFile('<div b-name="x"><my-card><section><p b-if="c">y</p></section>TAIL</my-card></div>');
@@ -1501,48 +1603,92 @@ Deno.test("quirk: content after a nested element containing flow stays in the sl
 	assertEquals(ref.slots['default'][1], { type: 'raw', raw: 'TAIL' });
 });
 
-Deno.test("quirk: text after a self-closing custom element call merges into the raw BEFORE the call", async () => {
-	// The cursor is not advanced for a self-closing call, so following text is
-	// appended to the preceding raw node (renders before the call).
+Deno.test("text after a self-closing custom element call stays in document order", async () => {
 	const { compiled, errors } = await compileFile('<div b-name="x">a<my-card/>b</div>');
 	assertEquals(errors.length, 0);
 	const root = compiled.partials.get("x")!;
 	const divEl = root.tnodes[0] as ElementTNode;
-	assertEquals(divEl.tnodes.length, 2);
-	assertEquals(divEl.tnodes[0], { type: 'raw', raw: 'ab' });
+	assertEquals(divEl.tnodes.length, 3);
+	assertEquals(divEl.tnodes[0], { type: 'raw', raw: 'a' });
 	assertEquals(divEl.tnodes[1].type, 'partial-ref');
+	assertEquals(divEl.tnodes[2], { type: 'raw', raw: 'b' });
 });
 
-Deno.test("quirk: text after a self-closing b-unwrap b-part merges into the raw BEFORE the ref", async () => {
+Deno.test("text after a self-closing b-unwrap b-part stays in document order", async () => {
 	const { compiled, errors } = await compileFile('<div b-name="x">a<b-unwrap b-part="#c"/>b</div>');
 	assertEquals(errors.length, 0);
 	const root = compiled.partials.get("x")!;
 	const divEl = root.tnodes[0] as ElementTNode;
-	assertEquals(divEl.tnodes.length, 2);
-	assertEquals(divEl.tnodes[0], { type: 'raw', raw: 'ab' });
+	assertEquals(divEl.tnodes.length, 3);
+	assertEquals(divEl.tnodes[0], { type: 'raw', raw: 'a' });
 	assertEquals(divEl.tnodes[1].type, 'partial-ref');
+	assertEquals(divEl.tnodes[2], { type: 'raw', raw: 'b' });
 });
 
-Deno.test("quirk: interpolation-first content in a b-unwrap partial root seeds an empty raw", async () => {
+Deno.test("text after a self-closing b-part on a wrapper element stays in document order", async () => {
+	const { compiled, errors } = await compileFile('<div b-name="x">a<section b-part="#c"/>b</div>');
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get("x")!;
+	const divEl = root.tnodes[0] as ElementTNode;
+	assertEquals(divEl.tnodes.length, 3);
+	assertEquals(divEl.tnodes[0], { type: 'raw', raw: 'a' });
+	const wrapper = divEl.tnodes[1] as ElementTNode;
+	assertEquals(wrapper.tagName, 'section');
+	assertEquals(wrapper.tnodes[0].type, 'partial-ref');
+	assertEquals(divEl.tnodes[2], { type: 'raw', raw: 'b' });
+});
+
+Deno.test("text after a b-part on a void tag stays in document order", async () => {
+	const { compiled, errors } = await compileFile('<div b-name="x">a<img b-part="#c">b</div>');
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get("x")!;
+	const divEl = root.tnodes[0] as ElementTNode;
+	assertEquals(divEl.tnodes.length, 3);
+	assertEquals(divEl.tnodes[0], { type: 'raw', raw: 'a' });
+	assertEquals((divEl.tnodes[1] as ElementTNode).tagName, 'img');
+	assertEquals(divEl.tnodes[2], { type: 'raw', raw: 'b' });
+});
+
+Deno.test("b-else does not chain through an intervening self-closing call", async () => {
+	const { compiled, errors } = await compileFile('<div b-name="x"><p b-if="c">y</p><my-card/><p b-else>n</p></div>');
+	assertEquals(errors.length, 1);
+	assertStringIncludes(errors[0].message, "b-else-if/b-else must follow a b-if block");
+	const root = compiled.partials.get("x")!;
+	const ifNode = findIfNode(root);
+	assertEquals(ifNode.branches.length, 1);
+	// The dangling b-else falls back to a raw open tag.
+	const divEl = root.tnodes[0] as ElementTNode;
+	assertEquals(divEl.tnodes[divEl.tnodes.length - 1], { type: 'raw', raw: '<p b-else>n' });
+});
+
+Deno.test("interpolation-first content in a b-unwrap partial root does not seed an empty raw", async () => {
 	const { compiled, errors } = await compileFile('<b-unwrap b-name="x">{{ a }}text</b-unwrap>');
 	assertEquals(errors.length, 0);
 	const root = compiled.partials.get("x")!;
-	assertEquals(root.tnodes.length, 3);
-	assertEquals(root.tnodes[0], { type: 'raw', raw: '' });
-	assertEquals(root.tnodes[1].type, 'print');
-	assertEquals(root.tnodes[2], { type: 'raw', raw: 'text' });
+	assertEquals(root.tnodes.length, 2);
+	assertEquals(root.tnodes[0].type, 'print');
+	assertEquals(root.tnodes[1], { type: 'raw', raw: 'text' });
 });
 
-Deno.test("quirk: interpolation-first content in a custom element definition seeds an empty raw", async () => {
+Deno.test("interpolation-first content in a custom element definition does not seed an empty raw", async () => {
 	const { compiled, errors } = await compileFile('<my-widget>{{ a }}</my-widget>');
 	assertEquals(errors.length, 0);
 	const root = compiled.partials.get("my-widget")!;
-	assertEquals(root.tnodes.length, 2);
-	assertEquals(root.tnodes[0], { type: 'raw', raw: '' });
-	assertEquals(root.tnodes[1].type, 'print');
+	assertEquals(root.tnodes.length, 1);
+	assertEquals(root.tnodes[0].type, 'print');
 });
 
-Deno.test("quirk: interpolation-first content in an element does NOT seed an empty raw", async () => {
+Deno.test("interpolation-first content in a b-unwrap flow container does not seed an empty raw", async () => {
+	const { compiled, errors } = await compileFile('<div b-name="x"><b-unwrap b-if="c">{{ a }}text</b-unwrap></div>');
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get("x")!;
+	const ifNode = findIfNode(root);
+	assertEquals(ifNode.branches[0].tnodes.length, 2);
+	assertEquals(ifNode.branches[0].tnodes[0].type, 'print');
+	assertEquals(ifNode.branches[0].tnodes[1], { type: 'raw', raw: 'text' });
+});
+
+Deno.test("interpolation-first content in an element does not seed an empty raw", async () => {
 	const { compiled, errors } = await compileFile('<div b-name="x">{{ a }}</div>');
 	assertEquals(errors.length, 0);
 	const root = compiled.partials.get("x")!;
@@ -1551,7 +1697,7 @@ Deno.test("quirk: interpolation-first content in an element does NOT seed an emp
 	assertEquals(divEl.tnodes[0].type, 'print');
 });
 
-Deno.test("quirk: interpolation-first slot content does NOT seed an empty raw", async () => {
+Deno.test("interpolation-first slot content does not seed an empty raw", async () => {
 	const { compiled, errors } = await compileFile('<div b-name="x"><my-card>{{ a }}</my-card></div>');
 	assertEquals(errors.length, 0);
 	const root = compiled.partials.get("x")!;
@@ -1560,7 +1706,7 @@ Deno.test("quirk: interpolation-first slot content does NOT seed an empty raw", 
 	assertEquals(ref.slots['default'][0].type, 'print');
 });
 
-Deno.test("quirk: comments are dropped and surrounding raws coalesce", async () => {
+Deno.test("comments are dropped and surrounding raws coalesce", async () => {
 	const { compiled, errors } = await compileFile('<div b-name="x">a<!-- c -->b</div>');
 	assertEquals(errors.length, 0);
 	const root = compiled.partials.get("x")!;
@@ -1568,21 +1714,33 @@ Deno.test("quirk: comments are dropped and surrounding raws coalesce", async () 
 	assertEquals(divEl.tnodes, [{ type: 'raw', raw: 'ab' }]);
 });
 
-Deno.test("quirk: flow-wrapped elements do not get closeTagLoc", async () => {
-	// On close, the tag-stack entry for a flow element holds the wrapping
-	// if/for node (for b-else chaining), so the inner ElementTNode's loc is
-	// never extended through its close tag.
-	const { compiled, errors } = await compileFile('<div b-name="x"><p b-if="c">y</p></div>');
+Deno.test("flow-wrapped elements get closeTagLoc and a spanning loc", async () => {
+	const src = '<div b-name="x"><p b-if="c">y</p></div>';
+	const { compiled, errors } = await compileFile(src);
 	assertEquals(errors.length, 0);
 	const root = compiled.partials.get("x")!;
 	const ifNode = findIfNode(root);
 	const pEl = findElement(ifNode.branches[0].tnodes, 'p')!;
-	assertEquals(pEl.closeTagLoc, undefined);
 	assertExists(pEl.openTagLoc);
-	assertEquals(pEl.loc, pEl.openTagLoc);
+	assertExists(pEl.closeTagLoc);
+	// loc spans the open tag through the close tag, like every other element.
+	assertEquals(pEl.loc!.startOffset, src.indexOf('<p b-if="c">'));
+	assertEquals(pEl.loc!.endOffset, src.indexOf('</p>') + '</p>'.length);
 });
 
-Deno.test("quirk: b-in wins over a flow directive on the same tag (flow attr becomes literal)", async () => {
+Deno.test("flow-wrapped b-for elements get closeTagLoc and a spanning loc", async () => {
+	const src = '<div b-name="x"><li b-for="i in items">y</li></div>';
+	const { compiled, errors } = await compileFile(src);
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get("x")!;
+	const forNode = findForNode(root);
+	const liEl = findElement(forNode.tnodes, 'li')!;
+	assertExists(liEl.closeTagLoc);
+	assertEquals(liEl.loc!.startOffset, src.indexOf('<li'));
+	assertEquals(liEl.loc!.endOffset, src.indexOf('</li>') + '</li>'.length);
+});
+
+Deno.test("b-in wins over a flow directive on the same tag (flow attr becomes literal)", async () => {
 	const { compiled, errors } = await compileFile('<div b-name="x"><my-card><span b-in="s" b-if="c">y</span></my-card></div>');
 	assertEquals(errors.length, 0);
 	const root = compiled.partials.get("x")!;
@@ -1593,7 +1751,7 @@ Deno.test("quirk: b-in wins over a flow directive on the same tag (flow attr bec
 	assertStringIncludes(staticRaw, 'b-if="c"');
 });
 
-Deno.test("quirk: b-in outside a call body is a literal attribute", async () => {
+Deno.test("b-in outside a call body is a literal attribute", async () => {
 	const { compiled, errors } = await compileFile('<div b-name="x"><span b-in="s">y</span></div>');
 	assertEquals(errors.length, 0);
 	const root = compiled.partials.get("x")!;
@@ -1651,6 +1809,11 @@ Deno.test("expression errors: disallowed operator in text interpolation reports 
 	const { errors } = await compileSnippet('<div>{{ a === b }}</div>');
 	assertEquals(errors.length > 0, true);
 	assertStringIncludes(errors.map(e => e.message).join(' | '), 'unsupported binary operator');
+	// Element text expression errors carry a location, like every other diagnostic.
+	assertExists(errors[0].line);
+	assertExists(errors[0].col);
+	assertExists(errors[0].endLine);
+	assertExists(errors[0].endCol);
 });
 
 Deno.test("expression errors: disallowed operator in slot text interpolation reports compile error", async () => {
@@ -1659,5 +1822,9 @@ Deno.test("expression errors: disallowed operator in slot text interpolation rep
 	);
 	assertEquals(errors.length > 0, true);
 	assertStringIncludes(errors.map(e => e.message).join(' | '), 'unsupported binary operator');
+	assertExists(errors[0].line);
+	assertExists(errors[0].col);
+	assertExists(errors[0].endLine);
+	assertExists(errors[0].endCol);
 });
 

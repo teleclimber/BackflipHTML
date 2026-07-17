@@ -68,10 +68,9 @@ Deno.test("parseBPartValue: empty string", () => {
 });
 
 // ---- text lowering ({{ }} splitting) unit tests ----
-// Ported from the old onText / pushRaw unit tests. The old tests seeded a
-// container with an empty RawTNode and called onText against it; lowering text
-// into a b-unwrap partial root does exactly that (the "seed" anchor), so these
-// drive lowerSlice with a hand-built source tree containing one text node.
+// These drive lowerSlice with a hand-built source tree whose text nodes lower
+// directly into a b-unwrap partial root, i.e. straight into root.tnodes with no
+// wrapping element — the shortest path to the {{ }} splitter's output.
 
 function lowerTextRuns(...raws: string[]): TNode[] {
 	const children: SourceText[] = raws.map(raw => ({ kind: 'text', raw }));
@@ -90,7 +89,7 @@ function lowerTextRuns(...raws: string[]): TNode[] {
 	return compiledFile.partials.get('t')!.tnodes;
 }
 
-Deno.test("lowerText: plain text appended to the seeded raw node", () => {
+Deno.test("lowerText: plain text becomes a raw node", () => {
 	assertEquals(lowerTextRuns('world'), [{ type: 'raw', raw: 'world' }]);
 });
 
@@ -98,9 +97,8 @@ Deno.test("lowerText: adjacent text runs coalesce into one raw node", () => {
 	assertEquals(lowerTextRuns('hello', 'world'), [{ type: 'raw', raw: 'helloworld' }]);
 });
 
-Deno.test("lowerText: single interpolation (seed raw stays)", () => {
+Deno.test("lowerText: single interpolation (no seed raw)", () => {
 	assertEquals(lowerTextRuns('{{ g }}'), [
-		{ type: 'raw', raw: '' },
 		{ type: 'print', data: interpretBackcode('g') },
 	]);
 });
@@ -131,8 +129,8 @@ Deno.test("lowerText: two interpolations with surrounding text", () => {
 
 Deno.test("lowerText: parentheses in expression still produce a print node", () => {
 	const tnodes = lowerTextRuns('{{ func() }}');
-	assertEquals(tnodes.length, 2);
-	assertEquals(tnodes[1].type, 'print');
+	assertEquals(tnodes.length, 1);
+	assertEquals(tnodes[0].type, 'print');
 });
 
 Deno.test("lowerText: empty braces skipped, treated as raw text", () => {

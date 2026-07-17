@@ -21,29 +21,26 @@ import type {
 } from './types.js';
 
 /**
- * Pass B of the compiler: lower a faithful SourceNode tree (from
- * parse-tree.ts) for one partial slice into the compiled TNode AST. All
- * directive semantics live here.
+ * The lowering is recursive and bottom-up: every `lower*` function *returns*
+ * the TNodes it produced, and its caller decides where they land. The container
+ * an output belongs to is therefore a pure function of the position in the
+ * source tree — there is no cursor, and no handler reaches into a sibling's
+ * output.
  *
- * The lowering deliberately mirrors the old streaming compiler's cursor state
- * machine — an explicit `St` (cur_tnode / cur_parent / current partial root)
- * threaded through the recursion in place of the old tag stack — because a
- * number of long-standing behaviors are cursor artifacts that tests and
- * downstream consumers observe (see the "quirk:" characterization tests in
- * compiler_test.ts):
+ * Two things are threaded down the recursion:
  *
- * - text following a self-closing custom-element call or b-part carrier merges
- *   into the raw node BEFORE the call (the cursor is not advanced for those);
- * - the first text lowered directly into a b-unwrap partial root, a custom
- *   element definition root, or a b-unwrap flow container seeds an empty
- *   RawTNode when it starts with an interpolation;
- * - content following a closed flow element inside slot content escapes the
- *   slot (the cursor restores to the flow node's outer parent);
- * - flow-wrapped elements never receive closeTagLoc (the stack entry holds the
- *   if/for node for b-else chaining, not the element).
+ * - `PartialCtx` — the definition currently being lowered (its root and name)
+ *   plus the per-run services. Immutable per partial; `errors` is a shared
+ *   append-only sink, so errors come out in document order simply because the
+ *   recursion visits nodes in document order.
+ * - `siblings` — the output list being built at this level. Only b-else /
+ *   b-else-if reads it, to find the b-if it chains onto (`findPrecedingIf`).
  *
- * No module-level mutable state: everything is threaded through `Ctx`
- * (per-run immutable services + shared sinks) and `St` (the cursor).
+ * Slot routing lives in exactly one place: `lowerCallBody`, which fills a
+ * partial-ref's slots. Being "in a call body" is not a state — it is simply
+ * being a direct child of that loop, which is the only caller that passes a
+ * `callBody` partial-ref down. Everything deeper recurses through the ordinary
+ * `lowerChildren`.
  */
 
 // Per-run context: error sink, output, and services. Created once per
@@ -57,24 +54,11 @@ interface Ctx {
 	compiledFile: CompiledFile;
 }
 
-// The cursor: a direct port of the old closure variables currentPartialRoot /
-// currentPartialName / cur_tnode / cur_parent. cur_parent is maintained in
-// lockstep with cur_tnode (any code that assigns one considers the other).
-interface St {
-	root: RootTNode | null;      // current partial (null = outside any partial)
-	name: string | null;
-	curTnode: TNode | null;
-	curParent: ParentTNode | null;
-}
-
-// Innermost slot-collection context, passed down the recursion. Replaces the
-// old tag-stack scan (getSlotCollection): handlers that used to push an entry
-// with a structural tnode pass `null` to their children; handlers that pushed
-// a slotCollection pass that; {tag}-only entries pass the inherited value.
-interface SlotCollection {
-	partialRef: PartialRefTNode;
-	partialRefParent: ParentTNode;   // container of the partialRef
-	currentSlot: string;
+// Ctx plus the partial definition being lowered. Created when a definition
+// starts lowering and never mutated; `name` feeds the data-loc attribute.
+interface PartialCtx extends Ctx {
+	root: RootTNode;
+	name: string;
 }
 
 /**
@@ -95,9 +79,8 @@ export function lowerSlice(
 		errors: [],
 		compiledFile: { partials: new Map() },
 	};
-	const st: St = { root: null, name: null, curTnode: null, curParent: null };
 	for (const node of nodes) {
-		lowerNode(node, st, null, 0, ctx);
+		lowerTopLevelNode(node, ctx);
 	}
 	return { compiledFile: ctx.compiledFile, errors: ctx.errors };
 }
@@ -147,68 +130,14 @@ function toErrLoc(loc: ErrLoc | SourceLoc, filename?: string): ErrLoc {
 	return loc;
 }
 
-// --- cursor primitives (ports of the old closure helpers) ---
-
-// Routing rule: when cur_parent is null OR is the current partial root, the
-// lowering is at a "slot-routable" boundary — content goes into the innermost
-// slot collection if one exists. Once it has descended into an explicit
-// container (ElementTNode / ForTNode / IfBranch), cur_parent points to it and
-// content nests inside that container regardless of slot context.
-function isAtSlotBoundary(st: St): boolean {
-	return st.curParent === null || st.curParent === st.root;
-}
-
-// Append raw text at the cursor: merge into cur when it is a raw node
-// (note: cur is not necessarily the container's LAST node — see the
-// self-closing-call quirk), else push a fresh RawTNode.
-function pushRaw(cur: TNode, parent: ParentTNode, raw: string): TNode {
-	if (cur.type === 'raw') {
-		cur.raw += raw;
-		return cur;
-	}
-	const raw_node: RawTNode = { type: 'raw', raw };
-	parent.tnodes!.push(raw_node);
-	return raw_node;
-}
-
-// Push a raw string into the right place (slot or normal).
-function pushRawHere(raw: string, st: St, sc: SlotCollection | null): TNode | null {
-	if (sc && isAtSlotBoundary(st)) {
-		const slotName = sc.currentSlot;
-		if (!sc.partialRef.slots[slotName]) {
-			sc.partialRef.slots[slotName] = [];
-		}
-		const arr = sc.partialRef.slots[slotName];
-		appendCoalesced(arr, { type: 'raw', raw });
-		return arr[arr.length - 1];
-	}
-	const container: ParentTNode | null = st.curParent ?? st.root;
-	if (container === null) return null;
-	if (st.curTnode === null) {
-		const raw_node: RawTNode = { type: 'raw', raw };
-		container.tnodes!.push(raw_node);
-		st.curTnode = raw_node;
-		if (st.curParent === null) st.curParent = container;
-		return raw_node;
-	}
-	return pushRaw(st.curTnode, container, raw);
-}
-
-// Push a TNode into the current parent or slot.
-function pushNodeHere(node: TNode, st: St, sc: SlotCollection | null): void {
-	if (sc && isAtSlotBoundary(st)) {
-		const slotName = sc.currentSlot;
-		if (!sc.partialRef.slots[slotName]) {
-			sc.partialRef.slots[slotName] = [];
-		}
-		sc.partialRef.slots[slotName].push(node);
-		return;
-	}
-	const container: ParentTNode | null = st.curParent ?? st.root;
-	if (container !== null) {
-		container.tnodes!.push(node);
-		if (st.curParent === null) st.curParent = container;
-	}
+// The end of a definition's source extent: through its close tag when it has
+// one, else through its own open tag for a self-closing / void root (which has
+// no body). Undefined for a root left unclosed at EOF — meta.endOffset then
+// keeps its initial value (== startOffset).
+function definitionEndOffset(el: SourceElement): number | undefined {
+	if (el.rawCloseTag !== undefined) return (el.closeLoc?.startOffset ?? 0) + el.rawCloseTag.length;
+	if (!isContainer(el)) return (el.openLoc?.startOffset ?? 0) + el.rawOpenTag.length;
+	return undefined;
 }
 
 // --- attr assembly ---
@@ -221,8 +150,8 @@ function classifyAttrs(el: SourceElement, excludeAttrs: string[], ctx: Ctx) {
 	return { segments, hasBind };
 }
 
-function dataLocAttr(el: SourceElement, st: St, ctx: Ctx): string {
-	return dataLocAttrPure(el.openLoc, { includeLocs: ctx.includeLocs, currentPartialName: st.name, filename: ctx.filename });
+function dataLocAttr(el: SourceElement, pctx: PartialCtx): string {
+	return dataLocAttrPure(el.openLoc, { includeLocs: pctx.includeLocs, currentPartialName: pctx.name, filename: pctx.filename });
 }
 
 // Build an ElementTNode for a regular HTML element. Attrs are produced via
@@ -231,9 +160,12 @@ function dataLocAttr(el: SourceElement, st: St, ctx: Ctx): string {
 // directives that belong to a wrapping construct (e.g. `b-part`, `b-slot`, `b-if`).
 // The `data-loc=...` string (when enabled) is appended as a synthesized trailing
 // static AttrPart so it renders after the source attrs.
-function buildElement(el: SourceElement, excludeAttrs: string[], st: St, ctx: Ctx): ElementTNode {
-	const { segments } = classifyAttrs(el, excludeAttrs, ctx);
-	const locStr = dataLocAttr(el, st, ctx);
+//
+// `loc` spans the open tag through the close tag (Pass A already recorded both);
+// `tnodes` starts empty — the caller fills it with the lowered children.
+function buildElement(el: SourceElement, excludeAttrs: string[], pctx: PartialCtx): ElementTNode {
+	const { segments } = classifyAttrs(el, excludeAttrs, pctx);
+	const locStr = dataLocAttr(el, pctx);
 	const attrs = buildAttrParts(segments, locStr);
 	const elem: ElementTNode = {
 		type: 'element',
@@ -245,7 +177,21 @@ function buildElement(el: SourceElement, excludeAttrs: string[], st: St, ctx: Ct
 	if (el.selfClosing) elem.selfClosing = true;
 	if (el.openLoc) {
 		elem.openTagLoc = el.openLoc;
-		elem.loc = el.openLoc;  // updated to span through closeTagLoc when close is matched
+		elem.loc = el.openLoc;
+	}
+	// No closeLoc: void, self-closed, or unclosed at EOF — loc stays the open tag.
+	if (el.closeLoc) {
+		elem.closeTagLoc = el.closeLoc;
+		if (elem.openTagLoc) {
+			elem.loc = {
+				startLine: elem.openTagLoc.startLine,
+				startCol: elem.openTagLoc.startCol,
+				startOffset: elem.openTagLoc.startOffset,
+				endLine: el.closeLoc.endLine,
+				endCol: el.closeLoc.endCol,
+				endOffset: el.closeLoc.endOffset,
+			};
+		}
 	}
 	return elem;
 }
@@ -253,9 +199,9 @@ function buildElement(el: SourceElement, excludeAttrs: string[], st: St, ctx: Ct
 // Like buildElement but returns just the AttrPart[]. Used for custom element
 // definitions and call sites, where the wrapping tag is merged at render time
 // (no ElementTNode is constructed for it).
-function buildAttrPartsFromTag(el: SourceElement, excludeAttrs: string[], st: St, ctx: Ctx): AttrPart[] {
-	const { segments } = classifyAttrs(el, excludeAttrs, ctx);
-	const locStr = dataLocAttr(el, st, ctx);
+function buildAttrPartsFromTag(el: SourceElement, excludeAttrs: string[], pctx: PartialCtx): AttrPart[] {
+	const { segments } = classifyAttrs(el, excludeAttrs, pctx);
+	const locStr = dataLocAttr(el, pctx);
 	return buildAttrParts(segments, locStr);
 }
 
@@ -274,6 +220,33 @@ function collectBDataBindings(el: SourceElement, ctx: Ctx): PartialBinding[] {
 	return bindings;
 }
 
+// b-attr:* / b-script are only meaningful on a custom element partial definition.
+// Reported for every other element, inside a partial or not.
+function reportDirectiveMisplacement(el: SourceElement, ctx: Ctx): void {
+	for (const attr of el.attrs) {
+		if (attr.name.startsWith('b-attr:')) {
+			ctx.errors.push(new BackflipError(
+				`b-attr is only allowed on custom element partial definitions`,
+				attrErrLoc(el, attr.name, ctx)
+			));
+		}
+		if (attr.name === 'b-script') {
+			ctx.errors.push(new BackflipError(
+				`b-script is only allowed on custom element partial definitions`,
+				attrErrLoc(el, attr.name, ctx)
+			));
+		}
+	}
+}
+
+function reportFlowOnDefinition(el: SourceElement, ctx: Ctx): void {
+	for (const flow of ['b-if', 'b-for', 'b-else-if', 'b-else'] as const) {
+		if (findAttr(el, flow)) {
+			ctx.errors.push(new BackflipError(`${flow} is not allowed on a partial definition`, attrErrLoc(el, flow, ctx)));
+		}
+	}
+}
+
 // --- text lowering (the single {{ }} splitter) ---
 
 type TextPiece = { kind: 'raw', text: string } | { kind: 'print', node: PrintTNode };
@@ -281,14 +254,9 @@ type TextPiece = { kind: 'raw', text: string } | { kind: 'print', node: PrintTNo
 /**
  * Split a raw text run on `{{ expr }}` interpolations. Empty `{{ }}` stays
  * raw. Expression errors are forwarded into ctx.errors as pieces are produced,
- * so error order matches the old per-match emission.
- *
- * `locateErrors` preserves a pre-existing asymmetry: the old slot-text handler
- * attached filename/line/col to expression errors, while onText (element text)
- * passed the SourceLoc object straight to BackflipError, which reads none of
- * its fields — i.e. element-text expression errors were effectively unlocated.
+ * so error order matches document order.
  */
-function splitInterpolations(raw: string, textLoc: TextLoc | undefined, locateErrors: boolean, ctx: Ctx): TextPiece[] {
+function splitInterpolations(raw: string, textLoc: TextLoc | undefined, ctx: Ctx): TextPiece[] {
 	const pieces: TextPiece[] = [];
 	let raw_it = 0;
 	for (const m of raw.matchAll(INTERPOLATION_RE)) {
@@ -305,7 +273,7 @@ function splitInterpolations(raw: string, textLoc: TextLoc | undefined, locateEr
 		const printLoc = textLoc ? interpolationLoc(textLoc, raw.substring(0, m.index), m[0]) : undefined;
 		const parsed = interpretBackcode(code_str);
 		for (const err of parsed.errs) {
-			ctx.errors.push(new BackflipError(err, locateErrors && printLoc ? toErrLoc(printLoc, ctx.filename) : undefined));
+			ctx.errors.push(new BackflipError(err, printLoc ? toErrLoc(printLoc, ctx.filename) : undefined));
 		}
 		const print_node: PrintTNode = { type: 'print', data: parsed };
 		if (printLoc) print_node.loc = printLoc;
@@ -318,202 +286,132 @@ function splitInterpolations(raw: string, textLoc: TextLoc | undefined, locateEr
 	return pieces;
 }
 
-function lowerText(node: SourceText, st: St, sc: SlotCollection | null, ctx: Ctx): void {
+function lowerText(node: SourceText, ctx: Ctx): TNode[] {
 	// Recovery errors ride on the text node so they surface in document order.
 	if (node.error) ctx.errors.push(node.error);
 
 	if (node.verbatim) {
-		// Error-recovery text (a demoted close tag): pushed as-is, never split
-		// for {{ }} — port of the old endTag recovery path.
-		if (st.curTnode !== null && st.curParent !== null) {
-			st.curTnode = pushRaw(st.curTnode, st.curParent, node.raw);
-		} else if (st.root !== null) {
-			pushRawHere(node.raw, st, sc);
-		}
+		// Error-recovery text (a demoted close tag): kept as-is, never split for
+		// `{{ }}`.
+		return [{ type: 'raw', raw: node.raw }];
+	}
+
+	const out: TNode[] = [];
+	for (const piece of splitInterpolations(node.raw, node.loc, ctx)) {
+		if (piece.kind === 'raw') appendCoalesced(out, { type: 'raw', raw: piece.text });
+		else out.push(piece.node);
+	}
+	return out;
+}
+
+// --- recursion core ---
+
+/**
+ * Lower one source node. `siblings` is the output list being built at this
+ * level — read only by b-else/b-else-if, to chain onto a preceding b-if.
+ * `callBody` is the partial-ref whose body this node sits directly in (only
+ * lowerCallBody passes it), which is what makes `b-in` meaningful here.
+ */
+function lowerNode(node: SourceNode, pctx: PartialCtx, siblings: TNode[], callBody: PartialRefTNode | null): TNode[] {
+	if (node.kind === 'text') return lowerText(node, pctx);
+	return lowerElement(node, pctx, siblings, callBody);
+}
+
+// Lower `children` and append them onto `out`, merging adjacent raws.
+function lowerInto(out: TNode[], children: SourceNode[], pctx: PartialCtx): void {
+	for (const child of children) {
+		for (const n of lowerNode(child, pctx, out, null)) appendCoalesced(out, n);
+	}
+}
+
+function lowerChildren(children: SourceNode[], pctx: PartialCtx): TNode[] {
+	const out: TNode[] = [];
+	lowerInto(out, children, pctx);
+	return out;
+}
+
+// --- top level ---
+
+/**
+ * Top-level source nodes are either a partial definition or content outside any
+ * partial. Nothing carries over between them: each definition is lowered in its
+ * own PartialCtx, and non-definition content is skipped (but still walked, so
+ * misplaced directives inside it still report).
+ */
+function lowerTopLevelNode(node: SourceNode, ctx: Ctx): void {
+	if (node.kind === 'text') {
+		// Outside any partial: no content, but recovery errors still report.
+		if (node.error) ctx.errors.push(node.error);
 		return;
 	}
-
-	if (st.root === null) return; // outside any partial
-
-	if (sc && isAtSlotBoundary(st)) {
-		// Insert text (with {{ }} support) into the current slot.
-		const slotName = sc.currentSlot;
-		if (!sc.partialRef.slots[slotName]) {
-			sc.partialRef.slots[slotName] = [];
-		}
-		const arr = sc.partialRef.slots[slotName];
-		for (const piece of splitInterpolations(node.raw, node.loc, true, ctx)) {
-			if (piece.kind === 'raw') appendCoalesced(arr, { type: 'raw', raw: piece.text });
-			else arr.push(piece.node);
-		}
-	} else {
-		const container: ParentTNode | null = st.curParent ?? st.root;
-		if (container === null) return;
-		if (st.curTnode === null) {
-			// First content in this container — seed with an empty raw as the
-			// cursor anchor (pre-existing behavior: an interpolation-first text
-			// leaves this empty RawTNode in the output).
-			const init: RawTNode = { type: 'raw', raw: '' };
-			container.tnodes!.push(init);
-			st.curTnode = init;
-			if (st.curParent === null) st.curParent = container;
-		}
-		let cur = st.curTnode;
-		for (const piece of splitInterpolations(node.raw, node.loc, false, ctx)) {
-			if (piece.kind === 'raw') {
-				cur = pushRaw(cur, container, piece.text);
-			} else {
-				container.tnodes!.push(piece.node);
-				cur = piece.node;
-			}
-		}
-		st.curTnode = cur;
-	}
-}
-
-// --- element lowering ---
-
-function lowerNode(node: SourceNode, st: St, sc: SlotCollection | null, depth: number, ctx: Ctx): void {
-	if (node.kind === 'text') lowerText(node, st, sc, ctx);
-	else lowerElement(node, st, sc, depth, ctx);
-}
-
-function lowerChildren(children: SourceNode[], st: St, sc: SlotCollection | null, depth: number, ctx: Ctx): void {
-	for (const child of children) {
-		lowerNode(child, st, sc, depth, ctx);
-	}
+	const bNameAttr = findAttr(node, 'b-name');
+	if (bNameAttr) return lowerNamedDefinition(node, bNameAttr, ctx);
+	// A top-level custom element tag defines the partial of the same name.
+	if (isCustomElementTagName(node.tagName)) return lowerCustomElementDefinition(node, ctx);
+	walkOutsidePartial([node], ctx);
 }
 
 /**
- * End-of-element bookkeeping, the port of the old endTag handler for a matched
- * close tag. `entry` mirrors the old TagMatcher entry ({tnode, parent} saved at
- * open time); omit it for {tag}-only entries (fallbacks, b-unwrap roots,
- * skipped tags), which restore nothing.
- *
- * Unclosed elements (EOF) have no rawCloseTag: nothing runs — no restore, and
- * the partial's meta.endOffset keeps its last value.
+ * Content outside any partial produces no output, but is still walked so the
+ * misplacement diagnostics the dispatcher reports inside a partial are also
+ * reported here (a nested b-name, a stray b-attr:/b-script), along with the
+ * recovery errors riding on text nodes.
  */
-function closeElement(el: SourceElement, st: St, depth: number, ctx: Ctx, entry?: { tnode: TNode, parent: ParentTNode | null }): void {
-	if (el.rawCloseTag === undefined) return;
-
-	// Update closeTagLoc / extend the element loc through the close tag bounds
-	// (lets LSP and the flatten pass see the full span). Only entries holding an
-	// ElementTNode get this — flow entries hold the if/for node instead.
-	if (entry && entry.tnode.type === 'element') {
-		const closeLoc = el.closeLoc;
-		if (closeLoc) {
-			const elem = entry.tnode as ElementTNode;
-			elem.closeTagLoc = closeLoc;
-			const openLoc = elem.openTagLoc;
-			if (openLoc) {
-				elem.loc = {
-					startLine: openLoc.startLine,
-					startCol: openLoc.startCol,
-					startOffset: openLoc.startOffset,
-					endLine: closeLoc.endLine,
-					endCol: closeLoc.endCol,
-					endOffset: closeLoc.endOffset,
-				};
-			}
+function walkOutsidePartial(nodes: SourceNode[], ctx: Ctx): void {
+	for (const node of nodes) {
+		if (node.kind === 'text') {
+			if (node.error) ctx.errors.push(node.error);
+			continue;
 		}
-	}
-
-	// A depth-0 close with an open partial ends the partial (the old
-	// "tag_stack drained" condition). This is usually the partial root's own
-	// close tag, but after a self-closing/void definition root it can be any
-	// top-level element's close (pre-existing behavior).
-	if (depth === 0 && st.root !== null) {
-		st.root.meta!.endOffset = (el.closeLoc?.startOffset ?? 0) + el.rawCloseTag.length;
-		st.root = null;
-		st.name = null;
-		st.curTnode = null;
-		st.curParent = null;
-		return;
-	}
-
-	if (entry) {
-		st.curParent = entry.parent ?? null;
-		st.curTnode = entry.tnode ?? null;
-	}
-	// No entry ({tag}-only): leave the cursor unchanged — the popped entry just
-	// balanced the old stack.
-}
-
-// Error-recovery: drop the tag back to a raw string and keep lowering balanced.
-// Used when a handler can't construct its structured node (bad b-for value,
-// dangling b-else, multiple flow attrs, misplaced b-name). The children still
-// lower into the current container (with the inherited slot context) and the
-// close tag is dropped, matching the old fallbackToRawTag + endTag behavior.
-function lowerFallbackTag(el: SourceElement, st: St, sc: SlotCollection | null, depth: number, ctx: Ctx): void {
-	const new_cur = pushRawHere(el.rawOpenTag, st, sc);
-	if (st.curTnode !== null) {
-		st.curTnode = new_cur;
-		// curParent unchanged: pushRawHere appends a sibling within the same container.
-	}
-	if (isContainer(el)) {
-		lowerChildren(el.children, st, sc, depth + 1, ctx);
-		closeElement(el, st, depth, ctx);
+		// Only the entry nodes are top-level (and those never carry b-name — the
+		// caller routed those to a definition), so any b-name found here is nested.
+		if (findAttr(node, 'b-name')) {
+			ctx.errors.push(new BackflipError("b-name is only allowed on top-level elements", attrErrLoc(node, 'b-name', ctx)));
+		} else {
+			reportDirectiveMisplacement(node, ctx);
+		}
+		walkOutsidePartial(node.children, ctx);
 	}
 }
 
-// --- the dispatcher (port of the old startTag handler) ---
+// --- the dispatcher ---
 
-function lowerElement(el: SourceElement, st: St, sc: SlotCollection | null, depth: number, ctx: Ctx): void {
-	const bNameAttr = findAttr(el, 'b-name');
-	if (bNameAttr) return lowerBName(el, bNameAttr, st, sc, depth, ctx);
-
-	// Top-level custom element tag: treat as a partial definition
-	if (depth === 0 && st.root === null && isCustomElementTagName(el.tagName)) {
-		return lowerCustomElementDefinition(el, st, sc, depth, ctx);
+/**
+ * Precedence: b-name (nested → error) → b-attr/b-script errors → b-part →
+ * b-slot → b-in → document-level tracking → multi-flow error → custom element
+ * call → flow → regular tag.
+ */
+function lowerElement(el: SourceElement, pctx: PartialCtx, siblings: TNode[], callBody: PartialRefTNode | null): TNode[] {
+	// Every element reached here is inside a partial, i.e. nested: a top-level
+	// b-name is a definition and never reaches the dispatcher.
+	if (findAttr(el, 'b-name')) {
+		ctx_error(pctx, "b-name is only allowed on top-level elements", attrErrLoc(el, 'b-name', pctx));
+		return lowerFallbackTag(el, pctx);
 	}
 
-	// b-attr is only allowed on custom element definition tags. Anything that
-	// reaches this point in the dispatcher is NOT a custom element definition
-	// (those returned above), so any b-attr:* here is an error.
-	for (const attr of el.attrs) {
-		if (attr.name.startsWith('b-attr:')) {
-			ctx.errors.push(new BackflipError(
-				`b-attr is only allowed on custom element partial definitions`,
-				attrErrLoc(el, attr.name, ctx)
-			));
-		}
-		if (attr.name === 'b-script') {
-			ctx.errors.push(new BackflipError(
-				`b-script is only allowed on custom element partial definitions`,
-				attrErrLoc(el, attr.name, ctx)
-			));
-		}
-	}
+	reportDirectiveMisplacement(el, pctx);
 
 	const bPartAttr = findAttr(el, 'b-part');
-	if (bPartAttr) return lowerBPart(el, bPartAttr, st, sc, depth, ctx);
+	if (bPartAttr) return lowerBPart(el, bPartAttr, pctx);
 
 	const bSlotAttr = findAttr(el, 'b-slot');
-	if (bSlotAttr) return lowerBSlot(el, bSlotAttr, st, sc, depth, ctx);
+	if (bSlotAttr) return lowerBSlot(el, bSlotAttr, pctx);
 
+	// b-in is only meaningful directly inside a call body — elsewhere it stays a
+	// literal attribute.
 	const bInAttr = findAttr(el, 'b-in');
-	if (bInAttr && sc) return lowerBIn(el, bInAttr, st, sc, depth, ctx);
-
-	// Skip everything outside a partial (children are still walked so that
-	// nested b-name / b-attr misplacement errors are reported).
-	if (st.root === null) {
-		if (isContainer(el)) {
-			lowerChildren(el.children, st, sc, depth + 1, ctx);
-			closeElement(el, st, depth, ctx);
-		}
-		return;
-	}
+	if (bInAttr && callBody) return lowerBIn(el, bInAttr, callBody, pctx);
 
 	// Track document-level tags inside partials
 	if (DOCUMENT_LEVEL_TAGS.has(el.tagName)) {
-		st.root.meta!.isDocumentLevel = true;
+		pctx.root.meta!.isDocumentLevel = true;
 	}
 
 	// --- b-for / b-if / b-else-if / b-else ---
 	const b_as = el.attrs.filter(attr => ['b-for', 'b-if', 'b-else-if', 'b-else'].includes(attr.name));
 	if (b_as.length > 1) {
-		ctx.errors.push(new BackflipError("more than one b-attr", tagErrLoc(el, ctx)));
-		return lowerFallbackTag(el, st, sc, depth, ctx);
+		ctx_error(pctx, "more than one b-attr", tagErrLoc(el, pctx));
+		return lowerFallbackTag(el, pctx);
 	}
 
 	// Custom element call site. With a single flow directive, the call is
@@ -521,52 +419,43 @@ function lowerElement(el: SourceElement, st: St, sc: SlotCollection | null, dept
 	// <b-unwrap b-for|if|...>). Without a flow directive, it's a plain call.
 	// b-part precedence already won above; this only runs for plain custom element tags.
 	if (isCustomElementTagName(el.tagName)) {
-		if (b_as.length === 1) return lowerCustomElementCallWithFlow(el, b_as[0], st, sc, depth, ctx);
-		return lowerCustomElementCall(el, st, sc, depth, ctx);
+		if (b_as.length === 1) return lowerCustomElementCallWithFlow(el, b_as[0], pctx, siblings);
+		return lowerCustomElementCall(el, pctx);
 	}
 
-	if (b_as.length === 1) return lowerFlowOnRegularTag(el, b_as[0], st, sc, depth, ctx);
+	if (b_as.length === 1) return lowerFlowOnRegularTag(el, b_as[0], pctx, siblings);
 
-	lowerRegularTag(el, st, sc, depth, ctx);
+	return lowerRegularTag(el, pctx);
 }
 
-// --- directive handlers ---
+function ctx_error(ctx: Ctx, message: string, loc: ErrLoc | undefined): void {
+	ctx.errors.push(new BackflipError(message, loc));
+}
 
-function lowerBName(el: SourceElement, bNameAttr: SourceAttr, st: St, sc: SlotCollection | null, depth: number, ctx: Ctx): void {
-	if (depth > 0) {
-		ctx.errors.push(new BackflipError("b-name is only allowed on top-level elements", attrErrLoc(el, 'b-name', ctx)));
-		// Treat as raw tag within current partial
-		return lowerFallbackTag(el, st, sc, depth, ctx);
-	}
+// Error-recovery: drop the tag back to a raw string and keep lowering going.
+// Used when a handler can't construct its structured node (bad b-for value,
+// dangling b-else, multiple flow attrs, misplaced b-name). The children still
+// lower (as siblings of the raw open tag) and the close tag is dropped.
+function lowerFallbackTag(el: SourceElement, pctx: PartialCtx): TNode[] {
+	const out: TNode[] = [{ type: 'raw', raw: el.rawOpenTag }];
+	if (isContainer(el)) lowerInto(out, el.children, pctx);
+	return out;
+}
 
-	for (const flow of ['b-if', 'b-for', 'b-else-if', 'b-else'] as const) {
-		if (findAttr(el, flow)) {
-			ctx.errors.push(new BackflipError(`${flow} is not allowed on a partial definition`, attrErrLoc(el, flow, ctx)));
-		}
-	}
+// --- partial definitions ---
+
+function lowerNamedDefinition(el: SourceElement, bNameAttr: SourceAttr, ctx: Ctx): void {
+	reportFlowOnDefinition(el, ctx);
 
 	// b-attr is only allowed on custom element partial definitions (a hyphenated tag).
 	// b-name partials are NOT custom element partials — flag b-attr:* as an error here.
-	for (const attr of el.attrs) {
-		if (attr.name.startsWith('b-attr:')) {
-			ctx.errors.push(new BackflipError(
-				`b-attr is only allowed on custom element partial definitions`,
-				attrErrLoc(el, attr.name, ctx)
-			));
-		}
-		if (attr.name === 'b-script') {
-			ctx.errors.push(new BackflipError(
-				`b-script is only allowed on custom element partial definitions`,
-				attrErrLoc(el, attr.name, ctx)
-			));
-		}
-	}
+	reportDirectiveMisplacement(el, ctx);
 
 	const partialName = bNameAttr.value;
 	const openLoc = el.openLoc;
 	const partialRoot: NamedPartialRoot = { type: 'root', kind: 'named', tnodes: [], meta: {
 		startOffset: openLoc?.startOffset ?? 0,
-		endOffset: openLoc?.startOffset ?? 0, // updated on close
+		endOffset: openLoc?.startOffset ?? 0, // updated below once the extent is known
 		startLine: openLoc?.startLine ?? 1,
 		startCol: openLoc?.startCol ?? 1,
 		isDocumentLevel: DOCUMENT_LEVEL_TAGS.has(el.tagName),
@@ -575,52 +464,32 @@ function lowerBName(el: SourceElement, bNameAttr: SourceAttr, st: St, sc: SlotCo
 	partialRoot.exported = el.attrs.some(a => a.name === 'b-export');
 	ctx.compiledFile.partials.set(partialName, partialRoot);
 
-	st.root = partialRoot;
-	st.name = partialName;
+	const pctx: PartialCtx = { ...ctx, root: partialRoot, name: partialName };
 
 	if (el.tagName === 'b-unwrap') {
-		// Don't emit a wrapping element; body content flows directly into partialRoot.tnodes.
-		st.curTnode = null;
-		st.curParent = partialRoot;
-		if (!el.selfClosing) {
-			lowerChildren(el.children, st, sc, depth + 1, ctx);
-			closeElement(el, st, depth, ctx);
-		}
-		// Self-closing: the partial stays "open" (following top-level content
-		// flows into it) and meta.endOffset keeps its initial value — the old
-		// code only updated it in the non-b-unwrap branch.
+		// Don't emit a wrapping element; body content is the partial's tnodes.
+		if (isContainer(el)) lowerInto(partialRoot.tnodes, el.children, pctx);
 	} else {
-		const elem = buildElement(el, ['b-name', 'b-export'], st, ctx);
+		const elem = buildElement(el, ['b-name', 'b-export'], pctx);
+		if (isContainer(el)) lowerInto(elem.tnodes, el.children, pctx);
 		partialRoot.tnodes.push(elem);
-		st.curTnode = elem;
-		st.curParent = elem;
-		if (isContainer(el)) {
-			lowerChildren(el.children, st, null, depth + 1, ctx);
-			closeElement(el, st, depth, ctx, { tnode: elem, parent: partialRoot });
-		} else {
-			// Self-closing or void element: end offset is end of this tag. The
-			// cursor stays inside `elem` (pre-existing quirk: following top-level
-			// content nests inside the void root element).
-			partialRoot.meta!.endOffset = (openLoc?.startOffset ?? 0) + el.rawOpenTag.length;
-		}
 	}
+
+	const endOffset = definitionEndOffset(el);
+	if (endOffset !== undefined) partialRoot.meta!.endOffset = endOffset;
 }
 
-function lowerCustomElementDefinition(el: SourceElement, st: St, sc: SlotCollection | null, depth: number, ctx: Ctx): void {
-	// Pre-conditions: top level (depth === 0), no partial open, no b-name attr,
-	// and isCustomElementTagName(el.tagName) — the dispatcher guarantees these.
+function lowerCustomElementDefinition(el: SourceElement, ctx: Ctx): void {
+	// Pre-conditions: top level, no b-name attr, and isCustomElementTagName —
+	// lowerTopLevelNode guarantees these.
 
-	for (const flow of ['b-if', 'b-for', 'b-else-if', 'b-else'] as const) {
-		if (findAttr(el, flow)) {
-			ctx.errors.push(new BackflipError(`${flow} is not allowed on a partial definition`, attrErrLoc(el, flow, ctx)));
-		}
-	}
+	reportFlowOnDefinition(el, ctx);
 
 	const partialName = el.tagName;
 	const openLoc = el.openLoc;
 	const partialRoot: CustomElementPartialRoot = { type: 'root', kind: 'custom-element', tnodes: [], meta: {
 		startOffset: openLoc?.startOffset ?? 0,
-		endOffset: openLoc?.startOffset ?? 0, // updated on close
+		endOffset: openLoc?.startOffset ?? 0, // updated below once the extent is known
 		startLine: openLoc?.startLine ?? 1,
 		startCol: openLoc?.startCol ?? 1,
 		isDocumentLevel: false,
@@ -720,94 +589,70 @@ function lowerCustomElementDefinition(el: SourceElement, st: St, sc: SlotCollect
 
 	ctx.compiledFile.partials.set(partialName, partialRoot);
 
-	st.root = partialRoot;
-	st.name = partialName;
+	const pctx: PartialCtx = { ...ctx, root: partialRoot, name: partialName };
 
 	// For custom element partials, the open tag is rendered by the call site (merged
 	// with caller-side attrs into one tag), so no wrapping ElementTNode is constructed.
 	// The definition-side attrs are stored as a flat AttrPart[] for the call-site renderer
 	// to emit in childCtx.
-	partialRoot.definitionAttrs = buildAttrPartsFromTag(el, ['b-export', 'b-script'], st, ctx);
-	st.curTnode = null;
-	st.curParent = partialRoot;
-	if (isContainer(el)) {
-		lowerChildren(el.children, st, sc, depth + 1, ctx);
-		closeElement(el, st, depth, ctx);
-	} else {
-		partialRoot.meta!.endOffset = (openLoc?.startOffset ?? 0) + el.rawOpenTag.length;
-	}
+	partialRoot.definitionAttrs = buildAttrPartsFromTag(el, ['b-export', 'b-script'], pctx);
+	if (isContainer(el)) lowerInto(partialRoot.tnodes, el.children, pctx);
+
+	const endOffset = definitionEndOffset(el);
+	if (endOffset !== undefined) partialRoot.meta!.endOffset = endOffset;
 }
 
-// Build the wrapping ForTNode / IfTNode (or just append a new IfBranch for
-// b-else / b-else-if) for a flow directive. Returns:
-//   - `container`: where the directive's body content (open tag, partial-ref, etc.)
-//     should be pushed (the for_node itself, or the new IfBranch).
-//   - `outer`: the outer structural node, i.e. the ForTNode or IfTNode. Equal to
-//     `container` for b-for; the enclosing IfTNode for b-if / b-else-if / b-else.
-// On error (bad b-for syntax, dangling b-else, etc.), pushes the error and
-// returns null — the caller falls back to lowerFallbackTag.
-// Shared between the regular flow handler and the custom-element-call-with-flow handler.
-function setupFlowContainer(el: SourceElement, flowAttr: SourceAttr, st: St, sc: SlotCollection | null, ctx: Ctx): { container: ParentTNode, outer: TNode, outerParent: ParentTNode } | null {
-	const flowParent: ParentTNode = sc
-		? sc.partialRefParent
-		: (st.curParent ?? st.root!);
+// --- flow directives ---
 
+/**
+ * Build the wrapping ForTNode / IfTNode for a flow directive, or append a new
+ * IfBranch to the b-if among `siblings` for b-else / b-else-if. Returns:
+ *   - `container`: where the directive's body (the element, partial-ref, or
+ *     b-unwrap body) goes — the for_node itself, or the new IfBranch.
+ *   - `emit`: the node(s) the caller must append to `siblings`. Empty for
+ *     b-else / b-else-if, whose branch joins an if node already emitted.
+ * On error (bad b-for syntax, dangling b-else, etc.), pushes the error and
+ * returns null — the caller falls back to lowerFallbackTag.
+ */
+function setupFlow(el: SourceElement, flowAttr: SourceAttr, pctx: PartialCtx, siblings: TNode[]): { container: ParentTNode, emit: TNode[] } | null {
 	if (flowAttr.name === 'b-for') {
 		const parsed = parseBForValue(flowAttr.value);
 		if ('error' in parsed) {
-			ctx.errors.push(new BackflipError(parsed.error, attrErrLoc(el, 'b-for', ctx)));
+			ctx_error(pctx, parsed.error, attrErrLoc(el, 'b-for', pctx));
 			return null;
 		}
 		for (const err of parsed.iterable.errs) {
-			ctx.errors.push(new BackflipError(err, attrErrLoc(el, 'b-for', ctx)));
+			ctx_error(pctx, err, attrErrLoc(el, 'b-for', pctx));
 		}
 		const for_node: ForTNode = { type: 'for', iterable: parsed.iterable, valName: parsed.valName, tnodes: [] };
 		for_node.loc = findAttrLoc(el, 'b-for');
-		if (sc) pushNodeHere(for_node, st, sc);
-		else flowParent.tnodes!.push(for_node);
-		return { container: for_node, outer: for_node, outerParent: flowParent };
+		return { container: for_node, emit: [for_node] };
 	}
 
 	if (flowAttr.name === 'b-if') {
 		const if_node: IfTNode = { type: 'if', branches: [] };
-		const branch: IfBranch = { condition: interpretBackcodeAt(flowAttr.value, attrErrLoc(el, 'b-if', ctx), ctx), tnodes: [] };
+		const branch: IfBranch = { condition: interpretBackcodeAt(flowAttr.value, attrErrLoc(el, 'b-if', pctx), pctx), tnodes: [] };
 		branch.loc = findAttrLoc(el, 'b-if');
 		if_node.branches.push(branch);
-		if (sc) pushNodeHere(if_node, st, sc);
-		else flowParent.tnodes!.push(if_node);
-		return { container: branch, outer: if_node, outerParent: flowParent };
+		return { container: branch, emit: [if_node] };
 	}
 
-	// b-else-if / b-else: chain onto a preceding b-if among current siblings.
-	if (!st.curTnode) {
-		ctx.errors.push(new BackflipError("b-else-if/b-else must follow a b-if block", attrErrLoc(el, flowAttr.name, ctx)));
-		return null;
-	}
-	let if_node: IfTNode | null;
-	if (sc) {
-		const arr = sc.partialRef.slots[sc.currentSlot] || [];
-		if_node = findPrecedingIf(arr);
-	} else {
-		// The cursor itself may be the if node (right after the flow element
-		// closed); otherwise scan the current container's siblings backwards,
-		// skipping whitespace-only raws.
-		if_node = st.curTnode.type === 'if'
-			? st.curTnode
-			: (st.curParent ? findPrecedingIf(st.curParent.tnodes!) : null);
-	}
+	// b-else-if / b-else: chain onto the b-if immediately preceding among the
+	// siblings built so far.
+	const if_node = findPrecedingIf(siblings);
 	if (!if_node) {
-		ctx.errors.push(new BackflipError("b-else-if/b-else must follow a b-if block", attrErrLoc(el, flowAttr.name, ctx)));
+		ctx_error(pctx, "b-else-if/b-else must follow a b-if block", attrErrLoc(el, flowAttr.name, pctx));
 		return null;
 	}
 	if (flowAttr.name === 'b-else' && flowAttr.value) {
-		ctx.errors.push(new BackflipError("b-else should not have a value", attrErrLoc(el, 'b-else', ctx)));
+		ctx_error(pctx, "b-else should not have a value", attrErrLoc(el, 'b-else', pctx));
 		// fall through — branch is still added so the structure stays correct
 	}
-	const condition = flowAttr.name === 'b-else-if' ? interpretBackcodeAt(flowAttr.value, attrErrLoc(el, 'b-else-if', ctx), ctx) : undefined;
+	const condition = flowAttr.name === 'b-else-if' ? interpretBackcodeAt(flowAttr.value, attrErrLoc(el, 'b-else-if', pctx), pctx) : undefined;
 	const branch: IfBranch = { condition, tnodes: [] };
 	branch.loc = findAttrLoc(el, flowAttr.name);
 	if_node.branches.push(branch);
-	return { container: branch, outer: if_node, outerParent: flowParent };
+	return { container: branch, emit: [] };
 }
 
 // Scan a sibling list backwards for the IfTNode a b-else / b-else-if chains to,
@@ -823,18 +668,35 @@ function findPrecedingIf(siblings: TNode[]): IfTNode | null {
 	return null;
 }
 
-// Build the PartialRefTNode for a custom element call site. Does NOT push it
-// into a parent — the caller decides where it lives (directly under the
-// current parent for plain calls, inside a flow node's container for
-// `<my-elem b-for|if|...>` calls).
-function buildCustomElementPartialRef(el: SourceElement, st: St, ctx: Ctx): CustomElementCallTNode {
-	const bindings = collectBDataBindings(el, ctx);
+// Handle a flow directive (b-for, b-if, b-else-if, b-else) on a regular
+// (non-custom-element) tag. If the carrying tag isn't b-unwrap, an ElementTNode
+// nests inside the flow container so the tag renders inside each iteration /
+// branch.
+function lowerFlowOnRegularTag(el: SourceElement, flowAttr: SourceAttr, pctx: PartialCtx, siblings: TNode[]): TNode[] {
+	const fc = setupFlow(el, flowAttr, pctx, siblings);
+	if (!fc) return lowerFallbackTag(el, pctx);
+	if (el.tagName === 'b-unwrap') {
+		// Body flows directly into the flow container (no wrapping element).
+		if (isContainer(el)) lowerInto(fc.container.tnodes!, el.children, pctx);
+	} else {
+		const elem = buildElement(el, [flowAttr.name], pctx);
+		if (isContainer(el)) lowerInto(elem.tnodes, el.children, pctx);
+		fc.container.tnodes!.push(elem);
+	}
+	return fc.emit;
+}
+
+// --- call sites ---
+
+// Build the PartialRefTNode for a custom element call site.
+function buildCustomElementPartialRef(el: SourceElement, pctx: PartialCtx): CustomElementCallTNode {
+	const bindings = collectBDataBindings(el, pctx);
 
 	// Flow directives on the call site are consumed by the wrapping ForTNode /
 	// IfTNode (built in lowerCustomElementCallWithFlow) and must never appear in
 	// the rendered tag. They're excluded here so the AttrPart[] doesn't contain them.
 	// In the non-flow call path they're absent anyway, so the extra excludes are no-ops.
-	const callerAttrs = buildAttrPartsFromTag(el, ['b-export', 'b-if', 'b-for', 'b-else', 'b-else-if'], st, ctx);
+	const callerAttrs = buildAttrPartsFromTag(el, ['b-export', 'b-if', 'b-for', 'b-else', 'b-else-if'], pctx);
 
 	const callerAttrInfos: NonNullable<CustomElementCallTNode['callerAttrInfos']> = [];
 	for (const attr of el.attrs) {
@@ -886,66 +748,42 @@ function buildCustomElementPartialRef(el: SourceElement, st: St, ctx: Ctx): Cust
 	return partialRef;
 }
 
-function lowerCustomElementCall(el: SourceElement, st: St, sc: SlotCollection | null, depth: number, ctx: Ctx): void {
-	// Pre-conditions: not a top-level definition, isCustomElementTagName, no
-	// b-name / b-part / flow directive (see lowerCustomElementCallWithFlow for
-	// flow). Inside a partial (the dispatcher's "skip outside partial" path
-	// runs before this).
-	const oldParent: ParentTNode | null = st.curParent;
-	const containerParent: ParentTNode = st.curParent ?? st.root!;
-	const partialRef = buildCustomElementPartialRef(el, st, ctx);
-	pushNodeHere(partialRef, st, sc);
-
-	if (isContainer(el)) {
-		// Switch to slot mode: curParent = null so body content routes into the
-		// partial-ref's default slot (until a child opens a new container which
-		// sets its own curParent).
-		st.curParent = null;
-		st.curTnode = null;
-		const childSc: SlotCollection = { partialRef, partialRefParent: containerParent, currentSlot: 'default' };
-		lowerChildren(el.children, st, childSc, depth + 1, ctx);
-		closeElement(el, st, depth, ctx, { tnode: partialRef, parent: oldParent });
+/**
+ * Lower the body of a call site into `partialRef`'s slots. This is the only
+ * place slot routing exists: `slotName` is the slot the body's own children
+ * land in, and a `b-in` child (which only the `callBody` argument below makes
+ * meaningful) diverts itself or its children elsewhere.
+ */
+function lowerCallBody(children: SourceNode[], partialRef: PartialRefTNode, slotName: string, pctx: PartialCtx): void {
+	const arr = (partialRef.slots[slotName] ??= []);
+	for (const child of children) {
+		for (const n of lowerNode(child, pctx, arr, partialRef)) appendCoalesced(arr, n);
 	}
-	// Self-closing: the cursor is deliberately NOT advanced (pre-existing
-	// quirk: following text merges into the raw before the call).
+}
+
+function lowerCustomElementCall(el: SourceElement, pctx: PartialCtx): TNode[] {
+	// Pre-conditions: isCustomElementTagName, no b-name / b-part / flow directive
+	// (see lowerCustomElementCallWithFlow for flow), inside a partial.
+	const partialRef = buildCustomElementPartialRef(el, pctx);
+	if (isContainer(el)) lowerCallBody(el.children, partialRef, 'default', pctx);
+	return [partialRef];
 }
 
 // `<my-elem b-for|if|else-if|else>` — the call site is wrapped in a ForTNode
 // or IfTNode (semantically identical to <b-unwrap b-for=...><my-elem>...</my-elem></b-unwrap>).
-function lowerCustomElementCallWithFlow(el: SourceElement, flowAttr: SourceAttr, st: St, sc: SlotCollection | null, depth: number, ctx: Ctx): void {
-	const oldParent: ParentTNode | null = st.curParent;
-	const fc = setupFlowContainer(el, flowAttr, st, sc, ctx);
-	if (!fc) return lowerFallbackTag(el, st, sc, depth, ctx);
-	const partialRef = buildCustomElementPartialRef(el, st, ctx);
+function lowerCustomElementCallWithFlow(el: SourceElement, flowAttr: SourceAttr, pctx: PartialCtx, siblings: TNode[]): TNode[] {
+	const fc = setupFlow(el, flowAttr, pctx, siblings);
+	if (!fc) return lowerFallbackTag(el, pctx);
+	const partialRef = buildCustomElementPartialRef(el, pctx);
 	fc.container.tnodes!.push(partialRef);
-	if (isContainer(el)) {
-		// Slot mode for body content (routes into partial-ref.slots.default).
-		// On close, the cursor is repositioned at fc.outer so that a following
-		// b-else can chain to this if_node among siblings of fc.outerParent.
-		st.curParent = null;
-		st.curTnode = null;
-		const childSc: SlotCollection = { partialRef, partialRefParent: fc.container, currentSlot: 'default' };
-		lowerChildren(el.children, st, childSc, depth + 1, ctx);
-		closeElement(el, st, depth, ctx, { tnode: fc.outer, parent: fc.outerParent });
-	} else {
-		// Self-closing call: restore curParent (no body to process).
-		st.curParent = oldParent;
-		st.curTnode = fc.outer;
-	}
+	if (isContainer(el)) lowerCallBody(el.children, partialRef, 'default', pctx);
+	return fc.emit;
 }
 
-function lowerBPart(el: SourceElement, bPartAttr: SourceAttr, st: St, sc: SlotCollection | null, depth: number, ctx: Ctx): void {
-	// b-part outside any partial is ignored
-	if (st.root === null) {
-		if (isContainer(el)) {
-			lowerChildren(el.children, st, sc, depth + 1, ctx);
-			closeElement(el, st, depth, ctx);
-		}
-		return;
-	}
+function lowerBPart(el: SourceElement, bPartAttr: SourceAttr, pctx: PartialCtx): TNode[] {
 	const { file, partialName } = parseBPartValue(bPartAttr.value);
 
-	const bindings = collectBDataBindings(el, ctx);
+	const bindings = collectBDataBindings(el, pctx);
 
 	const partialRef: BPartCallTNode = {
 		type: 'partial-ref',
@@ -958,163 +796,76 @@ function lowerBPart(el: SourceElement, bPartAttr: SourceAttr, st: St, sc: SlotCo
 	};
 	partialRef.loc = findAttrLoc(el, 'b-part');
 
-	const oldParent: ParentTNode | null = st.curParent;
-	const containerParent: ParentTNode = st.curParent ?? st.root!;
-
-	let outerNode: TNode;
+	let out: TNode[];
 	if (el.tagName === 'b-unwrap') {
-		// No wrapping element; the partial-ref is emitted directly into the parent.
-		pushNodeHere(partialRef, st, sc);
-		outerNode = partialRef;
+		// No wrapping element; the partial-ref is emitted directly.
+		out = [partialRef];
 	} else {
-		// Build a wrapping ElementTNode whose single child is the partial-ref.
-		// The wrapping element's attrs come from the source tag (excluding b-part / b-data:*).
-		const elem = buildElement(el, ['b-part'], st, ctx);
+		// A wrapping ElementTNode whose single child is the partial-ref. Its attrs
+		// come from the source tag (excluding b-part / b-data:*).
+		const elem = buildElement(el, ['b-part'], pctx);
 		elem.tnodes.push(partialRef);
-		pushNodeHere(elem, st, sc);
-		outerNode = elem;
+		out = [elem];
 	}
 
-	if (isContainer(el)) {
-		// Slot mode: curParent = null routes body content into partialRef.slots.default.
-		st.curParent = null;
-		st.curTnode = null;
-		const childSc: SlotCollection = { partialRef, partialRefParent: containerParent, currentSlot: 'default' };
-		lowerChildren(el.children, st, childSc, depth + 1, ctx);
-		closeElement(el, st, depth, ctx, { tnode: outerNode, parent: oldParent });
-	}
-	// Self-closing: cursor not advanced (same quirk as self-closing calls).
+	if (isContainer(el)) lowerCallBody(el.children, partialRef, 'default', pctx);
+	return out;
 }
 
-function lowerBSlot(el: SourceElement, bSlotAttr: SourceAttr, st: St, sc: SlotCollection | null, depth: number, ctx: Ctx): void {
-	// b-slot outside any partial is ignored
-	if (st.root === null) {
-		if (isContainer(el)) {
-			lowerChildren(el.children, st, sc, depth + 1, ctx);
-			closeElement(el, st, depth, ctx);
-		}
-		return;
-	}
+// --- slots ---
+
+function lowerBSlot(el: SourceElement, bSlotAttr: SourceAttr, pctx: PartialCtx): TNode[] {
 	const slotName = bSlotAttr.value !== '' ? bSlotAttr.value : undefined;
 	const slot_node: SlotTNode = { type: 'slot', name: slotName };
 	slot_node.loc = findAttrLoc(el, 'b-slot');
 
 	if (el.tagName === 'b-unwrap') {
-		// No wrapping element; the slot insertion point is emitted directly.
-		// Body content (default content of the slot tag) follows as siblings of slot_node.
-		pushNodeHere(slot_node, st, sc);
-		st.curTnode = slot_node;
-		// curParent unchanged.
-		if (!el.selfClosing) {
-			lowerChildren(el.children, st, sc, depth + 1, ctx);
-			closeElement(el, st, depth, ctx);
-		}
-	} else {
-		// Build wrapping ElementTNode with the slot insertion point as its first child;
-		// any body content of the b-slot tag follows as later children of the element.
-		const elem = buildElement(el, ['b-slot'], st, ctx);
-		elem.tnodes.push(slot_node);
-		const oldParent: ParentTNode | null = st.curParent;
-		pushNodeHere(elem, st, sc);
-		st.curParent = elem;
-		st.curTnode = slot_node;
-		if (isContainer(el)) {
-			lowerChildren(el.children, st, null, depth + 1, ctx);
-			closeElement(el, st, depth, ctx, { tnode: elem, parent: oldParent });
-		}
-		// Self-closing/void: curParent deliberately stays on `elem`
-		// (pre-existing quirk: following siblings nest inside the element).
+		// No wrapping element; the slot insertion point is emitted directly, and
+		// the tag's body (the slot's default content) follows as its siblings.
+		const out: TNode[] = [slot_node];
+		if (isContainer(el)) lowerInto(out, el.children, pctx);
+		return out;
 	}
+	// Wrapping ElementTNode with the slot insertion point as its first child; any
+	// body content follows as later children of the element.
+	const elem = buildElement(el, ['b-slot'], pctx);
+	elem.tnodes.push(slot_node);
+	if (isContainer(el)) lowerInto(elem.tnodes, el.children, pctx);
+	return [elem];
 }
 
-function lowerBIn(el: SourceElement, bInAttr: SourceAttr, st: St, sc: SlotCollection, depth: number, ctx: Ctx): void {
+/**
+ * `b-in` on a direct child of a call body: route content into a named slot.
+ * Produces no output of its own — it fills the target slot itself.
+ */
+function lowerBIn(el: SourceElement, bInAttr: SourceAttr, partialRef: PartialRefTNode, pctx: PartialCtx): TNode[] {
 	const slotName = bInAttr.value || 'default';
-	if (!sc.partialRef.slots[slotName]) {
-		sc.partialRef.slots[slotName] = [];
+	if (!partialRef.slots[slotName]) {
+		partialRef.slots[slotName] = [];
 	}
 	const bInLoc = findAttrLoc(el, 'b-in');
 	if (bInLoc) {
-		if (!sc.partialRef.slotLocs) sc.partialRef.slotLocs = {};
-		sc.partialRef.slotLocs[slotName] = bInLoc;
+		if (!partialRef.slotLocs) partialRef.slotLocs = {};
+		partialRef.slotLocs[slotName] = bInLoc;
 	}
 
 	if (el.tagName === 'b-unwrap') {
-		// Switch slot context only; no wrapping element. Body content routes into the new slot.
-		// (A self-closing <b-unwrap b-in/> simply has no body; the old streaming
-		// compiler instead poisoned its tag stack here — see parse-tree.ts.)
-		const childSc: SlotCollection = { partialRef: sc.partialRef, partialRefParent: sc.partialRefParent, currentSlot: slotName };
-		lowerChildren(el.children, st, childSc, depth + 1, ctx);
-		closeElement(el, st, depth, ctx);
+		// Switch the target slot for this tag's own children; no wrapping element.
+		// (A self-closing <b-unwrap b-in/> simply has no body — the named slot is
+		// created and stays empty.)
+		lowerCallBody(el.children, partialRef, slotName, pctx);
 	} else {
-		// Build wrapping ElementTNode for the carrying tag, pushed directly into the target
-		// slot array. Body content nests inside that element.
-		const elem = buildElement(el, ['b-in'], st, ctx);
-		sc.partialRef.slots[slotName].push(elem);
-		const oldParent: ParentTNode | null = st.curParent;
-		st.curParent = elem;
-		st.curTnode = elem;
-		if (isContainer(el)) {
-			lowerChildren(el.children, st, null, depth + 1, ctx);
-			closeElement(el, st, depth, ctx, { tnode: elem, parent: oldParent });
-		} else {
-			st.curParent = oldParent;
-			st.curTnode = elem;
-		}
+		// The carrying tag becomes an element pushed into the target slot; its body
+		// nests inside it.
+		const elem = buildElement(el, ['b-in'], pctx);
+		if (isContainer(el)) lowerInto(elem.tnodes, el.children, pctx);
+		partialRef.slots[slotName].push(elem);
 	}
+	return [];
 }
 
-// Handle a flow directive (b-for, b-if, b-else-if, b-else) on a regular
-// (non-custom-element) tag. The wrapping ForTNode/IfTNode/IfBranch comes
-// from setupFlowContainer; if the carrying tag isn't b-unwrap, we then nest
-// an ElementTNode inside that container so the tag is rendered inside each
-// iteration / branch.
-function lowerFlowOnRegularTag(el: SourceElement, flowAttr: SourceAttr, st: St, sc: SlotCollection | null, depth: number, ctx: Ctx): void {
-	const oldParent: ParentTNode | null = st.curParent;
-	const fc = setupFlowContainer(el, flowAttr, st, sc, ctx);
-	if (!fc) return lowerFallbackTag(el, st, sc, depth, ctx);
-	if (el.tagName === 'b-unwrap') {
-		// Body flows directly into fc.container (no wrapping element).
-		st.curParent = fc.container;
-		st.curTnode = null;
-		if (!el.selfClosing) {
-			lowerChildren(el.children, st, null, depth + 1, ctx);
-			// On close, resume at fc.outer (the wrapping if_node/for_node) so that
-			// b-else-if/b-else can chain to it among siblings of fc.outerParent.
-			closeElement(el, st, depth, ctx, { tnode: fc.outer, parent: fc.outerParent });
-		} else {
-			st.curParent = oldParent;
-			st.curTnode = fc.outer;
-		}
-	} else {
-		const elem = buildElement(el, [flowAttr.name], st, ctx);
-		fc.container.tnodes!.push(elem);
-		st.curParent = elem;
-		st.curTnode = elem;
-		if (isContainer(el)) {
-			lowerChildren(el.children, st, null, depth + 1, ctx);
-			// The close entry holds fc.outer (not the element) for b-else
-			// chaining, which is also why flow-wrapped elements never get a
-			// closeTagLoc.
-			closeElement(el, st, depth, ctx, { tnode: fc.outer, parent: fc.outerParent });
-		} else {
-			st.curParent = oldParent;
-			st.curTnode = fc.outer;
-		}
-	}
-}
-
-function lowerRegularTag(el: SourceElement, st: St, sc: SlotCollection | null, depth: number, ctx: Ctx): void {
-	const elem = buildElement(el, [], st, ctx);
-	const oldParent: ParentTNode | null = st.curParent;
-	pushNodeHere(elem, st, sc);
-	st.curParent = elem;
-	st.curTnode = elem;
-	if (isContainer(el)) {
-		lowerChildren(el.children, st, null, depth + 1, ctx);
-		closeElement(el, st, depth, ctx, { tnode: elem, parent: oldParent });
-	} else {
-		// Self-closing or void: no body to process; restore.
-		st.curParent = oldParent;
-		st.curTnode = elem;
-	}
+function lowerRegularTag(el: SourceElement, pctx: PartialCtx): TNode[] {
+	const elem = buildElement(el, [], pctx);
+	if (isContainer(el)) lowerInto(elem.tnodes, el.children, pctx);
+	return [elem];
 }
