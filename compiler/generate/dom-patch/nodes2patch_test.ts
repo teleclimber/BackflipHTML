@@ -175,8 +175,8 @@ Deno.test("end-to-end: print of a live var wraps it in marker comments and patch
 	assertEquals(js.includes('sel_bf0()'), true);
 	assertEquals(js.includes('bc_print_bf1(data)'), true);
 	assertEquals(js.includes('mutate_name'), true);
-	assertEquals(js.includes("this.patchTextBetween(elem, 'bfid:bf1', 'bfid:bf2', String(this.bc_print_bf1(data)));"), true);
-	assertEquals(js.includes('patchTextBetween(parent, startMarker, endMarker, text)'), true);
+	assertEquals(js.includes("this.replaceBetween(elem, 'bfid:bf1', 'bfid:bf2', document.createTextNode(String(this.bc_print_bf1(data))));"), true);
+	assertEquals(js.includes('replaceBetween(parent, startMarker, endMarker, node)'), true);
 });
 
 Deno.test("end-to-end: print directly in the custom element targets this.ce", async () => {
@@ -192,7 +192,7 @@ Deno.test("end-to-end: print directly in the custom element targets this.ce", as
 	assertEquals(js.includes('sel_'), false);
 	assertEquals(js.includes('querySelector'), false);
 	assertEquals(js.includes('elem = this.ce;'), true);
-	assertEquals(js.includes("this.patchTextBetween(elem, 'bfid:bf0', 'bfid:bf1', String(this.bc_print_bf0(data)));"), true);
+	assertEquals(js.includes("this.replaceBetween(elem, 'bfid:bf0', 'bfid:bf1', document.createTextNode(String(this.bc_print_bf0(data))));"), true);
 });
 
 Deno.test("end-to-end: print mixing live and non-live vars => no comments, no class", async () => {
@@ -252,4 +252,129 @@ Deno.test("end-to-end: definition-root attr does NOT cause a data-bfid to be app
 	const defAttrs = root.definitionAttrs ?? [];
 	const anyBfid = defAttrs.some(a => a.type === 'static' && a.raw.includes('data-bfid'));
 	assertEquals(anyBfid, false);
+});
+
+// --- if-sets ---------------------------------------------------------------
+
+Deno.test("end-to-end: an if-set is bracketed by markers and its parent gets a bfid", async () => {
+	const file = await compileCustomElement(
+		`<my-widget b-attr:mode><div><p b-if="mode == 'a'">A</p><em b-else>B</em></div></my-widget>`
+	);
+	const { js, needsRender } = applyDomPatch(file, { bfidGen: makeSequentialBfidGen() });
+	if (!js) throw new Error('expected js');
+	assertEquals(needsRender, true);
+
+	// Markers bracket the whole set (one pair, not one per branch), inside the <div>.
+	const root = file.partials.get('my-widget')!;
+	assertEquals(collectComments(root.tnodes), ['bfid:bf1', 'bfid:bf2']);
+	// The <div> is the nearest enclosing element, so it anchors the lookup.
+	const div = root.tnodes.find((n: any) => n.type === 'element') as ElementTNode;
+	assertEquals(div.attrs.some(a => a.type === 'static' && a.raw.includes('data-bfid="bf0"')), true);
+
+	assertEquals(js.includes("import { render } from './render.js';"), true);
+	assertEquals(js.includes('const bfif_bf1 = '), true);
+	assertEquals(js.includes('branch_bf1(data)'), true);
+	assertEquals(js.includes('renderIf_bf1(data)'), true);
+	assertEquals(js.includes("this.replaceBetween(elem, 'bfid:bf1', 'bfid:bf2', frag);"), true);
+	assertEquals(js.includes('this.if_bf1 = this.branch_bf1(this.collectData());'), true);
+});
+
+Deno.test("end-to-end: an if-set directly in the custom element targets this.ce", async () => {
+	const file = await compileCustomElement(
+		`<my-widget b-attr:mode><p b-if="mode == 'a'">A</p><em b-else>B</em></my-widget>`
+	);
+	const { js } = applyDomPatch(file, { bfidGen: makeSequentialBfidGen() });
+	if (!js) throw new Error('expected js');
+	const root = file.partials.get('my-widget')!;
+	assertEquals(collectComments(root.tnodes), ['bfid:bf0', 'bfid:bf1']);
+	assertEquals(js.includes('const elem = this.ce;'), true);
+	assertEquals(js.includes('querySelector'), false);
+});
+
+Deno.test("end-to-end: the if-set snapshot is taken after pass-1 markers are added", async () => {
+	// Ordering regression: the snapshot must carry the data-bfid and print markers
+	// added while collecting attr/print sites, or a client-rendered branch would
+	// drop the anchors the server-rendered HTML has and stop being patchable.
+	const file = await compileCustomElement(
+		`<my-widget b-attr:mode b-attr:name><div b-if="mode == 'a'"><p :title="name">Hi {{ name }}</p></div><em b-else>B</em></my-widget>`
+	);
+	const { js } = applyDomPatch(file, { bfidGen: makeSequentialBfidGen() });
+	if (!js) throw new Error('expected js');
+
+	const snapshot = js.slice(js.indexOf('const bfif_'), js.indexOf('export class'));
+	// The <p>'s bfid (used by mutate_name's setAttribute) is inside the snapshot...
+	const bfidMatch = js.match(/sel_(bf\d+)\(\)/)!;
+	assertEquals(snapshot.includes(`data-bfid="${bfidMatch[1]}"`), true);
+	// ...as are the print's marker comments.
+	const printMarkers = js.match(/this\.replaceBetween\(elem, '(bfid:bf\d+)', '(bfid:bf\d+)', document\.createTextNode/)!;
+	assertEquals(snapshot.includes(`{ type: 'comment', text: '${printMarkers[1]}' }`), true);
+	assertEquals(snapshot.includes(`{ type: 'comment', text: '${printMarkers[2]}' }`), true);
+});
+
+Deno.test("end-to-end: renderImportPath option sets the import specifier", async () => {
+	const file = await compileCustomElement(
+		`<my-widget b-attr:mode><p b-if="mode == 'a'">A</p><em b-else>B</em></my-widget>`
+	);
+	const { js } = applyDomPatch(file, { bfidGen: makeSequentialBfidGen(), renderImportPath: '../../render.js' });
+	assertEquals(js!.includes("import { render } from '../../render.js';"), true);
+});
+
+Deno.test("end-to-end: a partial with no if-set imports nothing and needsRender is false", async () => {
+	const file = await compileCustomElement(
+		`<my-widget b-attr:title><span :data-x="title">hi</span></my-widget>`
+	);
+	const { js, needsRender } = applyDomPatch(file, { bfidGen: makeSequentialBfidGen() });
+	assertEquals(needsRender, false);
+	assertEquals(js!.includes('import'), false);
+});
+
+Deno.test("end-to-end: disqualified if-sets get no markers and no class", async () => {
+	// One case per disqualifier: non-live condition var, a partial ref in the
+	// subtree, an inner set (which must stay unpatched), and a set inside b-for.
+	const cases = [
+		`<my-widget b-attr:mode><p b-if="other == 'a'">A</p><em b-else>B</em></my-widget>`,
+		`<my-widget b-attr:mode><p b-if="mode == 'a'"><other-thing></other-thing></p><em b-else>B</em></my-widget>`,
+		`<my-widget b-attr:mode><p b-if="mode == 'a'"><span b-slot></span></p><em b-else>B</em></my-widget>`,
+		`<my-widget b-attr:mode><ul><li b-for="i in items"><b b-if="mode == 'a'">A</b></li></ul></my-widget>`,
+	];
+	for (const html of cases) {
+		const file = await compileCustomElement(html);
+		const { js } = applyDomPatch(file, { bfidGen: makeSequentialBfidGen() });
+		assertEquals(js, null, `expected no class for: ${html}`);
+		assertEquals(collectComments(file.partials.get('my-widget')!.tnodes), []);
+	}
+});
+
+Deno.test("end-to-end: only the outer of two nested if-sets becomes a patch site", async () => {
+	const file = await compileCustomElement(
+		`<my-widget b-attr:a b-attr:b><p b-if="a"><b b-if="b">deep</b></p><em b-else>B</em></my-widget>`
+	);
+	const { js } = applyDomPatch(file, { bfidGen: makeSequentialBfidGen() });
+	if (!js) throw new Error('expected js');
+	// Exactly one marker pair (the outer set); the inner set is rendered statically
+	// as part of the snapshot and is not independently patchable.
+	assertEquals(collectComments(file.partials.get('my-widget')!.tnodes), ['bfid:bf0', 'bfid:bf1']);
+	assertEquals(js.match(/renderIf_/g)?.length, 2);   // the method definition + its one call in mutate_a
+	assertEquals(js.includes("case 'a':"), true);
+	// `b` only drives the nested set, which is not a patch site → no mutate for it.
+	assertEquals(js.includes("case 'b':"), false);
+});
+
+Deno.test("end-to-end: applyDomPatch is idempotent — a second run reuses markers and yields identical JS", async () => {
+	// The preview applies dom-patch twice on the same cached AST (once to render the
+	// HTML, once to emit the JS). A second run must not splice in a fresh marker pair,
+	// or the served JS would key off markers the rendered HTML never had.
+	const file = await compileCustomElement(
+		`<my-widget b-attr:mode b-attr:name><div><p b-if="mode == 'a'">Hi {{ name }}</p><em b-else>o</em></div></my-widget>`
+	);
+	const first = applyDomPatch(file, { bfidGen: makeSequentialBfidGen() });
+	const commentsAfterFirst = collectComments(file.partials.get('my-widget')!.tnodes);
+
+	// Re-run with a generator that would produce brand-new ids if anything were regenerated.
+	const second = applyDomPatch(file, { bfidGen: makeSequentialBfidGen('SECOND') });
+	const commentsAfterSecond = collectComments(file.partials.get('my-widget')!.tnodes);
+
+	assertEquals(commentsAfterSecond, commentsAfterFirst);   // no extra markers spliced in
+	assertEquals(second.js, first.js);                       // identical generated module
+	assertEquals(second.js!.includes('SECOND'), false);      // nothing regenerated
 });

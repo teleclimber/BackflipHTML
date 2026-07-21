@@ -1,10 +1,11 @@
 import { parseArgs } from '@std/cli/parse-args';
 import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { compileDirectory } from './compiler/partials.ts';
 import { loadConfig, resolveConfigRoot, resolveAssetDirs, resolveDomPatchOutputDirs, resolveDomPatchScriptUrl, type OutputConfig } from './compiler/config.ts';
 import { fileToJsModule } from './compiler/generate/js/nodes2js.ts';
 import { fileToPhpFile } from './compiler/generate/php/nodes2php.ts';
-import { applyDomPatch } from './compiler/generate/dom-patch/nodes2patch.ts';
+import { applyDomPatch, renderImportPathFor } from './compiler/generate/dom-patch/nodes2patch.ts';
 import { resolveAssetRefs } from './compiler/helpers.ts';
 import { flattenCompiledFile } from './compiler/flatten.ts';
 import { discoverAssetFileInfos, collectAllAssetReferences, validateAssetFiles, buildAssetUsageReport, filterReport } from './assets/src/index.ts';
@@ -210,6 +211,9 @@ if (args.check) {
     // place (appending `data-bfid="..."` static attrs to qualifying elements) so
     // the server-rendered HTML carries the ids the runtime class queries on.
     const domPatchJs = new Map<string, string | null>();
+    // Set when at least one generated module uses a b-if set, and so imports the
+    // JS runtime's render.js from the root of the dom-patch output dir.
+    let domPatchNeedsRender = false;
     if (outputs.some(o => o.lang === 'dom-patch')) {
         // Each reactive partial is stamped with its script's public URL (derived
         // from the asset prefix covering the dom-patch output dir) so the runtime
@@ -219,8 +223,12 @@ if (args.check) {
         let warnedUnservable = false;
         for (const [relPath, compiledFile] of result.files) {
             const scriptUrl = config ? (resolveDomPatchScriptUrl(Deno.cwd(), config, relPath) ?? undefined) : undefined;
-            const { js } = applyDomPatch(compiledFile, scriptUrl !== undefined ? { scriptUrl } : undefined);
+            // Output mirrors the template's relative path, so a nested module needs a
+            // depth-relative specifier to reach render.js at the output root.
+            const renderImportPath = renderImportPathFor(relPath.replace(/\.html$/, '.js'));
+            const { js, needsRender } = applyDomPatch(compiledFile, { renderImportPath, ...(scriptUrl !== undefined ? { scriptUrl } : {}) });
             domPatchJs.set(relPath, js);
+            if (needsRender) domPatchNeedsRender = true;
             if (js && scriptUrl === undefined && domPatchDirs.length > 0 && !warnedUnservable) {
                 console.warn(`warning: dom-patch output "${domPatchDirs.join('", "')}" is not covered by an asset prefix; generated scripts will not be auto-included. Add an asset entry whose directory contains this output dir.`);
                 warnedUnservable = true;
@@ -237,6 +245,21 @@ if (args.check) {
                     }
                 }
             }
+        }
+    }
+
+    // render.js is a required build input once any module uses a b-if set: the
+    // generated code imports it. A silent skip would ship a page that 404s, so a
+    // missing dist build stops here.
+    let renderRuntimePath: string | undefined;
+    if (domPatchNeedsRender) {
+        renderRuntimePath = fileURLToPath(new URL('./dist/runtime/js/render.js', import.meta.url));
+        try {
+            Deno.statSync(renderRuntimePath);
+        } catch {
+            console.error(`Missing required runtime file: ${renderRuntimePath}`);
+            console.error('Generated dom-patch modules with a reactive b-if import render.js. Build the dist output first.');
+            Deno.exit(1);
         }
     }
 
@@ -262,6 +285,12 @@ if (args.check) {
             Deno.mkdirSync(dirname(outPath), { recursive: true });
             Deno.writeTextFileSync(outPath, generated);
             count++;
+        }
+        // The generated modules import it from the output root as './render.js'
+        // (or '../'-prefixed for nested ones).
+        if (out.lang === 'dom-patch' && renderRuntimePath) {
+            Deno.mkdirSync(out.path, { recursive: true });
+            Deno.copyFileSync(renderRuntimePath, join(out.path, 'render.js'));
         }
         console.log(`Generated ${count} ${out.lang} file${count !== 1 ? 's' : ''} to ${out.path}`);
     }

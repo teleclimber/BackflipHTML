@@ -1,27 +1,48 @@
 import type { ElementTNode, TNode } from '../../types.js';
-import type { BfidGen } from './bfid.js';
-import type { BackcodeSite } from './collect.js';
+import { commentMarker, type BfidGen } from './bfid.js';
+import { isIfSetSite, type Site } from './collect.js';
 
 const BFID_RE = /\sdata-bfid="([^"]*)"/;
+const MARKER_PREFIX = 'bfid:';
+
+// The id inside a `bfid:<id>` marker comment, or null if `text` isn't one.
+function markerId(text: string): string | null {
+	return text.startsWith(MARKER_PREFIX) ? text.slice(MARKER_PREFIX.length) : null;
+}
 
 /**
- * Insert two comment nodes as immediate siblings bracketing `node` within its
- * container array — `beforeText` just before it, `afterText` just after. Used to
- * mark a patchable child range (e.g. a `{{ print }}`) so the browser runtime can
- * locate and replace what's between the markers. Generic on purpose: `b-if` /
- * `b-for` ranges will reuse it.
+ * Bracket `node` with a `bfid:` marker comment pair as immediate siblings within
+ * its container array, and return the pair's ids. Used to mark a patchable child
+ * range (a `{{ print }}` or a whole `b-if` set) so the browser runtime can locate
+ * and replace what's between the markers.
+ *
+ * Idempotent: if `node` is already flanked by a marker pair, its ids are returned
+ * without touching the tree. This is what keeps `applyDomPatch` safe to run more
+ * than once on the same AST — the preview does, once to render the HTML and once
+ * to emit the JS. Without it a second run would splice in a new inner pair and the
+ * JS would key off markers the server-rendered HTML never had. `ensureBfid` gives
+ * the same guarantee for `data-bfid` attributes.
  */
-export function insertCommentsAround(
+export function ensureCommentsAround(
 	container: TNode[],
 	node: TNode,
-	beforeText: string,
-	afterText: string,
-): void {
+	gen: BfidGen,
+): { startId: string; endId: string } {
 	const idx = container.indexOf(node);
 	if (idx === -1) throw new Error('dom-patch: node not found in its container for comment insertion');
-	container.splice(idx, 0, { type: 'comment', text: beforeText });
+	const prev = container[idx - 1];
+	const next = container[idx + 1];
+	if (prev?.type === 'comment' && next?.type === 'comment') {
+		const startId = markerId(prev.text);
+		const endId = markerId(next.text);
+		if (startId !== null && endId !== null) return { startId, endId };
+	}
+	const startId = gen();
+	const endId = gen();
+	container.splice(idx, 0, { type: 'comment', text: commentMarker(startId) });
 	// `node` is now at idx+1; the closing marker goes right after it, at idx+2.
-	container.splice(idx + 2, 0, { type: 'comment', text: afterText });
+	container.splice(idx + 2, 0, { type: 'comment', text: commentMarker(endId) });
+	return { startId, endId };
 }
 
 export function ensureBfid(element: ElementTNode, bfidGen: BfidGen): string {
@@ -42,12 +63,13 @@ export function ensureBfid(element: ElementTNode, bfidGen: BfidGen): string {
  * the custom element itself, where the runtime already has a direct reference).
  * Extend the switch as new kinds become patchable.
  */
-export function elementForSite(s: BackcodeSite): ElementTNode | null {
+export function elementForSite(s: Site): ElementTNode | null {
+	// An if-set anchors to the nearest enclosing element, or this.ce when there is none.
+	if (isIfSetSite(s)) return s.parentElement;
 	switch (s.site.kind) {
 		case 'attr': return s.site.element;
 		case 'definition-root-attr': return null;
 		case 'print':
-		case 'if-condition':
 		case 'for-iterable':
 		case 'binding':
 		case 'caller-attr-expr':

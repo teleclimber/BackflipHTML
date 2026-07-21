@@ -9,10 +9,11 @@
 import { assertEquals } from "jsr:@std/assert";
 import { JSDOM } from "npm:jsdom";
 
-import type { ElementTNode, PrintTNode } from "../../types.ts";
+import type { ElementTNode, IfBranch, IfTNode, PrintTNode } from "../../types.ts";
 import { interpretBackcode } from "../../backcode.ts";
-import type { BackcodeSite } from "./collect.ts";
-import { generateClassForPartial, type BfidSite, type PatchTarget } from "./codegen.ts";
+import { render } from "../../../runtime/js/render.ts";
+import type { BackcodeSite, IfSetSite } from "./collect.ts";
+import { generateClassForPartial, type BfidSite, type IfSetPatchSite, type PatchTarget } from "./codegen.ts";
 
 function printSite(target: PatchTarget, code: string, startId: string, endId: string): BfidSite {
 	const node: PrintTNode = { type: 'print', data: interpretBackcode(code) };
@@ -36,14 +37,37 @@ function attrSite(bfid: string, name: string, code: string): BfidSite {
 	return { target: { kind: 'bfid-element', bfid }, backcode };
 }
 
+// Hand-build the codegen input for an if-set: `conditions` are the branch
+// expressions (null = b-else) and `snapshot` is the RNode literal the generated
+// module would carry as `bfif_<setId>`.
+function ifSite(
+	target: PatchTarget,
+	conditions: (string | null)[],
+	liveVars: string[],
+	setId: string,
+	endId: string,
+	snapshot: string,
+): IfSetPatchSite {
+	const branches: IfBranch[] = conditions.map(c =>
+		c === null ? { tnodes: [] } : { condition: interpretBackcode(c), tnodes: [] });
+	const node: IfTNode = { type: 'if', branches };
+	const set: IfSetSite = {
+		kind: 'if-set', node, container: [node], parentElement: null,
+		liveVars, otherVars: [], inForLoop: false, inIfSet: false,
+	};
+	return { target, ifSet: set, setId, endId, snapshot };
+}
+
 // Instantiate `js`'s class against a host built from `innerHtml`, with
-// globalThis.document pointed at the jsdom document for the duration.
+// globalThis.document pointed at the jsdom document for the duration. `render` is
+// injected the way the generated module's `import { render } from './render.js'`
+// would supply it.
 function mount(js: string, partialName: string, className: string, hostAttrs: string, innerHtml: string) {
 	const dom = new JSDOM(`<!DOCTYPE html><body><${partialName} ${hostAttrs}>${innerHtml}</${partialName}></body>`);
 	const prevDoc = (globalThis as any).document;
 	(globalThis as any).document = dom.window.document;
 	const host = dom.window.document.querySelector(partialName)!;
-	const Cls = new Function(js.replaceAll('export class', 'class') + `; return ${className};`)();
+	const Cls = new Function('render', js.replaceAll('export class', 'class') + `; return ${className};`)(render);
 	const instance = new Cls(host);
 	return { host, instance, restore: () => { (globalThis as any).document = prevDoc; } };
 }
@@ -137,6 +161,132 @@ Deno.test("exec: missing markers log an error and skip without throwing", () => 
 		assertEquals(String(errors[0][0]).includes('comment markers not found'), true);
 	} finally {
 		console.error = prevErr;
+		restore();
+	}
+});
+
+// --- if-sets ---------------------------------------------------------------
+
+// A two-branch set whose first branch contains a patchable print, mirroring what
+// the compiler emits: the branch HTML carries the same data-bfid and marker
+// comments as the server-rendered output, so it stays patchable after a swap.
+const BRANCH_A = `{ type:'raw', raw:'<p data-bfid="p0">Hi ' },
+	{ type:'comment', text:'bfid:m0' },
+	{ type:'print', data: { fn: function (name) { return name; }, vars: ['name'] } },
+	{ type:'comment', text:'bfid:m1' },
+	{ type:'raw', raw:'</p>' }`;
+
+const SET_SNAPSHOT = `{ type:'if', branches: [
+	{ condition: { fn: function (mode) { return mode == 'a'; }, vars: ['mode'] }, nodes: [ ${BRANCH_A} ] },
+	{ condition: undefined, nodes: [ { type:'raw', raw:'<em>none</em>' } ] }
+] }`;
+
+// Same set with no b-else, so a falsy condition means "render nothing".
+const NO_ELSE_SNAPSHOT = `{ type:'if', branches: [
+	{ condition: { fn: function (mode) { return mode == 'a'; }, vars: ['mode'] }, nodes: [ { type:'raw', raw:'<p>shown</p>' } ] }
+] }`;
+
+const SERVER_HTML_A = `<!--bfid:s0--><p data-bfid="p0">Hi <!--bfid:m0-->World<!--bfid:m1--></p><!--bfid:s1-->`;
+
+function mountSet(snapshot: string, hostAttrs: string, innerHtml: string, extraSites: BfidSite[] = []) {
+	const js = generateClassForPartial('my-widget',
+		[{ name: 'mode', isBool: false }, { name: 'name', isBool: false }],
+		[...extraSites, ifSite({ kind: 'this-element' }, [`mode == 'a'`, null], ['mode'], 's0', 's1', snapshot)])!;
+	return mount(js, 'my-widget', 'BackflipMyWidget', hostAttrs, innerHtml);
+}
+
+Deno.test("exec: constructing the class does not touch the DOM (server already rendered)", () => {
+	const { host, restore } = mountSet(SET_SNAPSHOT, 'mode="a" name="World"', SERVER_HTML_A);
+	try {
+		// Untouched: same markup the server produced, including the original text node.
+		assertEquals(host.innerHTML, SERVER_HTML_A);
+	} finally {
+		restore();
+	}
+});
+
+Deno.test("exec: changing the condition var swaps the branch, and back again", () => {
+	const { host, instance, restore } = mountSet(SET_SNAPSHOT, 'mode="a" name="World"', SERVER_HTML_A);
+	try {
+		host.setAttribute('mode', 'b');
+		instance.update('mode');
+		assertEquals(host.querySelector('p'), null);
+		assertEquals(host.querySelector('em')!.textContent, 'none');
+
+		host.setAttribute('mode', 'a');
+		instance.update('mode');
+		assertEquals(host.querySelector('em'), null);
+		assertEquals(host.querySelector('p')!.textContent, 'Hi World');
+
+		// Markers survive every swap, so the range stays patchable.
+		const comments = [...host.childNodes].filter((n: any) => n.nodeType === 8).map((n: any) => n.nodeValue);
+		assertEquals(comments, ['bfid:s0', 'bfid:s1']);
+	} finally {
+		restore();
+	}
+});
+
+Deno.test("exec: an unchanged branch index does not re-render", () => {
+	const { host, instance, restore } = mountSet(SET_SNAPSHOT, 'mode="a" name="World"', SERVER_HTML_A);
+	try {
+		const p = host.querySelector('p')!;
+		host.setAttribute('mode', 'a');   // still branch 0
+		instance.update('mode');
+		assertEquals(host.querySelector('p'), p);   // same node — never replaced
+	} finally {
+		restore();
+	}
+});
+
+Deno.test("exec: a set with no b-else renders nothing when no branch matches", () => {
+	const { host, instance, restore } = mountSet(NO_ELSE_SNAPSHOT, 'mode="a"', `<!--bfid:s0--><p>shown</p><!--bfid:s1-->`);
+	try {
+		host.setAttribute('mode', 'z');
+		instance.update('mode');
+		assertEquals(host.querySelector('p'), null);
+		assertEquals(host.textContent, '');
+
+		host.setAttribute('mode', 'a');
+		instance.update('mode');
+		assertEquals(host.querySelector('p')!.textContent, 'shown');
+	} finally {
+		restore();
+	}
+});
+
+Deno.test("exec: a print site inside a re-rendered branch still patches afterwards", () => {
+	// The snapshot carries the print's markers, so the freshly inserted branch is
+	// patchable exactly like the server-rendered one.
+	const print = printSite({ kind: 'bfid-element', bfid: 'p0' }, 'name', 'm0', 'm1');
+	const { host, instance, restore } = mountSet(SET_SNAPSHOT, 'mode="a" name="World"', SERVER_HTML_A, [print]);
+	try {
+		host.setAttribute('mode', 'b');
+		instance.update('mode');
+		host.setAttribute('mode', 'a');
+		instance.update('mode');
+		// Branch re-rendered from the snapshot with the current data.
+		assertEquals(host.querySelector('p')!.textContent, 'Hi World');
+
+		// And the print site inside it is still patchable.
+		host.setAttribute('name', 'Mars');
+		instance.update('name');
+		assertEquals(host.querySelector('p')!.textContent, 'Hi Mars');
+	} finally {
+		restore();
+	}
+});
+
+Deno.test("exec: re-rendering uses all live vars, not just the one that changed", () => {
+	const { host, instance, restore } = mountSet(SET_SNAPSHOT, 'mode="a" name="World"', SERVER_HTML_A);
+	try {
+		// `name` changes while the branch is inactive; the swap back must pick it up.
+		host.setAttribute('mode', 'b');
+		instance.update('mode');
+		host.setAttribute('name', 'Mars');
+		host.setAttribute('mode', 'a');
+		instance.update('mode');
+		assertEquals(host.querySelector('p')!.textContent, 'Hi Mars');
+	} finally {
 		restore();
 	}
 });
