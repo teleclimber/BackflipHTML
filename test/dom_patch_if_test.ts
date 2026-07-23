@@ -30,6 +30,17 @@ const APP_NO_IF = `<mode-badge b-attr:mode b-script="@scripts/mode-badge.js">
 	<div :data-mode="mode">x</div>
 </mode-badge>`;
 
+// A nested b-if: the outer set (mode) contains an inner set (level) whose branch
+// prints a live var. Both sets are reactive; the inner one is its own patch-branch.
+const APP_NESTED = `<mode-badge b-attr:mode b-attr:level b-script="@scripts/mode-badge.js">
+	<div b-if="mode == 'a'"><p b-if="level == 'hi'">{{ level }}</p><em b-else>lo</em></div>
+	<span b-else>other</span>
+</mode-badge>
+
+<b-unwrap b-name="page" b-export>
+	<body><mode-badge mode="a" level="hi"></mode-badge></body>
+</b-unwrap>`;
+
 /**
  * Lay out a project: templates at `templates/<relPath>`, a hand-coded entry
  * module for b-script, and a config whose dom-patch output doubles as an asset dir.
@@ -87,6 +98,29 @@ Deno.test("integration CLI: render.js is copied into the dom-patch output root",
 		const generated = await fs.readFile(path.join(workDir, "bfdom", "app.js"), "utf-8");
 		assertStringIncludes(generated, "import { render } from './render.js';");
 		assertStringIncludes(generated, "createContextualFragment");
+	} finally {
+		await fs.rm(workDir, { recursive: true, force: true });
+	}
+});
+
+Deno.test("integration CLI: a nested b-if compiles to nested patch-branch classes", async () => {
+	const workDir = await makeProject("app.html", APP_NESTED);
+	try {
+		const { code, stderr } = await runCli(workDir);
+		assertEquals(code, 0, `cli failed: ${stderr}`);
+
+		const generated = await fs.readFile(path.join(workDir, "bfdom", "app.js"), "utf-8");
+		// Two set snapshots (outer + inner) and a nested patch-branch class.
+		assertEquals((generated.match(/const bfif_/g) ?? []).length, 2);
+		assertStringIncludes(generated, "class BackflipPatch_ModeBadge {");
+		assertEquals(/class BackflipPatch_bf[0-9a-z]+_0 \{/.test(generated), true);
+		// The nested set is reached by forwarding `level` from the outer branch down.
+		assertStringIncludes(generated, "case 'mode':");
+		assertStringIncludes(generated, "case 'level':");
+
+		// Server render emitted the taken branches with both marker pairs.
+		const html = await fs.readFile(path.join(workDir, "dist", "app.js"), "utf-8");
+		assertStringIncludes(html, "data-bfid");
 	} finally {
 		await fs.rm(workDir, { recursive: true, force: true });
 	}

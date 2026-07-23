@@ -58,18 +58,18 @@ export function ensureBfid(element: ElementTNode, bfidGen: BfidGen): string {
 }
 
 /**
- * Return the element to which a `data-bfid` should be attached for this site,
- * or null if the kind doesn't anchor to a bfid-tagged element (e.g. it targets
- * the custom element itself, where the runtime already has a direct reference).
- * Extend the switch as new kinds become patchable.
+ * Return the site's **anchor element**: the nearest enclosing element whose DOM
+ * node the site patches (an attr's element, a print's / if-set's parent element),
+ * or null when that is the custom element itself. Codegen compares this against
+ * the owning patch-branch's ref element to decide `this.ref_elem` vs `sel_<bfid>`.
  */
 export function elementForSite(s: Site): ElementTNode | null {
-	// An if-set anchors to the nearest enclosing element, or this.ce when there is none.
+	// An if-set anchors to the nearest enclosing element, or null (this.ref_elem).
 	if (isIfSetSite(s)) return s.parentElement;
 	switch (s.site.kind) {
 		case 'attr': return s.site.element;
+		case 'print': return s.site.parentElement;
 		case 'definition-root-attr': return null;
-		case 'print':
 		case 'for-iterable':
 		case 'binding':
 		case 'caller-attr-expr':

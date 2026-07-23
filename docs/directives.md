@@ -61,13 +61,13 @@ The element is repeated once per item in `collection`. `item` is a new variable 
 
 All three directives compile to a single `IfTNode`. They can be nested freely inside `b-for` blocks and other `b-if` blocks.
 
-**Client-side reactivity.** Inside a custom-element partial, a `b-if` set whose conditions are driven by `b-attr` variables re-renders in the browser when those attributes change — the branch is rendered client-side and swapped into place. This only applies to a set that is:
+**Client-side reactivity.** Inside a custom-element partial, a `b-if` set whose conditions are driven by `b-attr` variables re-renders in the browser when those attributes change — the branch is rendered client-side and swapped into place. Sets may be **nested**: an inner set becomes its own patch unit, so changing an inner condition re-renders just the inner branch, and content inside a rendered branch keeps patching. This applies to a set that is:
 
-- not inside a `b-for`, and not nested inside another `b-if` set (so changing an inner condition alone does not re-render);
+- not inside a `b-for`;
 - driven only by `b-attr` variables in its own branch conditions — an expression elsewhere in the set, or a condition mixing in a non-`b-attr` variable, disqualifies the whole set;
 - free of partial references, custom-element calls, slots, and asset references anywhere in its subtree.
 
-Nested `b-for` and nested `b-if` are otherwise fine inside a reactive set; they are re-rendered as part of it. A set that doesn't meet these conditions still renders correctly server-side — it just stays frozen in the browser. See the [dom-patch generator](../compiler/generate/dom-patch/README.md) for the full rules.
+Nested `b-for` is fine inside a reactive set; it is re-rendered as part of the branch that owns it. A set that doesn't meet these conditions still renders correctly server-side — it just stays frozen in the browser. See the [dom-patch generator](../compiler/generate/dom-patch/README.md) for the full rules.
 
 **Errors:**
 - `b-else` or `b-else-if` without a preceding `b-if` element

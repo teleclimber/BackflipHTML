@@ -1,10 +1,14 @@
-import type { CompiledFile } from '../../types.js';
+import type { CompiledFile, ElementTNode, IfTNode, TNode } from '../../types.js';
+import type { Parsed } from '../../backcode.js';
 import { nodeToJS } from '../js/nodes2js.js';
 import { makeBfidGen, type BfidGen } from './bfid.js';
-import { collectBackcodeSites, isIfSetSite, type IfSetSite } from './collect.js';
+import { collectPatchTree, type BranchScope, type IfSetScope } from './collect.js';
 import { qualifies } from './filter.js';
 import { ensureBfid, elementForSite, ensureCommentsAround } from './mutate-ast.js';
-import { generateClassForPartial, generateFile, type BfidSite, type IfSetPatchSite } from './codegen.js';
+import {
+	generateClassForPartial, generateFile, patchClassNameFor,
+	type BfidSite, type IfSetPatchSite, type PatchBranch, type PatchTarget,
+} from './codegen.js';
 
 export type { BfidGen } from './bfid.js';
 
@@ -59,59 +63,22 @@ export function applyDomPatch(file: CompiledFile, opts?: DomPatchOptions): DomPa
 		const liveVarNames = new Set(bAttrs.map(b => b.name));
 		if (liveVarNames.size === 0) continue;
 
-		const sites = collectBackcodeSites(root, liveVarNames);
-		const filtered = sites.filter(s => qualifies(s, liveVarNames));
-		if (filtered.length === 0) continue;
+		// Walk into a scope tree (qualification folded in — the tree's shape depends
+		// on which sets qualify).
+		const scope = collectPatchTree(root, liveVarNames, s => qualifies(s, liveVarNames));
 
-		// Pass 1 — attr/print/definition-root-attr sites: allocate bfids and splice in
-		// print markers. This must complete before any if-set is snapshotted (pass 2),
-		// or the client-rendered branch would lack markers the server-rendered HTML has.
-		const withBfids: BfidSite[] = [];
-		const ifSetSites: IfSetSite[] = [];
-		for (const site of filtered) {
-			if (isIfSetSite(site)) {
-				ifSetSites.push(site);
-				continue;
-			}
-			if (site.site.kind === 'definition-root-attr') {
-				// Patches the custom element itself — runtime already has the reference (this.ce).
-				withBfids.push({ target: { kind: 'this-element' }, backcode: site });
-				continue;
-			}
-			if (site.site.kind === 'print') {
-				// The print's parent element anchors the runtime lookup (or this.ce when
-				// the print sits directly in the custom element). Two marker comments are
-				// inserted as siblings so the runtime can find and replace the range.
-				const parentEl = site.site.parentElement;
-				const target = parentEl
-					? { kind: 'bfid-element' as const, bfid: ensureBfid(parentEl, gen) }
-					: { kind: 'this-element' as const };
-				const comments = ensureCommentsAround(site.site.container, site.site.node, gen);
-				withBfids.push({ target, backcode: site, comments });
-				continue;
-			}
-			const element = elementForSite(site);
-			if (!element) continue;
-			withBfids.push({ target: { kind: 'bfid-element', bfid: ensureBfid(element, gen) }, backcode: site });
-		}
+		// Pass 1 — all AST mutation, every scope at every depth: allocate bfids and
+		// splice in every marker pair (attr/print/if-set), building the PatchBranch tree
+		// with ids and targets filled in. No snapshots yet.
+		const rootBranch = buildPatchBranch(scope, patchClassNameFor(partialName), liveVarNames, gen);
 
-		// Pass 2 — if-sets. The snapshot is taken now, after every data-bfid and print
-		// marker from pass 1 is in the tree, so a client-rendered branch carries the
-		// same markers as the server-rendered HTML and stays patchable.
-		const ifSets: IfSetPatchSite[] = [];
-		for (const site of ifSetSites) {
-			const parentEl = elementForSite(site);
-			const target = parentEl
-				? { kind: 'bfid-element' as const, bfid: ensureBfid(parentEl, gen) }
-				: { kind: 'this-element' as const };
-			const { startId: setId, endId } = ensureCommentsAround(site.container, site.node, gen);
-			ifSets.push({ target, ifSet: site, setId, endId, snapshot: nodeToJS(site.node) });
-		}
+		if (rootBranch.sites.length === 0 && rootBranch.sets.length === 0) continue;
 
-		if (withBfids.length === 0 && ifSets.length === 0) continue;
-		if (ifSets.length > 0) anyIfSet = true;
+		// Pass 2 — snapshots, now that every marker at every depth is in the tree.
+		fillSnapshots(rootBranch);
+		if (hasAnySet(rootBranch)) anyIfSet = true;
 
-		const cls = generateClassForPartial(partialName, bAttrs, [...withBfids, ...ifSets]);
+		const cls = generateClassForPartial(partialName, bAttrs, rootBranch);
 		if (cls) {
 			classes.push(cls);
 			// Only partials that produce a patch class need (and get) a generated module.
@@ -131,4 +98,140 @@ export function applyDomPatch(file: CompiledFile, opts?: DomPatchOptions): DomPa
 		? (opts?.renderImportPath ?? DEFAULT_RENDER_IMPORT_PATH)
 		: undefined;
 	return { js: generateFile(classes, renderImport), needsRender: anyIfSet };
+}
+
+// Pass 1: turn a scope into a PatchBranch, allocating bfids/markers for its own
+// sites and sets and, recursively, for every descendant branch — before any
+// snapshot is taken.
+function buildPatchBranch(
+	scope: BranchScope,
+	className: string,
+	liveVarNames: Set<string>,
+	gen: BfidGen,
+): PatchBranch {
+	const sites = scope.sites.map(s => toBfidSite(s, scope.refElement, gen));
+	const sets = scope.sets.map(ss => toIfSetPatchSite(ss, scope.refElement, liveVarNames, gen));
+	return { className, sites, sets, vars: computeVars(sites, sets) };
+}
+
+function toBfidSite(
+	site: BranchScope['sites'][number],
+	refElement: ElementTNode | null,
+	gen: BfidGen,
+): BfidSite {
+	const target = resolveTarget(elementForSite(site), refElement, gen);
+	if (site.site.kind === 'print') {
+		const comments = ensureCommentsAround(site.site.container, site.site.node, gen);
+		return { target, backcode: site, comments };
+	}
+	return { target, backcode: site };
+}
+
+function toIfSetPatchSite(
+	scope: IfSetScope,
+	refElement: ElementTNode | null,
+	liveVarNames: Set<string>,
+	gen: BfidGen,
+): IfSetPatchSite {
+	const set = scope.set;
+	const target = resolveTarget(elementForSite(set), refElement, gen);
+	const { startId: setId, endId } = ensureCommentsAround(set.container, set.node, gen);
+	// A branch with nothing patchable gets no child class.
+	const branches = scope.branches.map((child, i) =>
+		child.sites.length === 0 && child.sets.length === 0
+			? null
+			: buildPatchBranch(child, `BackflipPatch_${setId}_${i}`, liveVarNames, gen));
+	return {
+		target, ifSet: set, setId, endId, snapshot: '',
+		subtreeVars: computeSubtreeVars(set.node, liveVarNames),
+		branches,
+	};
+}
+
+// A site's DOM node is either the patch-branch's own ref element or a descendant
+// found by bfid. `anchor === refElement` (both null counts) means the former.
+function resolveTarget(
+	anchor: ElementTNode | null,
+	refElement: ElementTNode | null,
+	gen: BfidGen,
+): PatchTarget {
+	if (anchor === refElement) return { kind: 'ref-element' };
+	return { kind: 'bfid-element', bfid: ensureBfid(anchor!, gen) };
+}
+
+// Pass 2: fill in every set's snapshot depth-first, once all markers exist.
+function fillSnapshots(branch: PatchBranch): void {
+	for (const s of branch.sets) {
+		s.snapshot = nodeToJS(s.ifSet.node);
+		for (const child of s.branches) {
+			if (child) fillSnapshots(child);
+		}
+	}
+}
+
+function hasAnySet(branch: PatchBranch): boolean {
+	return branch.sets.length > 0
+		|| branch.sets.some(s => s.branches.some(c => c !== null && hasAnySet(c)));
+}
+
+// PatchBranch.vars, first-seen: site live vars, then each set's condition and
+// subtree vars.
+function computeVars(sites: BfidSite[], sets: IfSetPatchSite[]): string[] {
+	const out: string[] = [];
+	const note = (v: string) => { if (!out.includes(v)) out.push(v); };
+	for (const s of sites) for (const v of s.backcode.liveVars) note(v);
+	for (const s of sets) {
+		for (const v of s.ifSet.liveVars) note(v);
+		for (const v of s.subtreeVars) note(v);
+	}
+	return out;
+}
+
+// Live vars referenced anywhere in the set's branch content (nested conditions and
+// b-for iterables included), minus b-for-bound value names. Deliberately over-broad
+// per the spec — a var in a non-patchable position still yields a no-op mutate.
+function computeSubtreeVars(node: IfTNode, liveVarNames: Set<string>): string[] {
+	const out: string[] = [];
+	for (const b of node.branches) walkSubtreeVars(b.tnodes, liveVarNames, new Set(), out);
+	return out;
+}
+
+function walkSubtreeVars(
+	tnodes: TNode[],
+	liveVarNames: Set<string>,
+	scope: Set<string>,
+	out: string[],
+): void {
+	const add = (p: Parsed) => {
+		for (const v of p.vars) {
+			if (liveVarNames.has(v) && !scope.has(v) && !out.includes(v)) out.push(v);
+		}
+	};
+	for (const n of tnodes) {
+		switch (n.type) {
+			case 'print':
+				add(n.data);
+				break;
+			case 'element':
+				for (const a of n.attrs) if (a.type === 'dynamic') add(a.expr);
+				walkSubtreeVars(n.tnodes, liveVarNames, scope, out);
+				break;
+			case 'attr-bind':
+				for (const a of n.attrs) if (a.type === 'dynamic') add(a.expr);
+				break;
+			case 'for': {
+				add(n.iterable);
+				const inner = new Set(scope);
+				inner.add(n.valName);
+				walkSubtreeVars(n.tnodes, liveVarNames, inner, out);
+				break;
+			}
+			case 'if':
+				for (const b of n.branches) {
+					if (b.condition) add(b.condition);
+					walkSubtreeVars(b.tnodes, liveVarNames, scope, out);
+				}
+				break;
+		}
+	}
 }

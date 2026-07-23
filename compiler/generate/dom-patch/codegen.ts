@@ -3,15 +3,16 @@ import { commentMarker } from './bfid.js';
 import type { BackcodeSite, IfSetSite } from './collect.js';
 
 /**
- * Which DOM node a patch site updates.
- *  - `bfid-element`: an element inside the partial body. Located at runtime via
- *    `querySelector('[data-bfid="<bfid>"]')`, so it carries the generated bfid.
- *  - `this-element`: the custom element itself. The runtime already holds a
- *    direct reference (`this.ce`), so there is no bfid and no querySelector.
+ * Where a site's DOM node is, relative to the owning patch-branch's `ref_elem`.
+ *  - `ref-element`: the patch-branch's own ref element — `this.ref_elem`. Reached
+ *    with no querySelector. Covers the custom element itself (root branch) and any
+ *    site whose nearest enclosing element *is* the branch's ref element (a
+ *    `b-unwrap b-if` branch anchors its content to the element the set sits in).
+ *  - `bfid-element`: a descendant element, located via `sel_<bfid>()`.
  */
 export type PatchTarget =
-	| { kind: 'bfid-element'; bfid: string }
-	| { kind: 'this-element' };
+	| { kind: 'ref-element' }
+	| { kind: 'bfid-element'; bfid: string };
 
 export interface BfidSite {
 	target: PatchTarget;
@@ -25,23 +26,33 @@ export interface BfidSite {
  * A qualifying `b-if`/`b-else-if`/`b-else` set, ready for codegen.
  *
  * `setId` (the leading marker's bfid) names every symbol the set generates:
- * the module-level `bfif_<setId>` snapshot, `branch_<setId>`, `renderIf_<setId>`
- * and the `this.if_<setId>` active-index field. `snapshot` is the `nodeToJS`
- * literal of the whole `IfTNode`, taken *after* all AST mutation so it carries
- * the same bfids and print markers as the server-rendered HTML.
+ * the module-level `bfif_<setId>` snapshot, `branch_<setId>`, `renderIf_<setId>`,
+ * `getCreatePatchBranch_<setId>`, and the `this.if_<setId>` / `this.if_pb_<setId>`
+ * fields. `snapshot` is the `nodeToJS` literal of the whole `IfTNode`, taken
+ * *after* all AST mutation so it carries the same bfids and print markers as the
+ * server-rendered HTML.
  */
 export interface IfSetPatchSite {
+	/** Anchor for `renderIf_`'s swap — and the `ref_elem` handed to every child branch. */
 	target: PatchTarget;
 	ifSet: IfSetSite;
 	setId: string;
 	endId: string;
 	snapshot: string;
+	/** Live vars anywhere in the set's branch *content* (nested conditions included). */
+	subtreeVars: string[];
+	/** Index-aligned with the branches; `null` for a branch with no patchable content. */
+	branches: (PatchBranch | null)[];
 }
 
-export type PatchSite = BfidSite | IfSetPatchSite;
-
-function isIfSetPatchSite(s: PatchSite): s is IfSetPatchSite {
-	return 'ifSet' in s;
+/** One generated `BackflipPatch_<id>` class. */
+export interface PatchBranch {
+	/** `BackflipPatch_MyElement` at the root, `BackflipPatch_<setId>_<branchIndex>` below it. */
+	className: string;
+	sites: BfidSite[];
+	sets: IfSetPatchSite[];
+	/** Live vars this class's `update` switches over. */
+	vars: string[];
 }
 
 export function classNameFor(partialName: string): string {
@@ -50,99 +61,37 @@ export function classNameFor(partialName: string): string {
 	return 'Backflip' + camel;
 }
 
+/** The root patch-branch class name, paralleling `classNameFor` (`Backflip` → `BackflipPatch_`). */
+export function patchClassNameFor(partialName: string): string {
+	return 'BackflipPatch_' + classNameFor(partialName).slice('Backflip'.length);
+}
+
 export function sanitizeAttrName(name: string): string {
 	return name.replace(/[^A-Za-z0-9_]/g, '_');
 }
 
+/**
+ * Emit the whole cluster for one partial: the module-level `bfif_<setId>` snapshot
+ * consts (from every set in the tree), each `BackflipPatch_*` class depth-first, and
+ * finally the thin `export class BackflipMyElement` shell. Returns null when the root
+ * branch has nothing to patch.
+ */
 export function generateClassForPartial(
 	partialName: string,
 	bAttrs: { name: string; isBool: boolean }[],
-	sites: PatchSite[],
+	root: PatchBranch,
 ): string | null {
-	if (sites.length === 0) return null;
+	if (root.sites.length === 0 && root.sets.length === 0) return null;
 
-	const className = classNameFor(partialName);
-	const bcSites = sites.filter((s): s is BfidSite => !isIfSetPatchSite(s));
-	const ifSites = sites.filter(isIfSetPatchSite);
+	const allSets = collectAllSets(root);
+	const consts = allSets.map(s => `const ${ifConstName(s.setId)} = ${s.snapshot};`);
+	const patchClasses = emitPatchBranch(root);
+	const shell = genElementShell(partialName, root.className, bAttrs);
 
-	// One sel_ per unique bfid (preserving first-seen order). Sites that target
-	// the custom element itself have no bfid and no sel_ method.
-	const bfidOrder: string[] = [];
-	const seenBfid = new Set<string>();
-	for (const s of sites) {
-		if (s.target.kind !== 'bfid-element') continue;
-		if (!seenBfid.has(s.target.bfid)) {
-			seenBfid.add(s.target.bfid);
-			bfidOrder.push(s.target.bfid);
-		}
-	}
-
-	// One bc_ per unique (bfid, kind-specific suffix). For attr sites the suffix
-	// is the sanitized attr name; new kinds get their own suffix scheme.
-	const bcKeys = new Set<string>();
-	const bcMethods: string[] = [];
-	for (const s of bcSites) {
-		const fnName = bcFnNameForSite(s);
-		if (bcKeys.has(fnName)) continue;
-		bcKeys.add(fnName);
-		bcMethods.push(genBcMethod(fnName, s));
-	}
-
-	// Group sites per live variable (order = first-seen across sites). An if-set is
-	// driven only by the vars in its own branch conditions.
-	const bcByVar = new Map<string, BfidSite[]>();
-	const ifByVar = new Map<string, IfSetPatchSite[]>();
-	const varOrder: string[] = [];
-	const noteVar = (v: string) => { if (!varOrder.includes(v)) varOrder.push(v); };
-	for (const s of bcSites) {
-		for (const v of s.backcode.liveVars) {
-			noteVar(v);
-			if (!bcByVar.has(v)) bcByVar.set(v, []);
-			bcByVar.get(v)!.push(s);
-		}
-	}
-	for (const s of ifSites) {
-		for (const v of s.ifSet.liveVars) {
-			noteVar(v);
-			if (!ifByVar.has(v)) ifByVar.set(v, []);
-			ifByVar.get(v)!.push(s);
-		}
-	}
-
-	const selMethods = bfidOrder.map(genSelMethod);
-	const branchMethods = ifSites.map(genBranchMethod);
-	const renderIfMethods = ifSites.map(s => genRenderIfMethod(s, className));
-	const mutateMethods = varOrder.map(v =>
-		genMutateMethod(v, bcByVar.get(v) ?? [], ifByVar.get(v) ?? [], className));
-	const collect = genCollectData(bAttrs);
-	const update = genUpdate(varOrder);
-
-	// The child-range replace helper is needed by print sites and if-sets alike.
-	const needsReplace = ifSites.length > 0 || bcSites.some(s => s.backcode.site.kind === 'print');
-	const helperMethods = needsReplace ? [genReplaceBetweenMethod(className)] : [];
-
-	const methods = [
-		genConstructor(ifSites),
-		'',
-		...selMethods,
-		'',
-		...bcMethods,
-		'',
-		...(branchMethods.length ? [...branchMethods, ''] : []),
-		...(renderIfMethods.length ? [...renderIfMethods, ''] : []),
-		...mutateMethods,
-		'',
-		...(helperMethods.length ? [...helperMethods, ''] : []),
-		collect,
-		'',
-		update,
-	].join('\n');
-
-	const cls = `export class ${className} {\n${methods}\n}`;
-	// The if-set snapshots are module-level consts, so they precede the class.
-	if (ifSites.length === 0) return cls;
-	const consts = ifSites.map(s => `const ${ifConstName(s.setId)} = ${s.snapshot};`);
-	return [...consts, '', cls].join('\n');
+	const parts: string[] = [];
+	if (consts.length) parts.push(consts.join('\n'), '');
+	parts.push(patchClasses, '', shell);
+	return parts.join('\n');
 }
 
 /**
@@ -159,67 +108,138 @@ export function generateFile(classes: (string | null)[], renderImportPath?: stri
 	return [header, '', ...imports, ...kept.flatMap(c => [c, ''])].join('\n').trimEnd() + '\n';
 }
 
-function bcFnNameForSite(s: BfidSite): string {
-	const inner = s.backcode.site;
-	switch (inner.kind) {
-		case 'attr': {
-			// An 'attr' site always patches a body element (target assigned in nodes2patch.ts).
-			if (s.target.kind !== 'bfid-element') {
-				throw new Error("dom-patch codegen: 'attr' site must target a body element");
-			}
-			return `bc_${s.target.bfid}_${sanitizeAttrName(inner.attr.name)}`;
+// Every set in the tree, depth-first (parents before their children's sets).
+function collectAllSets(branch: PatchBranch): IfSetPatchSite[] {
+	const out: IfSetPatchSite[] = [];
+	for (const s of branch.sets) {
+		out.push(s);
+		for (const child of s.branches) {
+			if (child) out.push(...collectAllSets(child));
 		}
-		case 'definition-root-attr':
-			// this-element target: no bfid, so use a fixed 'ce' infix instead.
-			// `bc_ce_<attr>` shares a namespace with bfid-element names `bc_<bfid>_<attr>`
-			// but cannot collide with them: bfids are generated with the 'bf' prefix
-			// (see makeBfidGen in bfid.ts), so a `bc_bf…` name is never a `bc_ce…` name.
-			// The only remaining collision source — two def-root attrs with the same
-			// name — is already rejected by the compiler.
-			return `bc_ce_${sanitizeAttrName(inner.attr.name)}`;
-		case 'print': {
-			// Keyed off the (unique) leading marker id, so each print gets its own bc fn.
-			if (!s.comments) {
-				throw new Error("dom-patch codegen: 'print' site is missing its comment markers");
-			}
-			return `bc_print_${sanitizeAttrName(s.comments.startId)}`;
-		}
-		default:
-			throw new Error(`dom-patch codegen: unsupported site kind '${inner.kind}' — add a bc-name scheme when wiring this kind in.`);
 	}
+	return out;
 }
 
-function selFnName(bfid: string): string {
-	return `sel_${bfid}`;
+// Emit this patch-branch class and, depth-first, every descendant branch class.
+function emitPatchBranch(branch: PatchBranch): string {
+	const chunks = [genPatchClass(branch)];
+	for (const s of branch.sets) {
+		for (const child of s.branches) {
+			if (child) chunks.push(emitPatchBranch(child));
+		}
+	}
+	return chunks.join('\n\n');
 }
 
-// Stable grouping key for a patch target. bfid-element keys are namespaced with
-// 'bf:' so they can never equal the this-element key 'ce'.
-function targetKey(t: PatchTarget): string {
-	return t.kind === 'this-element' ? 'ce' : `bf:${t.bfid}`;
+// --- the patch-branch class ------------------------------------------------
+
+function genPatchClass(branch: PatchBranch): string {
+	const { className, sites, sets, vars } = branch;
+
+	// sel_ per unique bfid, across both site targets and set targets.
+	const bfidOrder: string[] = [];
+	const seenBfid = new Set<string>();
+	const noteBfid = (t: PatchTarget) => {
+		if (t.kind !== 'bfid-element' || seenBfid.has(t.bfid)) return;
+		seenBfid.add(t.bfid);
+		bfidOrder.push(t.bfid);
+	};
+	for (const s of sites) noteBfid(s.target);
+	for (const s of sets) noteBfid(s.target);
+
+	// bc_ per unique fn name.
+	const bcKeys = new Set<string>();
+	const bcMethods: string[] = [];
+	for (const s of sites) {
+		const fnName = bcFnNameForSite(s);
+		if (bcKeys.has(fnName)) continue;
+		bcKeys.add(fnName);
+		bcMethods.push(genBcMethod(fnName, s));
+	}
+
+	// Sites grouped per live var (a set contributes its condition + subtree vars).
+	const sitesByVar = new Map<string, BfidSite[]>();
+	for (const s of sites) {
+		for (const v of s.backcode.liveVars) {
+			if (!sitesByVar.has(v)) sitesByVar.set(v, []);
+			sitesByVar.get(v)!.push(s);
+		}
+	}
+	const setsByVar = new Map<string, IfSetPatchSite[]>();
+	for (const s of sets) {
+		for (const v of new Set([...s.ifSet.liveVars, ...s.subtreeVars])) {
+			if (!setsByVar.has(v)) setsByVar.set(v, []);
+			setsByVar.get(v)!.push(s);
+		}
+	}
+
+	const selMethods = bfidOrder.map(genSelMethod);
+	const branchMethods = sets.map(genBranchMethod);
+	const getCreateMethods = sets.map(s => genGetCreateMethod(s));
+	const renderIfMethods = sets.map(s => genRenderIfMethod(s, className));
+	const mutateMethods = vars.map(v =>
+		genMutateMethod(v, sitesByVar.get(v) ?? [], setsByVar.get(v) ?? [], className));
+
+	// The child-range replace helper is needed by print sites and if-sets alike.
+	const needsReplace = sets.length > 0 || sites.some(s => s.backcode.site.kind === 'print');
+	const helperMethods = needsReplace ? [genReplaceBetweenMethod(className)] : [];
+
+	const methods = [
+		genConstructor(sets),
+		'',
+		...selMethods,
+		...(selMethods.length ? [''] : []),
+		...bcMethods,
+		...(bcMethods.length ? [''] : []),
+		...(branchMethods.length ? [...branchMethods, ''] : []),
+		...(getCreateMethods.length ? [...getCreateMethods, ''] : []),
+		...(renderIfMethods.length ? [...renderIfMethods, ''] : []),
+		...mutateMethods,
+		...(mutateMethods.length ? [''] : []),
+		...(helperMethods.length ? [...helperMethods, ''] : []),
+		genUpdate(vars),
+	].join('\n');
+
+	return `class ${className} {\n${methods}\n}`;
 }
 
-function mutateFnName(varName: string): string {
-	return `mutate_${varName}`;
-}
-
-function genSelMethod(bfid: string): string {
-	return `\t${selFnName(bfid)}() { return this.ce.querySelector('[data-bfid="${bfid}"]'); }`;
+// The constructor keeps the ref element and seeds each owned set: it stores the
+// active branch index (computed, not rendered — the server already emitted the
+// right branch), a branch-index → child-instance map, and eagerly creates the
+// child for the active branch.
+function genConstructor(sets: IfSetPatchSite[]): string {
+	const lines = ['\t\tthis.ref_elem = ref_elem;'];
+	for (const s of sets) {
+		lines.push(`\t\tthis.${activeIndexField(s.setId)} = this.${branchFnName(s.setId)}(data);`);
+		lines.push(`\t\tthis.${pbMapField(s.setId)} = new Map();`);
+		lines.push(`\t\tthis.${getCreateFnName(s.setId)}(this.${activeIndexField(s.setId)}, data);`);
+	}
+	return `\tconstructor(ref_elem, data) {\n${lines.join('\n')}\n\t}`;
 }
 
 // Symbols an if-set owns, all keyed off its leading marker's bfid.
 function ifConstName(setId: string): string { return `bfif_${setId}`; }
 function branchFnName(setId: string): string { return `branch_${setId}`; }
 function renderIfFnName(setId: string): string { return `renderIf_${setId}`; }
+function getCreateFnName(setId: string): string { return `getCreatePatchBranch_${setId}`; }
 function activeIndexField(setId: string): string { return `if_${setId}`; }
+function pbMapField(setId: string): string { return `if_pb_${setId}`; }
 
-// The constructor seeds each if-set's active-branch index from the current
-// attributes without rendering: the server already emitted the right branch.
-function genConstructor(ifSites: IfSetPatchSite[]): string {
-	if (ifSites.length === 0) return '\tconstructor(ce) { this.ce = ce; }';
-	const lines = ifSites.map(s =>
-		`\t\tthis.${activeIndexField(s.setId)} = this.${branchFnName(s.setId)}(this.collectData());`);
-	return [`\tconstructor(ce) {`, '\t\tthis.ce = ce;', ...lines, '\t}'].join('\n');
+function selFnName(bfid: string): string { return `sel_${bfid}`; }
+function mutateFnName(varName: string): string { return `mutate_${varName}`; }
+
+function genSelMethod(bfid: string): string {
+	return `\t${selFnName(bfid)}() { return this.ref_elem.querySelector('[data-bfid="${bfid}"]'); }`;
+}
+
+// The JS expression that resolves a target element within this class.
+function targetExpr(t: PatchTarget): string {
+	return t.kind === 'ref-element' ? 'this.ref_elem' : `this.${selFnName(t.bfid)}()`;
+}
+
+// Stable grouping key for a patch target.
+function targetKey(t: PatchTarget): string {
+	return t.kind === 'ref-element' ? 'ref' : `bf:${t.bfid}`;
 }
 
 // Returns the index of the winning branch, or -1 when none matches (a set with
@@ -242,28 +262,54 @@ function genBranchMethod(s: IfSetPatchSite): string {
 	return `\t${branchFnName(s.setId)}(data) {\n${destructure}${lines.join('\n')}\n\t}`;
 }
 
-// Re-render the set only when the winning branch actually changed. The fragment is
-// built with createContextualFragment against the target element so the branch HTML
-// is parsed in its real parent context (a <tr> under a <tbody> survives).
+// Lazily construct (and memoize) the child patch-branch for a given branch index.
+// Only branches with patchable content get a case; others leave `pb` undefined, so
+// the caller (and `this.if_pb`) treats them as "no child".
+function genGetCreateMethod(s: IfSetPatchSite): string {
+	const map = pbMapField(s.setId);
+	const ref = targetExpr(s.target);
+	const cases: string[] = [];
+	s.branches.forEach((child, i) => {
+		if (child) cases.push(`\t\t\tcase ${i}: pb = new ${child.className}(${ref}, data); break;`);
+	});
+	return [
+		`\t${getCreateFnName(s.setId)}(branch_i, data) {`,
+		`\t\tif (this.${map}.has(branch_i)) return this.${map}.get(branch_i);`,
+		'\t\tlet pb;',
+		'\t\tswitch (branch_i) {',
+		...cases,
+		'\t\t}',
+		`\t\tif (pb) this.${map}.set(branch_i, pb);`,
+		'\t\treturn pb;',
+		'\t}',
+	].join('\n');
+}
+
+// Re-render the set only when the winning branch actually changed. Returns true if
+// it re-rendered, false otherwise. On a real swap it evicts the old branch's child
+// instance and creates the new one. The fragment is built with
+// createContextualFragment against the target element so the branch HTML is parsed
+// in its real parent context (a <tr> under a <tbody> survives).
 function genRenderIfMethod(s: IfSetPatchSite, className: string): string {
 	const idxField = activeIndexField(s.setId);
-	const lookup = s.target.kind === 'this-element'
-		? '\t\tconst elem = this.ce;'
-		: `\t\tconst elem = this.${selFnName(s.target.bfid)}();`;
+	const map = pbMapField(s.setId);
 	return [
 		`\t${renderIfFnName(s.setId)}(data) {`,
 		`\t\tconst idx = this.${branchFnName(s.setId)}(data);`,
-		`\t\tif (idx === this.${idxField}) return;`,
-		`\t\tthis.${idxField} = idx;`,
-		lookup,
+		`\t\tif (idx === this.${idxField}) return false;`,
+		`\t\tconst elem = ${targetExpr(s.target)};`,
 		'\t\tif (!elem) {',
 		`\t\t\t${genMissingElementError(s.target, className)}`,
-		'\t\t\treturn;',
+		'\t\t\treturn false;',
 		'\t\t}',
+		`\t\tthis.${map}.delete(this.${idxField});`,
+		`\t\tthis.${idxField} = idx;`,
 		'\t\tconst range = document.createRange();',
 		'\t\trange.selectNodeContents(elem);',
 		`\t\tconst frag = range.createContextualFragment(render(${ifConstName(s.setId)}, data));`,
 		`\t\tthis.replaceBetween(elem, '${commentMarker(s.setId)}', '${commentMarker(s.endId)}', frag);`,
+		`\t\tthis.${getCreateFnName(s.setId)}(idx, data);`,
+		'\t\treturn true;',
 		'\t}',
 	].join('\n');
 }
@@ -278,20 +324,41 @@ function genBcMethod(fnName: string, s: BfidSite): string {
 function genMutateMethod(
 	varName: string,
 	varSites: BfidSite[],
-	varIfSites: IfSetPatchSite[],
+	varSets: IfSetPatchSite[],
 	className: string,
 ): string {
-	// If-set swaps run first: they replace whole subtrees, so any attr/print site
-	// that lives in a branch must be patched against the DOM that results.
-	const ifLines = varIfSites.map(s => `\t\tthis.${renderIfFnName(s.setId)}(data);`);
+	// Set handling runs first: a swap replaces whole subtrees, so any attr/print site
+	// that lives in a branch must be patched against the DOM that results. For a set
+	// driven by `varName`:
+	//   - condition var only → re-render (fresh render already reflects the data).
+	//   - subtree var only   → forward into the active child (branch cannot have moved).
+	//   - both               → re-render *or* forward, never both.
+	const setLines: string[] = [];
+	for (const s of varSets) {
+		const inCond = s.ifSet.liveVars.includes(varName);
+		const inSub = s.subtreeVars.includes(varName);
+		const map = pbMapField(s.setId);
+		const idx = activeIndexField(s.setId);
+		const forward = [
+			`\t\t\tconst pb = this.${map}.get(this.${idx});`,
+			`\t\t\tif (pb) pb.update('${varName}', data);`,
+		];
+		if (inCond && inSub) {
+			setLines.push(`\t\tif (!this.${renderIfFnName(s.setId)}(data)) {`, ...forward, '\t\t}');
+		} else if (inCond) {
+			setLines.push(`\t\tthis.${renderIfFnName(s.setId)}(data);`);
+		} else {
+			setLines.push('\t\t{', ...forward, '\t\t}');
+		}
+	}
+
 	if (varSites.length === 0) {
-		return `\t${mutateFnName(varName)}(data) {\n${ifLines.join('\n')}\n\t}`;
+		return `\t${mutateFnName(varName)}(data) {\n${setLines.join('\n')}\n\t}`;
 	}
 
 	// Group sites by target element so each `elem = …` lookup and its null guard is
-	// emitted once per mutate fn. All this-element sites land in one group (there is
-	// only one ce). A null lookup means the rendered DOM diverged from the compiled
-	// template, so the guard logs instead of silently skipping the update.
+	// emitted once per mutate fn. A null lookup means the rendered DOM diverged from
+	// the compiled template, so the guard logs instead of silently skipping.
 	const byTarget = new Map<string, { target: PatchTarget; sites: BfidSite[] }>();
 	for (const s of varSites) {
 		const key = targetKey(s.target);
@@ -303,15 +370,11 @@ function genMutateMethod(
 		group.sites.push(s);
 	}
 
-	const body: string[] = [...ifLines, '\t\tlet elem;'];
+	const body: string[] = [...setLines, '\t\tlet elem;'];
 	for (const { target, sites } of byTarget.values()) {
-		body.push(target.kind === 'this-element'
-			? `\t\telem = this.ce;`
-			: `\t\telem = this.${selFnName(target.bfid)}();`);
+		body.push(`\t\telem = ${targetExpr(target)};`);
 		body.push('\t\tif (elem) {');
-		for (const s of sites) {
-			body.push(genSiteUpdate(s));
-		}
+		for (const s of sites) body.push(genSiteUpdate(s));
 		body.push('\t\t} else {');
 		body.push(`\t\t\t${genMissingElementError(target, className)}`);
 		body.push('\t\t}');
@@ -321,10 +384,7 @@ function genMutateMethod(
 
 // Per-class marker-range replace, shared by 'print' sites and if-sets. Finds the
 // two marker comments among `parent`'s direct children, removes every node strictly
-// between them, and inserts `node` before the closing marker. Prints pass a text
-// node (never innerText/innerHTML) so a value containing markup stays literal;
-// if-sets pass a DocumentFragment of the freshly rendered branch. Either way the
-// markers survive, so the range stays patchable.
+// between them, and inserts `node` before the closing marker.
 function genReplaceBetweenMethod(className: string): string {
 	return [
 		'\treplaceBetween(parent, startMarker, endMarker, node) {',
@@ -350,10 +410,37 @@ function genReplaceBetweenMethod(className: string): string {
 }
 
 function genMissingElementError(target: PatchTarget, className: string): string {
-	if (target.kind === 'this-element') {
-		return `console.error('BackflipHTML ${className}: host element not found; skipping update');`;
+	if (target.kind === 'ref-element') {
+		return `console.error('BackflipHTML ${className}: ref element not found; skipping update', this.ref_elem);`;
 	}
-	return `console.error('BackflipHTML ${className}: element [data-bfid="${target.bfid}"] not found; skipping update', this.ce);`;
+	return `console.error('BackflipHTML ${className}: element [data-bfid="${target.bfid}"] not found; skipping update', this.ref_elem);`;
+}
+
+function bcFnNameForSite(s: BfidSite): string {
+	const inner = s.backcode.site;
+	switch (inner.kind) {
+		case 'attr': {
+			// An 'attr' site always patches a descendant element (never the ref element).
+			if (s.target.kind !== 'bfid-element') {
+				throw new Error("dom-patch codegen: 'attr' site must target a bfid element");
+			}
+			return `bc_${s.target.bfid}_${sanitizeAttrName(inner.attr.name)}`;
+		}
+		case 'definition-root-attr':
+			// ref-element target: no bfid, so use a fixed 'ce' infix. bfids are always
+			// 'bf'-prefixed, so `bc_ce_…` can never collide with `bc_<bfid>_…`; two
+			// def-root attrs with the same name are already rejected by the compiler.
+			return `bc_ce_${sanitizeAttrName(inner.attr.name)}`;
+		case 'print': {
+			// Keyed off the (unique) leading marker id, so each print gets its own bc fn.
+			if (!s.comments) {
+				throw new Error("dom-patch codegen: 'print' site is missing its comment markers");
+			}
+			return `bc_print_${sanitizeAttrName(s.comments.startId)}`;
+		}
+		default:
+			throw new Error(`dom-patch codegen: unsupported site kind '${inner.kind}' — add a bc-name scheme when wiring this kind in.`);
+	}
 }
 
 function genSiteUpdate(s: BfidSite): string {
@@ -382,18 +469,40 @@ function genSiteUpdate(s: BfidSite): string {
 	}
 }
 
-function genCollectData(bAttrs: { name: string; isBool: boolean }[]): string {
-	const lines = bAttrs.map(b =>
+function genUpdate(vars: string[]): string {
+	const cases = vars.map(v =>
+		`\t\t\tcase '${v}': this.${mutateFnName(v)}(data); break;`
+	);
+	return `\tupdate(varname, data) {\n\t\tswitch (varname) {\n${cases.join('\n')}\n\t\t}\n\t}`;
+}
+
+// --- the thin BackflipMyElement shell --------------------------------------
+
+function genElementShell(
+	partialName: string,
+	rootPatchClass: string,
+	bAttrs: { name: string; isBool: boolean }[],
+): string {
+	const className = classNameFor(partialName);
+	const collectLines = bAttrs.map(b =>
 		b.isBool
 			? `\t\t\t${b.name}: this.ce.hasAttribute('${b.name}'),`
 			: `\t\t\t${b.name}: this.ce.getAttribute('${b.name}') ?? '',`
 	);
-	return `\tcollectData() {\n\t\treturn {\n${lines.join('\n')}\n\t\t};\n\t}`;
-}
-
-function genUpdate(varOrder: string[]): string {
-	const cases = varOrder.map(v =>
-		`\t\t\tcase '${v}': this.${mutateFnName(v)}(this.collectData()); break;`
-	);
-	return `\tupdate(varname) {\n\t\tswitch (varname) {\n${cases.join('\n')}\n\t\t}\n\t}`;
+	return [
+		`export class ${className} {`,
+		'\tconstructor(ce) {',
+		'\t\tthis.ce = ce;',
+		`\t\tthis.pb = new ${rootPatchClass}(this.ce, this.collectData());`,
+		'\t}',
+		'\tcollectData() {',
+		'\t\treturn {',
+		...collectLines,
+		'\t\t};',
+		'\t}',
+		'\tupdate(varname) {',
+		'\t\tthis.pb.update(varname, this.collectData());',
+		'\t}',
+		'}',
+	].join('\n');
 }

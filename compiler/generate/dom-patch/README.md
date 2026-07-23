@@ -1,6 +1,6 @@
 # DOM-patch generator
 
-Produces a JavaScript file with one class per custom-element partial that has at least one reactive attribute. The class lets browser-side code update specific attributes of specific rendered elements when one of the custom element's own attributes changes — without re-rendering the whole subtree.
+Produces a JavaScript file with, per custom-element partial that has at least one reactive attribute, an exported `BackflipMyElement` shell plus a tree of module-private **patch-branch** classes. Together they let browser-side code update specific attributes, prints, and `b-if` branches of the rendered subtree when one of the custom element's own attributes changes — without re-rendering the whole thing. See [patch-branches](#patch-branches).
 
 ## How it fits
 
@@ -13,9 +13,9 @@ Because of this, the CLI calls `applyDomPatch()` on each `CompiledFile` **before
 Four site flavors are emitted:
 
 - **`attr`** — a `b-bind:`/`:` dynamic attribute on an element inside the partial body. The owning element gets a `data-bfid` so the runtime can find it via `querySelector`.
-- **`definition-root-attr`** — a `b-bind:`/`:` dynamic attribute on the partial's own wrapping tag (i.e. the custom element itself). No `data-bfid` is added — the runtime already holds a direct reference to the custom element (`this.ce`).
-- **`print`** — a `{{ expr }}` interpolation. The print is bracketed by two marker comment nodes (`<!--bfid:<id>-->`), and its parent element gets a `data-bfid`. When the print sits directly inside the custom element (no wrapping element), the parent is `this.ce` and no `data-bfid` is added. `b-if` / `b-for` wrappers are DOM-transparent, so the "parent element" is the nearest enclosing real element and the markers are inserted as immediate siblings of the print (inside the branch).
-- **`if-set`** — a whole `b-if` / `b-else-if` / `b-else` set, tracked as **one** site (not one per branch). Anchored exactly like a print: a marker pair brackets the `IfTNode` in its container array, and the nearest enclosing element gets a `data-bfid` (or the target is `this.ce`). Unlike the other flavors this one generates *new DOM* in the browser — see [b-if sets](#b-if-sets) below.
+- **`definition-root-attr`** — a `b-bind:`/`:` dynamic attribute on the partial's own wrapping tag (i.e. the custom element itself). No `data-bfid` is added — it resolves to the owning patch-branch's `ref_elem`, which for the root is the custom element (`this.ce`).
+- **`print`** — a `{{ expr }}` interpolation. The print is bracketed by two marker comment nodes (`<!--bfid:<id>-->`), and its parent element gets a `data-bfid`. When that parent *is* the owning patch-branch's ref element (a print directly inside the custom element, or in a `b-unwrap` branch), no `data-bfid` is added and it targets `ref_elem`. `b-if` / `b-for` wrappers are DOM-transparent, so the "parent element" is the nearest enclosing real element and the markers are inserted as immediate siblings of the print (inside the branch).
+- **`if-set`** — a whole `b-if` / `b-else-if` / `b-else` set, tracked as **one** site (not one per branch). Anchored exactly like a print: a marker pair brackets the `IfTNode` in its container array, and the nearest enclosing element gets a `data-bfid` (or it targets the owning patch-branch's `ref_elem`). Unlike the other flavors this one generates *new DOM* in the browser — see [b-if sets](#b-if-sets) below.
 
 A site qualifies when **all** of these hold:
 
@@ -32,7 +32,7 @@ If a partial produces zero classes, it contributes nothing to the file. If a fil
 
 Sites whose ancestor chain contains a `ForTNode` are skipped (attrs, prints and if-sets alike). The bfid mechanism relies on `querySelector`, which returns only the first match — so a site on a `b-for`'d element would only update one of N rendered copies. This is documented rather than worked around; an explicit error is not raised (it's a silent skip, as for any non-qualifying site).
 
-Other deliberate v1 limitations, all covered above: a set nested inside another set is skipped; patch sites inside an inactive branch log `console.error` on every mutate; `<script>` tags inside a branch do not execute when inserted via a fragment; and the initial active index is recomputed and trusted to match the server render.
+Other deliberate limitations, all covered above: patch sites inside an inactive branch of a **non-qualifying** nested set log `console.error` on every mutate (only qualifying sets get the patch-branch treatment that avoids this); `<script>` tags inside a branch do not execute when inserted via a fragment; and the initial active index is recomputed and trusted to match the server render. Nested `b-if` **is** supported — see [patch-branches](#patch-branches).
 
 ## b-if sets
 
@@ -41,79 +41,96 @@ Attr and print patching edits DOM that is already there. An if-set instead **ren
 Three consequences shape the design:
 
 - **`render.js` is a build input.** The generated module does `import { render } from './render.js'`, and the CLI copies `dist/runtime/js/render.js` into the root of the dom-patch output dir. The specifier is depth-relative (`foo/bar.js` → `../render.js`), computed by `renderImportPathFor()`. If the `dist` file is missing the build **errors and stops** — a silent skip would ship a page that 404s on import. `applyDomPatch` reports `needsRender` so the CLI knows whether the copy is required, and the preview server maps `<domPatchOutputDir>/render.js` to the same `dist` file.
-- **The snapshot must be taken last.** `applyDomPatch` runs two passes per partial: pass 1 collects attr/print sites and mutates the AST (`data-bfid`s, print markers), pass 2 inserts each if-set's marker pair and snapshots its `IfTNode`. Taking the snapshot earlier would produce client-rendered branches missing the markers the server-rendered HTML has, and every patch site inside a re-rendered branch would stop working.
+- **Snapshots are taken after all AST mutation, recursively.** `applyDomPatch` runs two passes per partial over the patch-branch tree (see [patch-branches](#patch-branches)): pass 1 mutates the AST at every depth (`data-bfid`s, print markers, and every set's marker pair), pass 2 snapshots each set's `IfTNode`. Taking a snapshot before every nested marker exists would produce a client-rendered branch missing markers the server-rendered HTML has, and every patch site inside it — including a nested set's anchors — would stop working.
 - **The HTML becomes DOM via `range.createContextualFragment()`**, with the range's contents set to the target element, so a branch is parsed in its real parent context (a `<tr>` under a `<tbody>` survives).
 
 ### Trigger variables
 
-An if-set is driven **only by the live vars in its own branch conditions**. Vars in nested if-sets or `b-for` iterables inside the branches do not trigger it, and nothing is unioned across sets. So a nested `b-if` whose condition changes while the outer condition is unchanged will not re-render (accepted v1 limitation):
+An if-set is re-rendered (its branch swapped) **only by the live vars in its own branch conditions**. But a var referenced deeper — in a nested set's condition, or in branch content — still needs to reach that content. A patch-branch therefore also tracks the live vars anywhere in its subtree and **forwards** a change down to the active child patch-branch, which either re-renders its own nested set or patches its own sites. So a nested `b-if` whose condition changes while the outer condition is unchanged **does** re-render (via forwarding):
 
 ```html
 <div b-if="a">
-  <p b-if="b">…</p>   <!-- changing `b` alone does not update this -->
+  <p b-if="b">…</p>   <!-- changing `b` re-renders just this inner branch -->
 </div>
 ```
 
 ### Active-branch tracking
 
-The constructor computes the active branch index from `collectData()` and stores it in `this.if_<setId>` — it **does not render**, since the server already emitted the right branch. The index is only used to decide whether a later data change actually changed branches. It is `0…n-1` for the winning branch, `-1` when nothing matches (a set with no `b-else` whose conditions are all falsy). The recomputed index is trusted to match the server render; if it doesn't, the DOM stays stale until the index changes.
+Each patch-branch's constructor computes every owned set's active branch index from the data it's handed and stores it in `this.if_<setId>` — it **does not render**, since the server already emitted the right branch. It also seeds `this.if_pb_<setId>` (a branch-index → child-patch-branch map) and eagerly constructs the child for the active branch. The index is `0…n-1` for the winning branch, `-1` when nothing matches (a set with no `b-else` whose conditions are all falsy). The recomputed index is trusted to match the server render; if it doesn't, the DOM stays stale until the index changes.
 
 ### Additional qualification rules
 
 Beyond the cross-kind rules, an if-set qualifies only when all of these hold. Any failure disqualifies the **entire set** (all branches), silently:
 
-1. It is **not inside another if-set** — qualifying or not. Once a set is disqualified everything within it is too; only a top-level set can be a patch site.
-2. Every branch condition parses and names **at least one** variable.
-3. Every expression **anywhere in the subtree** references only live vars — prints, dynamic attrs, nested `b-if` conditions, nested `b-for` iterables. A `b-for`'s value name is locally bound inside its own body, so `valName` and `valName.x` are exempt within that scope (scope tracking is required, since nested `b-for` is allowed).
-4. No **partial references** of any kind in the subtree — no `b-part` calls, no custom-element calls.
-5. No **slot** nodes in the subtree.
-6. No **asset references** in the subtree: no unresolved `asset` AttrPart, no dynamic attr with `isAsset`, no static attr whose raw text contains an `@name/` reference. (The browser has no asset map.)
+1. Every branch condition parses and names **at least one** variable.
+2. Every expression **anywhere in the subtree** references only live vars — prints, dynamic attrs, nested `b-if` conditions, nested `b-for` iterables. A `b-for`'s value name is locally bound inside its own body, so `valName` and `valName.x` are exempt within that scope (scope tracking is required, since nested `b-for` is allowed).
+3. No **partial references** of any kind in the subtree — no `b-part` calls, no custom-element calls.
+4. No **slot** nodes in the subtree.
+5. No **asset references** in the subtree: no unresolved `asset` AttrPart, no dynamic attr with `isAsset`, no static attr whose raw text contains an `@name/` reference. (The browser has no asset map.)
 
-Nested `b-for` and nested `b-if`/`b-else` are otherwise **allowed** inside a qualifying set — they are rendered statically by `render.js` as part of the set's output, and are not patch sites themselves.
+Nesting is allowed: a qualifying set may sit inside another. Because rule 2 walks the **whole** subtree, a disqualifier inside a nested set (a non-live var, a partial ref) sinks the enclosing set too — so a qualifying parent only ever contains nested sets that themselves qualify or are var-free (`b-if="1 == 1"`, which can't be its own patch site but doesn't disqualify anyone). A nested `b-for` is rendered statically as part of the branch that owns it and is not a patch site.
 
 ### Ordering within `mutate_<var>`
 
-If-set re-rendering happens **first**, before any attribute/print mutations in the same `mutate_<var>` body, since those sites may live in the branch about to be replaced. Patch sites inside a currently-inactive branch are not found and `console.error` through the existing null guard — that is the status quo, and this feature does not change the patching logic to accommodate missing elements.
+Within a single patch-branch, if-set handling runs **first** in a `mutate_<var>` body, before that branch's own attr/print mutations. A re-render replaces a whole subtree, so any local site must be patched against the DOM that results. There is no longer a cross-boundary hazard: a patch-branch never owns a site that lives inside a branch it re-renders — those sites belong to the child patch-branch, which is (re)built by the swap. A non-qualifying nested set is the exception: its content stays parent-owned, so a site in its inactive branch is not found and `console.error`s through the null guard.
 
 ## Generated class shape
 
-For a partial `my-element` with live vars `title` and `flag`:
+The mutation logic lives in **patch-branches** (see [patch-branches](#patch-branches)); `BackflipMyElement` is a thin shell that owns the host, `collectData()`, and the root patch-branch. For a partial `my-element` with live vars `title` and `flag`:
 
 ```js
 import { render } from './render.js';   // only when the file has at least one if-set
 
 const bfif_<setId> = { type:'if', branches: [ ... ] };   // one per if-set, module level
 
-class BackflipMyElement {
-    constructor(ce) { this.ce = ce; /* + this.if_<setId> = this.branch_<setId>(this.collectData()); */ }
-    sel_<bfid>() { return this.ce.querySelector('[data-bfid="<bfid>"]'); }
+class BackflipPatch_MyElement {          // one patch-branch class per qualifying branch
+    constructor(ref_elem, data) { this.ref_elem = ref_elem; /* + per-set seeding */ }
+    sel_<bfid>() { return this.ref_elem.querySelector('[data-bfid="<bfid>"]'); }
     bc_<bfid>_<attr>(data) { ... }       // attr expression body, destructured from data
-    bc_ce_<attr>(data) { ... }           // for definition-root attrs (no bfid; target is this.ce)
+    bc_ce_<attr>(data) { ... }           // for definition-root attrs (no bfid; target is this.ref_elem)
     bc_print_<startId>(data) { ... }     // print expression body (keyed off the leading marker id)
     branch_<setId>(data) { ... }         // → active branch index, or -1 when none matches
-    renderIf_<setId>(data) { ... }       // re-render + swap, but only if the index changed
+    getCreatePatchBranch_<setId>(i, data) { ... }   // lazily build + memoize the child for branch i
+    renderIf_<setId>(data) { ... }       // swap + create child, returns true iff it re-rendered
     replaceBetween(parent, startMarker, endMarker, node) { ... }   // emitted for print sites and if-sets
-    mutate_<varName>(data) { ... }       // renderIf_ calls first, then sel + bc + setAttribute / replaceBetween
+    mutate_<varName>(data) { ... }       // set handling first, then sel + bc + setAttribute / replaceBetween
+    update(varName, data) { switch(varName) { case '<v>': this.mutate_<v>(data); ... } }
+}
+// ...one class per nested branch: BackflipPatch_<setId>_<branchIndex>, not exported...
+
+export class BackflipMyElement {
+    constructor(ce) { this.ce = ce; this.pb = new BackflipPatch_MyElement(this.ce, this.collectData()); }
     collectData() { return { title: ..., flag: ... }; }
-    update(varName) { switch(varName) { case '<v>': this.mutate_<v>(this.collectData()); ... } }
+    update(varName) { this.pb.update(varName, this.collectData()); }
 }
 ```
 
-Inside a `mutate_<varName>` body, sites are grouped by element. bfid-element sites use `elem = this.sel_<bfid>();`; definition-root and root-level-print sites use `elem = this.ce;`. Each group is guarded once: when `elem` is found the group's updates run; when it is null the guard's `else` branch logs `console.error(...)` and skips the update. A null lookup means the rendered DOM has diverged from the compiled template (something went wrong upstream), so it is reported rather than silently ignored.
+Only `BackflipMyElement` is exported (the auto-included entry references it); the `BackflipPatch_*` classes are module-private.
+
+Inside a `mutate_<varName>` body, **set handling runs first** (see [Ordering](#ordering-within-mutate_var)): for each owned set driven by the var, `mutate_` either calls `this.renderIf_<setId>(data)` (the var is in a branch condition), forwards the change to the active child — `const pb = this.if_pb_<setId>.get(this.if_<setId>); if (pb) pb.update('<var>', data);` — or does both under an `if (!this.renderIf_<setId>(data)) { …forward… }` guard (re-render *or* forward, never both). Then the branch's own sites run, grouped by element: `ref-element` sites (the patch-branch's own ref element — including the custom element for the root) use `elem = this.ref_elem;`; descendant sites use `elem = this.sel_<bfid>();`. Each group is guarded once; a null lookup logs `console.error(...)` and skips, since it means the rendered DOM diverged from the compiled template.
 
 Per-site updates within a found group:
 
 - **attr** → `elem.setAttribute(name, String(...))`, or `setAttribute(name, '')`+`removeAttribute(name)` for booleans.
 - **print** → `this.replaceBetween(elem, '<startMarker>', '<endMarker>', document.createTextNode(String(...)))`.
-- **if-set** → `this.renderIf_<setId>(data)`, emitted before the element groups. It resolves the target itself (with the same null-guard `console.error`) and calls `replaceBetween` with the rendered fragment.
 
-`replaceBetween(parent, startMarker, endMarker, node)` is the shared marker-range replace: it finds the two marker comments among `parent`'s direct children, removes every node strictly between them, and inserts `node` before the closing marker. Prints pass a text node (never `innerText`/`innerHTML`) so the parent's other children are preserved and the value is never interpreted as markup; if-sets pass the `DocumentFragment` of the freshly rendered branch. Either way the markers survive, so the range stays patchable. If a marker is missing it logs and skips, like the null-element guard.
+`renderIf_<setId>(data)` resolves the set's target element itself (same null-guard `console.error`), re-renders the winning branch into the marker range via `replaceBetween`, evicts the old branch's child instance, creates the new one, and returns whether it swapped. `replaceBetween(parent, startMarker, endMarker, node)` is the shared marker-range replace: it finds the two marker comments among `parent`'s direct children, removes every node strictly between them, and inserts `node` before the closing marker. Prints pass a text node (never `innerText`/`innerHTML`) so siblings are preserved and the value is never interpreted as markup; if-sets pass the `DocumentFragment` of the freshly rendered branch. Either way the markers survive, so the range stays patchable.
 
 Other notes:
 
-- `collectData()` returns every declared `b-attr` (string → `getAttribute(name) ?? ''`; bool → `hasAttribute(name)`).
-- `update(varName)` only switches over live vars **that have at least one mutate-able site** — including vars that appear *only* in an if-set's branch conditions. Unused live vars still appear in `collectData`, just not in `update`.
+- The **target** of a site is `this.ref_elem` when its nearest enclosing element *is* the patch-branch's ref element (a `b-unwrap b-if` branch anchors content to the element the set sits in; the root's ref element is the custom element itself), otherwise `this.sel_<bfid>()`. A set's target doubles as the `ref_elem` handed to each child branch, which is what makes the child's own targets resolvable.
+- `collectData()` (on the shell) returns every declared `b-attr` (string → `getAttribute(name) ?? ''`; bool → `hasAttribute(name)`), and is the only place `collectData` is called — patch-branches receive `data` from their caller.
+- A patch-branch's `update` switches over every live var referenced anywhere in its subtree, including vars that appear *only* in a descendant branch (so a change can be forwarded down). This is deliberately over-broad: a var in a non-patchable position (a `b-for` iterable) yields a no-op `mutate_`. Unused live vars still appear in `collectData`, just not in any `update`.
 - Boolean dynamic attributes use `setAttribute(name, '')` / `removeAttribute(name)` to match the server-rendered HTML.
+
+## Patch-branches
+
+A **patch-branch** owns patching for a DOM subtree that is either wholly present or wholly absent. It runs from a root element down to — but not including — each nested **qualifying** `b-if` it meets; every branch of that set that owns patchable content becomes its own patch-branch class (`BackflipPatch_<setId>_<branchIndex>`). One class per branch, not per set.
+
+- **Ownership.** A site belongs to the innermost patch-branch containing it. `renderIf_<set>` lives in the parent (it owns the anchor + marker pair), while the branch's content sites live in the child. A non-qualifying nested set is inert client-side, so its content stays owned by the enclosing patch-branch.
+- **`ref_elem`.** Each class is constructed with the element it patches against — `this.ce` for the root, and the parent element containing a set for each of that set's child branches. `sel_<bfid>()` is `ref_elem.querySelector(...)`, so every owned site resolves to `ref_elem` or a descendant of it.
+- **Forwarding.** A live var change enters through `BackflipMyElement.update` → root `pb.update`. Each patch-branch re-renders the sets it directly owns and forwards the change to the active child for anything deeper, so the change reaches whichever patch-branch actually owns the affected content.
+- **Snapshots.** Every set — nested included — gets its own module-level `bfif_<setId>` snapshot; `renderIf_<set>` calls `render(bfif_<set>, data)`. Snapshots are taken only after pass 1 has spliced every marker at every depth, so a re-rendered parent branch still carries the anchors its nested patch-branches need.
 
 ## Identifier sanitization
 

@@ -129,7 +129,7 @@ Deno.test("end-to-end: dynamic attr on the definition's wrapping tag targets thi
 	// No bfid lookup is needed — the patch target is the custom element itself.
 	assertEquals(js.includes('sel_'), false);
 	assertEquals(js.includes('querySelector'), false);
-	assertEquals(js.includes('elem = this.ce;'), true);
+	assertEquals(js.includes('elem = this.ref_elem;'), true);
 	assertEquals(js.includes("elem.setAttribute('class', String(this.bc_ce_class(data)))"), true);
 	// The def-root attr is a string class expression, not bool, so no removeAttribute.
 	assertEquals(js.includes("removeAttribute('class')"), false);
@@ -143,7 +143,7 @@ Deno.test("end-to-end: bool dynamic attr on definition root uses set/remove on e
 	);
 	const { js } = applyDomPatch(file, { bfidGen: makeSequentialBfidGen() });
 	if (!js) throw new Error('expected js');
-	assertEquals(js.includes('elem = this.ce;'), true);
+	assertEquals(js.includes('elem = this.ref_elem;'), true);
 	assertEquals(js.includes("elem.setAttribute('hidden', '')"), true);
 	assertEquals(js.includes("elem.removeAttribute('hidden')"), true);
 });
@@ -191,7 +191,7 @@ Deno.test("end-to-end: print directly in the custom element targets this.ce", as
 	assertEquals(collectComments(root.tnodes), ['bfid:bf0', 'bfid:bf1']);
 	assertEquals(js.includes('sel_'), false);
 	assertEquals(js.includes('querySelector'), false);
-	assertEquals(js.includes('elem = this.ce;'), true);
+	assertEquals(js.includes('elem = this.ref_elem;'), true);
 	assertEquals(js.includes("this.replaceBetween(elem, 'bfid:bf0', 'bfid:bf1', document.createTextNode(String(this.bc_print_bf0(data))));"), true);
 });
 
@@ -276,7 +276,7 @@ Deno.test("end-to-end: an if-set is bracketed by markers and its parent gets a b
 	assertEquals(js.includes('branch_bf1(data)'), true);
 	assertEquals(js.includes('renderIf_bf1(data)'), true);
 	assertEquals(js.includes("this.replaceBetween(elem, 'bfid:bf1', 'bfid:bf2', frag);"), true);
-	assertEquals(js.includes('this.if_bf1 = this.branch_bf1(this.collectData());'), true);
+	assertEquals(js.includes('this.if_bf1 = this.branch_bf1(data);'), true);
 });
 
 Deno.test("end-to-end: an if-set directly in the custom element targets this.ce", async () => {
@@ -287,7 +287,7 @@ Deno.test("end-to-end: an if-set directly in the custom element targets this.ce"
 	if (!js) throw new Error('expected js');
 	const root = file.partials.get('my-widget')!;
 	assertEquals(collectComments(root.tnodes), ['bfid:bf0', 'bfid:bf1']);
-	assertEquals(js.includes('const elem = this.ce;'), true);
+	assertEquals(js.includes('const elem = this.ref_elem;'), true);
 	assertEquals(js.includes('querySelector'), false);
 });
 
@@ -345,19 +345,28 @@ Deno.test("end-to-end: disqualified if-sets get no markers and no class", async 
 	}
 });
 
-Deno.test("end-to-end: only the outer of two nested if-sets becomes a patch site", async () => {
+Deno.test("end-to-end: a nested if-set is its own patch-branch (nesting supported)", async () => {
 	const file = await compileCustomElement(
-		`<my-widget b-attr:a b-attr:b><p b-if="a"><b b-if="b">deep</b></p><em b-else>B</em></my-widget>`
+		`<my-widget b-attr:a b-attr:b><p b-if="a"><b b-if="b">{{ b }}</b></p><em b-else>B</em></my-widget>`
 	);
 	const { js } = applyDomPatch(file, { bfidGen: makeSequentialBfidGen() });
 	if (!js) throw new Error('expected js');
-	// Exactly one marker pair (the outer set); the inner set is rendered statically
-	// as part of the snapshot and is not independently patchable.
-	assertEquals(collectComments(file.partials.get('my-widget')!.tnodes), ['bfid:bf0', 'bfid:bf1']);
-	assertEquals(js.match(/renderIf_/g)?.length, 2);   // the method definition + its one call in mutate_a
-	assertEquals(js.includes("case 'a':"), true);
-	// `b` only drives the nested set, which is not a patch site → no mutate for it.
-	assertEquals(js.includes("case 'b':"), false);
+
+	// Three marker pairs in the AST: the outer set, the inner set, and the print
+	// inside it. The inner markers are also carried inside the outer's snapshot.
+	const comments = collectComments(file.partials.get('my-widget')!.tnodes);
+	assertEquals(comments.length, 6);
+
+	// Two module-level snapshots, one per set.
+	assertEquals((js.match(/const bfif_/g) ?? []).length, 2);
+	// A child patch-branch class is emitted for the branch that owns the inner set.
+	assertEquals(/class BackflipPatch_bf\d+_0 \{/.test(js), true);
+
+	// The outer set is driven by `a`; the inner set (owned by the child branch) by `b`.
+	// `b` reaches the inner set by forwarding from the root's subtree var down to the
+	// active child, so both vars appear in an update switch somewhere.
+	assertEquals(js.includes("case 'a': this.mutate_a(data); break;"), true);
+	assertEquals(js.includes("case 'b': this.mutate_b(data); break;"), true);
 });
 
 Deno.test("end-to-end: applyDomPatch is idempotent — a second run reuses markers and yields identical JS", async () => {

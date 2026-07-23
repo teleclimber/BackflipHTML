@@ -117,7 +117,7 @@ function ifSet(branches: IfBranch[], over = IF_LIVE, flags: Partial<IfSetSite> =
 	}
 	return {
 		kind: 'if-set', node, container: [node], parentElement: null,
-		liveVars, otherVars, inForLoop: false, inIfSet: false, ...flags,
+		liveVars, otherVars, inForLoop: false, ...flags,
 	};
 }
 
@@ -137,9 +137,29 @@ Deno.test("if-set: a condition with no variables disqualifies", () => {
 	assertEquals(qualifies(ifSet([branch('a'), branch('1 == 1')]), IF_LIVE), false);
 });
 
-Deno.test("if-set: nested inside another set, or inside a b-for, is skipped", () => {
-	assertEquals(qualifies(ifSet([branch('a')], IF_LIVE, { inIfSet: true }), IF_LIVE), false);
+Deno.test("if-set: inside a b-for is skipped", () => {
 	assertEquals(qualifies(ifSet([branch('a')], IF_LIVE, { inForLoop: true }), IF_LIVE), false);
+});
+
+Deno.test("if-set: a set nested inside another set now qualifies (nesting allowed)", () => {
+	// The set itself is fine; nesting is no longer a disqualifier. Whether the *outer*
+	// set survives depends on its whole-subtree check (covered below).
+	const nested: IfTNode = { type: 'if', branches: [branch('b')] };
+	assertEquals(qualifies(ifSet([branch('a', [nested])]), IF_LIVE), true);
+	assertEquals(qualifies(ifSet([branch('b')]), IF_LIVE), true);
+});
+
+Deno.test("if-set: an inner set with a non-live var still sinks the outer set", () => {
+	// The outer set's whole-subtree check walks the inner condition too.
+	const nested: IfTNode = { type: 'if', branches: [branch('stranger')] };
+	assertEquals(qualifies(ifSet([branch('a', [nested])]), IF_LIVE), false);
+});
+
+Deno.test("if-set: a var-free inner condition leaves the outer set qualifying", () => {
+	// `b-if="1 == 1"` names no var — it can't be its own patch site, but it does not
+	// disqualify the outer set (nothing non-live in the subtree).
+	const nested: IfTNode = { type: 'if', branches: [branch('1 == 1')] };
+	assertEquals(qualifies(ifSet([branch('a', [nested])]), IF_LIVE), true);
 });
 
 Deno.test("if-set: a non-live var deep in the subtree disqualifies", () => {

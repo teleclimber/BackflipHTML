@@ -31,15 +31,15 @@ export function qualifies(s: Site, liveVarNames: Set<string>): boolean {
 
 /**
  * If-set rules beyond the cross-kind ones (see the dom-patch README):
- *  3. not nested inside another if-set,
- *  4. every conditional branch parses and names at least one variable,
- *  5–8. the whole subtree is renderable client-side from live vars alone —
- *       no non-live vars, no partial refs, no slots, no asset references.
+ *  - every conditional branch parses and names at least one variable,
+ *  - the whole subtree is renderable client-side from live vars alone —
+ *    no non-live vars, no partial refs, no slots, no asset references.
  *
- * A failure disqualifies the entire set, silently.
+ * Nesting is allowed: a qualifying set may sit inside another. The whole-subtree
+ * check below still runs for every set, so a disqualifier anywhere (including in a
+ * nested set) sinks the enclosing set too. A failure disqualifies the set silently.
  */
 function ifSetQualifies(s: IfSetSite, liveVarNames: Set<string>): boolean {
-	if (s.inIfSet) return false;
 	for (const b of s.node.branches) {
 		if (!b.condition) continue;   // b-else: no expression to check
 		if (!exprOk(b.condition, liveVarNames, new Set())) return false;
