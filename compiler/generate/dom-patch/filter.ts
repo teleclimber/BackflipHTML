@@ -22,9 +22,11 @@ export function qualifies(s: Site, liveVarNames: Set<string>): boolean {
 		case 'definition-root-attr':
 		case 'print':
 			return true;
+		case 'caller-attr-expr':
+			// An asset-bearing expression can't be patched client-side (no asset map).
+			return !s.site.attr.isAsset;
 		case 'for-iterable':
 		case 'binding':
-		case 'caller-attr-expr':
 			return false;
 	}
 }

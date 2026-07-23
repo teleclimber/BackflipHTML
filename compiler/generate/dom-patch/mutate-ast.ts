@@ -1,4 +1,4 @@
-import type { ElementTNode, TNode } from '../../types.js';
+import type { AttrPart, CustomElementCallTNode, ElementTNode, TNode } from '../../types.js';
 import { commentMarker, type BfidGen } from './bfid.js';
 import { isIfSetSite, type Site } from './collect.js';
 
@@ -45,16 +45,30 @@ export function ensureCommentsAround(
 	return { startId, endId };
 }
 
-export function ensureBfid(element: ElementTNode, bfidGen: BfidGen): string {
-	for (const a of element.attrs) {
+// Reuse an existing `data-bfid` static attr in `attrs`, or append one. Idempotent,
+// which is what keeps `applyDomPatch` safe to run twice on the same AST.
+function ensureBfidInAttrs(attrs: AttrPart[], bfidGen: BfidGen): string {
+	for (const a of attrs) {
 		if (a.type === 'static') {
 			const m = a.raw.match(BFID_RE);
 			if (m) return m[1];
 		}
 	}
 	const id = bfidGen();
-	element.attrs.push({ type: 'static', raw: ` data-bfid="${id}"` });
+	attrs.push({ type: 'static', raw: ` data-bfid="${id}"` });
 	return id;
+}
+
+export function ensureBfid(element: ElementTNode, bfidGen: BfidGen): string {
+	return ensureBfidInAttrs(element.attrs, bfidGen);
+}
+
+// Stamp a `data-bfid` onto a nested custom-element call's rendered tag by adding it
+// to `callerAttrs` (merged into the open tag at render time). Idempotent, and shared
+// across every dynamic caller attr on the same call so they resolve to one element.
+export function ensureCallBfid(call: CustomElementCallTNode, bfidGen: BfidGen): string {
+	call.callerAttrs ??= [];
+	return ensureBfidInAttrs(call.callerAttrs, bfidGen);
 }
 
 /**
@@ -70,9 +84,12 @@ export function elementForSite(s: Site): ElementTNode | null {
 		case 'attr': return s.site.element;
 		case 'print': return s.site.parentElement;
 		case 'definition-root-attr': return null;
+		case 'caller-attr-expr':
+			// Its anchor is a custom-element call node, not an ElementTNode; toBfidSite
+			// stamps it via ensureCallBfid instead of routing through here.
+			throw new Error("dom-patch: 'caller-attr-expr' target is resolved in toBfidSite, not elementForSite");
 		case 'for-iterable':
 		case 'binding':
-		case 'caller-attr-expr':
 			throw new Error("not implemented: "+s.site.kind);
 	}
 }

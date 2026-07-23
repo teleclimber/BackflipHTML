@@ -10,9 +10,10 @@ Because of this, the CLI calls `applyDomPatch()` on each `CompiledFile` **before
 
 ## What qualifies
 
-Four site flavors are emitted:
+Five site flavors are emitted:
 
 - **`attr`** — a `b-bind:`/`:` dynamic attribute on an element inside the partial body. The owning element gets a `data-bfid` so the runtime can find it via `querySelector`.
+- **`caller-attr-expr`** — a `b-bind:`/`:` dynamic attribute on a **nested custom-element call** inside the partial body (e.g. `<child-el :show="show">` inside `parent-el`). The call renders as a real element, so the attribute is patched with `setAttribute` on it — exactly like an `attr` site — and the nested custom element observes the change and re-patches its own subtree. A `data-bfid` is stamped into the call's `callerAttrs` (merged into the rendered open tag); multiple dynamic caller attrs on the same call share one `data-bfid`. This is what lets a live var flow from a parent custom element down into a child custom element's attribute.
 - **`definition-root-attr`** — a `b-bind:`/`:` dynamic attribute on the partial's own wrapping tag (i.e. the custom element itself). No `data-bfid` is added — it resolves to the owning patch-branch's `ref_elem`, which for the root is the custom element (`this.ce`).
 - **`print`** — a `{{ expr }}` interpolation. The print is bracketed by two marker comment nodes (`<!--bfid:<id>-->`), and its parent element gets a `data-bfid`. When that parent *is* the owning patch-branch's ref element (a print directly inside the custom element, or in a `b-unwrap` branch), no `data-bfid` is added and it targets `ref_elem`. `b-if` / `b-for` wrappers are DOM-transparent, so the "parent element" is the nearest enclosing real element and the markers are inserted as immediate siblings of the print (inside the branch).
 - **`if-set`** — a whole `b-if` / `b-else-if` / `b-else` set, tracked as **one** site (not one per branch). Anchored exactly like a print: a marker pair brackets the `IfTNode` in its container array, and the nearest enclosing element gets a `data-bfid` (or it targets the owning patch-branch's `ref_elem`). Unlike the other flavors this one generates *new DOM* in the browser — see [b-if sets](#b-if-sets) below.
@@ -20,11 +21,12 @@ Four site flavors are emitted:
 A site qualifies when **all** of these hold:
 
 - The owning partial is a **custom-element partial** (`b-attr:` declarations are the source of "live" variables).
-- For attrs: the attribute is a `b-bind:`/`:` dynamic attribute (a `Parsed` expression in `AttrPart.dynamic.expr`). For prints: the `{{ expr }}`'s `Parsed`. For if-sets: every branch condition.
+- For attrs (element and caller): the attribute is a `b-bind:`/`:` dynamic attribute (a `Parsed` expression in `AttrPart.dynamic.expr`). For prints: the `{{ expr }}`'s `Parsed`. For if-sets: every branch condition.
 - Every variable in `parsed.vars` is one of the partial's live vars. Mixed live + non-live expressions are skipped entirely.
 - The site is **not** inside a `b-for` loop. (v1 limitation — see below.)
+- For caller attrs: the attribute is **not** asset-bearing (`isAsset`), since the browser has no asset map.
 
-Sites that don't qualify are silently ignored: `b-for` iterables, `b-data:` bindings, caller-side attr expressions on nested custom-element calls. Slot contents are not entered (they live in the caller's scope).
+Sites that don't qualify are silently ignored: `b-for` iterables and `b-data:` bindings. Static caller attrs and caller attrs referencing non-live vars are not patched. Slot contents are not entered (they live in the caller's scope). A `b-part` call inlines its partial with no stable element, so nothing on it is patchable.
 
 If a partial produces zero classes, it contributes nothing to the file. If a file produces zero classes, no file is emitted.
 
@@ -111,7 +113,7 @@ Inside a `mutate_<varName>` body, **set handling runs first** (see [Ordering](#o
 
 Per-site updates within a found group:
 
-- **attr** → `elem.setAttribute(name, String(...))`, or `setAttribute(name, '')`+`removeAttribute(name)` for booleans.
+- **attr** / **caller-attr-expr** → `elem.setAttribute(name, String(...))`, or `setAttribute(name, '')`+`removeAttribute(name)` for booleans. (Both resolve `elem` by `data-bfid`; a caller-attr's `elem` is the nested custom-element call's rendered tag.)
 - **print** → `this.replaceBetween(elem, '<startMarker>', '<endMarker>', document.createTextNode(String(...)))`.
 
 `renderIf_<setId>(data)` resolves the set's target element itself (same null-guard `console.error`), re-renders the winning branch into the marker range via `replaceBetween`, evicts the old branch's child instance, creates the new one, and returns whether it swapped. `replaceBetween(parent, startMarker, endMarker, node)` is the shared marker-range replace: it finds the two marker comments among `parent`'s direct children, removes every node strictly between them, and inserts `node` before the closing marker. Prints pass a text node (never `innerText`/`innerHTML`) so siblings are preserved and the value is never interpreted as markup; if-sets pass the `DocumentFragment` of the freshly rendered branch. Either way the markers survive, so the range stays patchable.

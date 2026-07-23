@@ -4,7 +4,7 @@ import { nodeToJS } from '../js/nodes2js.js';
 import { makeBfidGen, type BfidGen } from './bfid.js';
 import { collectPatchTree, type BranchScope, type IfSetScope } from './collect.js';
 import { qualifies } from './filter.js';
-import { ensureBfid, elementForSite, ensureCommentsAround } from './mutate-ast.js';
+import { ensureBfid, ensureCallBfid, elementForSite, ensureCommentsAround } from './mutate-ast.js';
 import {
 	generateClassForPartial, generateFile, patchClassNameFor,
 	type BfidSite, type IfSetPatchSite, type PatchBranch, type PatchTarget,
@@ -119,6 +119,12 @@ function toBfidSite(
 	refElement: ElementTNode | null,
 	gen: BfidGen,
 ): BfidSite {
+	// A caller-attr site's anchor is the nested call's rendered element, not an
+	// ElementTNode — it always resolves to a descendant (never the ref element), so
+	// stamp the call's callerAttrs directly instead of going through resolveTarget.
+	if (site.site.kind === 'caller-attr-expr') {
+		return { target: { kind: 'bfid-element', bfid: ensureCallBfid(site.site.ref, gen) }, backcode: site };
+	}
 	const target = resolveTarget(elementForSite(site), refElement, gen);
 	if (site.site.kind === 'print') {
 		const comments = ensureCommentsAround(site.site.container, site.site.node, gen);

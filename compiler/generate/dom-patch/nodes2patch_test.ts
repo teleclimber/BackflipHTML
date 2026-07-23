@@ -19,6 +19,19 @@ async function compileCustomElement(html: string): Promise<CompiledFile> {
 	return { partials: new Map([[def.name, compiled]]) };
 }
 
+// Assemble several single-partial sources into one CompiledFile, mirroring a
+// template file that defines multiple custom elements. dom-patch codegen reads
+// only lower-time data (bAttrs, callerAttrs), so no cross-partial linking is
+// needed for these tests.
+async function compileCustomElements(...htmls: string[]): Promise<CompiledFile> {
+	const partials: CompiledFile['partials'] = new Map();
+	for (const html of htmls) {
+		const single = await compileCustomElement(html);
+		for (const [name, root] of single.partials) partials.set(name, root);
+	}
+	return { partials };
+}
+
 Deno.test("end-to-end: simple custom element with one live attr", async () => {
 	const file = await compileCustomElement(
 		`<my-widget b-attr:title><span :data-x="title">hi</span></my-widget>`
@@ -146,6 +159,95 @@ Deno.test("end-to-end: bool dynamic attr on definition root uses set/remove on e
 	assertEquals(js.includes('elem = this.ref_elem;'), true);
 	assertEquals(js.includes("elem.setAttribute('hidden', '')"), true);
 	assertEquals(js.includes("elem.removeAttribute('hidden')"), true);
+});
+
+Deno.test("end-to-end: live var passed to a nested custom-element call is patchable", async () => {
+	const file = await compileCustomElement(
+		`<parent-el b-attr:show><child-el desc="hi" :show="show"></child-el></parent-el>`
+	);
+	const { js } = applyDomPatch(file, { bfidGen: makeSequentialBfidGen() });
+	if (!js) throw new Error('expected js (caller attr driven by a live var should be patchable)');
+	assertEquals(js.includes('export class BackflipParentEl'), true);
+	assertEquals(js.includes('mutate_show'), true);
+	// The nested custom element is located via a stamped data-bfid, and its
+	// `show` attribute is set from the live var.
+	assertEquals(js.includes('sel_bf0()'), true);
+	assertEquals(js.includes("querySelector('[data-bfid=\"bf0\"]')"), true);
+	assertEquals(js.includes("setAttribute('show', String(this.bc_bf0_show(data)))"), true);
+});
+
+Deno.test("end-to-end: bool caller attr on a nested custom-element call uses set/remove", async () => {
+	// `open` is a known boolean HTML attribute, so `:open="open"` is a boolean bind.
+	const file = await compileCustomElement(
+		`<parent-el b-attr:open.bool><child-el :open="open"></child-el></parent-el>`
+	);
+	const { js } = applyDomPatch(file, { bfidGen: makeSequentialBfidGen() });
+	if (!js) throw new Error('expected js');
+	assertEquals(js.includes("setAttribute('open', '')"), true);
+	assertEquals(js.includes("removeAttribute('open')"), true);
+});
+
+Deno.test("end-to-end: caller attr referencing a non-live var is not patchable", async () => {
+	const file = await compileCustomElement(
+		`<parent-el b-attr:show><child-el :foo="other"></child-el></parent-el>`
+	);
+	const { js } = applyDomPatch(file, { bfidGen: makeSequentialBfidGen() });
+	assertEquals(js, null);
+});
+
+// The user-reported bug: two dom-patchable custom-element partials in the same
+// file. The parent's only live-var use is a caller attr on the nested call; before
+// caller-attr sites were patchable it produced no class and vanished from the file.
+Deno.test("end-to-end: two custom elements in one file both emit classes", async () => {
+	const file = await compileCustomElements(
+		`<parent-el b-attr:show><child-el :show="show"></child-el></parent-el>`,
+		`<child-el b-attr:show><span :data-x="show">x</span></child-el>`,
+	);
+	const { js } = applyDomPatch(file, { bfidGen: makeSequentialBfidGen() });
+	if (!js) throw new Error('expected js');
+	assertEquals(js.includes('export class BackflipParentEl'), true);
+	assertEquals(js.includes('export class BackflipChildEl'), true);
+});
+
+Deno.test("end-to-end: nested custom-element call gets a data-bfid stamped into its callerAttrs", async () => {
+	const file = await compileCustomElement(
+		`<parent-el b-attr:show><child-el :show="show"></child-el></parent-el>`
+	);
+	applyDomPatch(file, { bfidGen: makeSequentialBfidGen() });
+	const root = file.partials.get('parent-el')!;
+	function findCall(tnodes: any[]): any {
+		for (const n of tnodes) {
+			if (n.type === 'partial-ref' && n.kind === 'custom-element') return n;
+			if (n.tnodes) { const g = findCall(n.tnodes); if (g) return g; }
+		}
+		return null;
+	}
+	const call = findCall(root.tnodes);
+	if (!call) throw new Error('nested custom-element call not found');
+	const hasBfid = call.callerAttrs.some((a: any) => a.type === 'static' && a.raw.includes('data-bfid="bf0"'));
+	assertEquals(hasBfid, true);
+});
+
+Deno.test("end-to-end: two live caller attrs on one nested call share a single bfid", async () => {
+	const file = await compileCustomElement(
+		`<parent-el b-attr:a b-attr:b><child-el :data-a="a" :data-b="b"></child-el></parent-el>`
+	);
+	const { js } = applyDomPatch(file, { bfidGen: makeSequentialBfidGen() });
+	if (!js) throw new Error('expected js');
+	// One data-bfid, one sel_ helper, but both attributes patched off it.
+	assertEquals(js.match(/sel_bf\d+\(\) \{/g)?.length, 1);
+	assertEquals(js.includes("setAttribute('data-a', String(this.bc_bf0_data_a(data)))"), true);
+	assertEquals(js.includes("setAttribute('data-b', String(this.bc_bf0_data_b(data)))"), true);
+});
+
+Deno.test("end-to-end: caller-attr patch emits valid JavaScript", async () => {
+	const file = await compileCustomElement(
+		`<parent-el b-attr:show><child-el :show="show"></child-el></parent-el>`
+	);
+	const { js } = applyDomPatch(file, { bfidGen: makeSequentialBfidGen() });
+	if (!js) throw new Error('expected js');
+	const fn = new Function(js.replaceAll('export class', 'class') + '; return BackflipParentEl;');
+	assertEquals(typeof fn(), 'function');
 });
 
 // Recursively collect every comment node's text from a tree.

@@ -419,10 +419,12 @@ function genMissingElementError(target: PatchTarget, className: string): string 
 function bcFnNameForSite(s: BfidSite): string {
 	const inner = s.backcode.site;
 	switch (inner.kind) {
-		case 'attr': {
-			// An 'attr' site always patches a descendant element (never the ref element).
+		case 'attr':
+		case 'caller-attr-expr': {
+			// Both patch a descendant element located by bfid (never the ref element):
+			// an 'attr' site's own element, or a caller attr on a nested custom-element call.
 			if (s.target.kind !== 'bfid-element') {
-				throw new Error("dom-patch codegen: 'attr' site must target a bfid element");
+				throw new Error(`dom-patch codegen: '${inner.kind}' site must target a bfid element`);
 			}
 			return `bc_${s.target.bfid}_${sanitizeAttrName(inner.attr.name)}`;
 		}
@@ -447,7 +449,8 @@ function genSiteUpdate(s: BfidSite): string {
 	const inner = s.backcode.site;
 	switch (inner.kind) {
 		case 'attr':
-		case 'definition-root-attr': {
+		case 'definition-root-attr':
+		case 'caller-attr-expr': {
 			const fn = bcFnNameForSite(s);
 			const dom = inner.attr.name;
 			if (inner.attr.isBoolean) {

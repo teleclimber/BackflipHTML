@@ -16,7 +16,11 @@ export type BackcodeSiteKind =
 	| { kind: 'print'; node: PrintTNode; container: TNode[]; parentElement: ElementTNode | null }
 	| { kind: 'for-iterable'; node: ForTNode }
 	| { kind: 'binding'; ref: CustomElementCallTNode | BPartCallTNode; binding: PartialBinding & { kind: 'expr' } }
-	| { kind: 'caller-attr-expr'; ref: CustomElementCallTNode; attrInfo: NonNullable<CustomElementCallTNode['callerAttrInfos']>[number] };
+	// A `b-bind:`/`:` dynamic attribute on a *nested* custom-element call. The call
+	// renders as a real element, so the attribute is patched with `setAttribute` on
+	// it (located by a `data-bfid` stamped into the call's `callerAttrs`), which the
+	// nested custom element then observes. `ref` is stamped; `attr` drives codegen.
+	| { kind: 'caller-attr-expr'; ref: CustomElementCallTNode; attr: AttrPart & { type: 'dynamic' } };
 
 export interface BackcodeSite {
 	site: BackcodeSiteKind;
@@ -177,8 +181,18 @@ function walkNode(
 			return;
 		}
 		case 'partial-ref':
-			// Bindings and caller-attr-exprs are never patchable, and slot contents live
-			// in the caller's scope — nothing here contributes to a patch-branch.
+			// A custom-element call renders as a real element, so a dynamic caller attr
+			// driven by live vars is a patchable attribute site on it (the nested element
+			// observes the change). A b-part call inlines its partial with no stable
+			// element, b-data: bindings aren't patchable, and slot contents live in the
+			// caller's scope — none of those contribute to a patch-branch.
+			if (n.kind === 'custom-element' && n.callerAttrs) {
+				for (const a of n.callerAttrs) {
+					if (a.type !== 'dynamic') continue;
+					const site = makeBackcodeSite({ kind: 'caller-attr-expr', ref: n, attr: a }, a.expr, liveVarNames, inForLoop);
+					if (qualifies(site)) scope.sites.push(site);
+				}
+			}
 			return;
 	}
 }

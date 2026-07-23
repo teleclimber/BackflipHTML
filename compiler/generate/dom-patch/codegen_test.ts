@@ -66,6 +66,16 @@ function defRootBfidSite(attr: AttrPart, liveVars: string[]): BfidSite {
 	return { target: { kind: 'ref-element' }, backcode };
 }
 
+function callerAttrBfidSite(bfid: string, attr: AttrPart, liveVars: string[]): BfidSite {
+	if (attr.type !== 'dynamic') throw new Error('expected dynamic');
+	// `ref` is only stamped in nodes2patch; codegen never reads it, so a null cast is fine here.
+	const backcode: BackcodeSite = {
+		site: { kind: 'caller-attr-expr', ref: null as never, attr },
+		parsed: attr.expr, liveVars, otherVars: [], inForLoop: false,
+	};
+	return { target: { kind: 'bfid-element', bfid }, backcode };
+}
+
 // `conditions` are the branch expressions (null = b-else); `subtreeVars` and
 // `branches` drive the forwarding/child-class logic.
 function ifPatchSite(opts: {
@@ -176,6 +186,20 @@ Deno.test("null bfid element: mutate logs console.error against ref_elem", () =>
 		js.includes(`} else {\n\t\t\tconsole.error('BackflipHTML BackflipPatch_MyElement: element [data-bfid="bf0"] not found; skipping update', this.ref_elem);\n\t\t}`),
 		true,
 	);
+});
+
+Deno.test("caller-attr site: sel by bfid + setAttribute, like an attr site", () => {
+	const site = callerAttrBfidSite('bf0', dynAttr('show', 'show'), ['show']);
+	const js = generateClassForPartial('parent-el', [{ name: 'show', isBool: false }], branch([site]))!;
+	assertEquals(js.includes(`sel_bf0() { return this.ref_elem.querySelector('[data-bfid="bf0"]'); }`), true);
+	assertEquals(js.includes('elem = this.sel_bf0();'), true);
+	assertEquals(js.includes("elem.setAttribute('show', String(this.bc_bf0_show(data)))"), true);
+});
+
+Deno.test("bool caller-attr site: setAttribute('')/removeAttribute", () => {
+	const site = callerAttrBfidSite('bf0', dynAttr('open', 'open', true), ['open']);
+	const js = generateClassForPartial('parent-el', [{ name: 'open', isBool: false }], branch([site]))!;
+	assertEquals(js.includes("if (this.bc_bf0_open(data)) elem.setAttribute('open', ''); else elem.removeAttribute('open');"), true);
 });
 
 Deno.test("ref-element site: no sel, targets this.ref_elem, ref-element error", () => {
