@@ -108,6 +108,8 @@ Multiple bindings can appear on the same element:
 <div :class="cls"></div>
 ```
 
+**Static attributes** (no binding) are re-emitted exactly as written, valueless ones included: `<input disabled>` renders as `<input disabled>`, while an explicit `<input disabled="">` keeps its empty value.
+
 ---
 
 ## Asset References (`~`)

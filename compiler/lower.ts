@@ -720,11 +720,12 @@ function buildCustomElementPartialRef(el: SourceElement, pctx: PartialCtx): Cust
 			callerAttrInfos.push(info);
 		} else {
 			const effName = n.endsWith('~') ? n.slice(0, -1) : n;
-			const info: { name: string; kind: 'plain' | 'expr'; value: string; expr?: Parsed; loc?: SourceLoc } = {
+			const info: { name: string; kind: 'plain' | 'expr'; value: string; bare?: boolean; expr?: Parsed; loc?: SourceLoc } = {
 				name: effName,
 				kind: 'plain',
 				value: attr.value,
 			};
+			if (attr.bare) info.bare = true;
 			if (aLoc) info.loc = aLoc;
 			callerAttrInfos.push(info);
 		}

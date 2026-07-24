@@ -81,7 +81,7 @@ export type AttrSegment =
  * pre-converted locs, plus the open tag's loc for error fallbacks).
  */
 export function classifyOpenTagAttrs(
-	el: { attrs: Pick<SourceAttr, 'name' | 'value' | 'loc' | 'valueLoc'>[], openLoc?: SourceLoc },
+	el: { attrs: Pick<SourceAttr, 'name' | 'value' | 'loc' | 'valueLoc' | 'bare'>[], openLoc?: SourceLoc },
 	excludeAttrs: string[],
 	ctx: AssetAttrCtx,
 ): { segments: AttrSegment[], hasBind: boolean, errors: BackflipError[] } {
@@ -130,7 +130,7 @@ export function classifyOpenTagAttrs(
 				loc: attr.loc,
 			});
 		} else {
-			segments.push({ kind: 'static', text: ` ${attr.name}="${attr.value}"` });
+			segments.push({ kind: 'static', text: attr.bare ? ` ${attr.name}` : ` ${attr.name}="${attr.value}"` });
 		}
 	}
 	return { segments, hasBind, errors };

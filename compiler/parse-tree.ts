@@ -31,6 +31,9 @@ export interface SourceAttr {
 	                          // (absent means no location info — treat as equal to `name`)
 	valueLoc?: TextLoc;       // start of the value text; anchors sub-value locs (asset refs)
 	                          // without re-deriving them from the source text downstream
+	bare?: boolean;           // written with no value at all (`disabled`), as opposed to an
+	                          // explicit empty value (`disabled=""`); parse5 reports value ''
+	                          // for both, so the distinction is captured here from the source
 }
 
 export interface SourceElement {
@@ -152,6 +155,12 @@ export function buildSourceTree(html: string, filename?: string, locBase?: LocBa
 						const vLoc = advanceLoc(loc, valueIdx === -1 ? '' : attrText.slice(0, valueIdx));
 						attr.valueLoc = { startLine: vLoc.startLine + base.line, startCol: vLoc.startCol, startOffset: vLoc.startOffset + base.offset };
 						attr.loc = rebase(loc);
+					}
+					// `disabled` and `disabled=""` both arrive with value ''; only the
+					// source span tells them apart — a bare attr spans just its name.
+					// With no location to measure, assume bare (the common case).
+					if (a.value === '') {
+						attr.bare = !loc || (loc.endOffset - loc.startOffset) === a.name.length;
 					}
 					return attr;
 				}),

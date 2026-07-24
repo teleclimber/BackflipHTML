@@ -373,6 +373,13 @@ Deno.test("php: attr-bind: checkbox checked=false, disabled=true", async () => {
     );
 });
 
+Deno.test("php: static attrs: bare attrs stay bare, explicit empty values are kept", async () => {
+    assertEquals(
+        normalize(await renderPhp("binds.html", "static_bare", { v: "x" })),
+        `<div><input type="checkbox" checked><input disabled value="x"><input readonly=""></div>`
+    );
+});
+
 Deno.test("php: attr-bind: link with url and cls=false omits class", async () => {
     assertEquals(
         normalize(await renderPhp("binds.html", "link", { url: "/about", cls: false })),

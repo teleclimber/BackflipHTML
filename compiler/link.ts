@@ -144,17 +144,9 @@ export function linkBAttrBindings(
 					}
 				}
 
-				// Determine whether a 'plain' caller attribute was written bare (just `name`)
-				// or with a value (`name="..."`, including empty `name=""`). parse5 reports
-				// `attr.value === ''` for both, but the source-location range distinguishes
-				// them: bare attrs have a location range equal to the name length.
-				const isBareAttr = (caller: { name: string; value: string; loc?: SourceLoc }): boolean => {
-					if (caller.value !== '') return false;
-					if (!caller.loc) return true; // best effort: no loc → assume bare since value is empty
-					const span = caller.loc.endOffset - caller.loc.startOffset;
-					return span === caller.name.length;
-				};
-
+				// Whether a 'plain' caller attribute was written bare (just `name`) or with a
+				// value (`name="..."`, including empty `name=""`) is decided at parse time —
+				// see `SourceAttr.bare` in parse-tree.ts, surfaced here as `caller.bare`.
 				for (const bAttr of bAttrs) {
 					const caller = callerInfos.find(c => c.name === bAttr.name);
 					if (!caller) {
@@ -167,7 +159,7 @@ export function linkBAttrBindings(
 
 					if (!bAttr.isBool) {
 						// Non-bool b-attr
-						if (caller.kind === 'plain' && isBareAttr(caller)) {
+						if (caller.kind === 'plain' && caller.bare) {
 							errors.push(new BackflipError(
 								`attribute "${bAttr.name}" on <${ref.callerTagName}> requires a string value (declared as non-bool b-attr in the partial definition)`,
 								errorLoc(sourceRelPath, caller.loc ?? ref.loc)
@@ -184,7 +176,7 @@ export function linkBAttrBindings(
 						}
 					} else {
 						// Bool b-attr
-						if (caller.kind === 'plain' && !isBareAttr(caller)) {
+						if (caller.kind === 'plain' && !caller.bare) {
 							// premium="..." or premium="" — both warn (string-where-bool-expected)
 							errors.push(new BackflipError(
 								`attribute "${bAttr.name}" on <${ref.callerTagName}> has a string value but the partial definition declares it as bool; the value will be coerced to true`,

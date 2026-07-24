@@ -107,6 +107,8 @@ export interface CustomElementCallTNode extends BasePartialCall {
 		name: string;             // effective attr name (after stripping b-bind: / : / trailing ~)
 		kind: 'plain' | 'expr';   // plain = static HTML attr (bare or with literal value); expr = b-bind:/: with backcode
 		value: string;            // raw value from the source ('' for bare boolean)
+		bare?: boolean;           // kind='plain' written with no value at all (`premium`),
+		                          // as opposed to an explicit empty value (`premium=""`)
 		expr?: Parsed;            // parsed backcode for kind='expr'
 		loc?: SourceLoc;
 	}[],                          // rich per-attribute info used for b-attr resolution and conflict checks

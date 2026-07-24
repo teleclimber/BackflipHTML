@@ -843,6 +843,32 @@ Deno.test("compileFile: bind attr on b-name root element excludes b-name and b-e
 	assertEquals(allStatic.includes('id="x"'), true, "static attrs should be preserved");
 });
 
+// ---- compileFile: bare (valueless) attrs ----
+
+Deno.test("bare attr renders without a value, empty-valued attr keeps its =\"\"", async () => {
+	const { root, errors } = await compileSnippet('<input disabled><input checked=""><input value="x">');
+	assertEquals(errors.length, 0);
+	assertEquals(renderStatic(root.tnodes), '<input disabled><input checked=""><input value="x">');
+});
+
+Deno.test("bare attr stays bare on a tag that also has a bind", async () => {
+	const { compiled, errors } = await compileFile('<div b-name="test"><input disabled :value="v"></div>');
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('test')!;
+	const input = findElement(root.tnodes, 'input')!;
+	const staticRaw = input.attrs.filter(p => p.type === 'static').map(p => (p as { raw: string }).raw).join('');
+	assertEquals(staticRaw, ' disabled');
+});
+
+Deno.test("bare attr stays bare on a b-name root element", async () => {
+	const { compiled, errors } = await compileFile('<div b-name="card" hidden :class="cls">Hello</div>');
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('card')!;
+	const el = root.tnodes[0] as ElementTNode;
+	const staticRaw = el.attrs.filter(p => p.type === 'static').map(p => (p as { raw: string }).raw).join('');
+	assertEquals(staticRaw, ' hidden');
+});
+
 // ---- PartialMeta tests ----
 
 Deno.test("meta: fragment-level partial has correct startOffset, endOffset, isDocumentLevel=false", async () => {

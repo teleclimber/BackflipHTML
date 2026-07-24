@@ -535,6 +535,8 @@ Deno.test("b-attr: bare premium attribute synthesizes literal=true binding", () 
     const html = normalize(renderRoot(getModule("battr.html").caller_premium_bare, {}));
     // The childCtx should receive premium=true (literal) so PRO renders.
     assertStringIncludes(html, "<span>PRO</span>");
+    // …and the attr is re-emitted bare, exactly as written — not as premium=""
+    assertStringIncludes(html, '<my-widget premium label="hi">');
 });
 
 // ---------------------------------------------------------------------------
@@ -562,6 +564,14 @@ Deno.test("attr-bind: link with url and cls=false omits class", () => {
     assertEquals(
         normalize(renderRoot(mod.link, { url: "/about", cls: false })),
         `<div><a href="/about">Link</a></div>`
+    );
+});
+
+Deno.test("static attrs: bare attrs stay bare, explicit empty values are kept", () => {
+    const mod = getModule("binds.html");
+    assertEquals(
+        normalize(renderRoot(mod.static_bare, { v: "x" })),
+        `<div><input type="checkbox" checked><input disabled value="x"><input readonly=""></div>`
     );
 });
 
