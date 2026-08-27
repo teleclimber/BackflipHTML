@@ -380,6 +380,13 @@ Deno.test("php: static attrs: bare attrs stay bare, explicit empty values are ke
     );
 });
 
+Deno.test("php: static attrs: source quoting is preserved verbatim", async () => {
+    assertEquals(
+        normalize(await renderPhp("binds.html", "static_quotes", { v: "x" })),
+        `<div><a href='single' title="double" data-bare=unquoted data-mixed='say "hi"' data-amp="a &amp; b" class='' id="x">Link</a></div>`
+    );
+});
+
 Deno.test("php: attr-bind: link with url and cls=false omits class", async () => {
     assertEquals(
         normalize(await renderPhp("binds.html", "link", { url: "/about", cls: false })),

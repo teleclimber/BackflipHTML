@@ -57,6 +57,20 @@ export function effectiveAttrNames(attrs: { name: string, value: string }[]): st
 	return names;
 }
 
+/**
+ * The quote character an attribute's value was written with in source: `"`, `'`,
+ * or '' for an unquoted value. Derived from the attribute's raw source text so
+ * re-emitted attrs keep the author's quoting. Defaults to `"` when there is no
+ * source text to inspect (no location info from the parser).
+ */
+export function attrQuote(raw: string | undefined): '"' | "'" | '' {
+	if (raw === undefined) return '"';
+	const eq = raw.indexOf('=');
+	if (eq === -1) return '"';
+	const q = raw[eq + 1];
+	return q === '"' || q === "'" ? q : '';
+}
+
 // --- open-tag attr classification & assembly ---
 
 /**
@@ -66,7 +80,7 @@ export function effectiveAttrNames(attrs: { name: string, value: string }[]): st
  */
 export type AttrSegment =
 	| { kind: 'static', text: string }
-	| { kind: 'asset', attrName: string, originalValue: string, refs: AssetRef[], loc: SourceLoc | undefined }
+	| { kind: 'asset', attrName: string, originalValue: string, refs: AssetRef[], quote: string, loc: SourceLoc | undefined }
 	| { kind: 'bind', name: string, expr: Parsed, isBoolean: boolean, isAsset: boolean, loc: SourceLoc | undefined };
 
 /**
@@ -81,7 +95,7 @@ export type AttrSegment =
  * pre-converted locs, plus the open tag's loc for error fallbacks).
  */
 export function classifyOpenTagAttrs(
-	el: { attrs: Pick<SourceAttr, 'name' | 'value' | 'loc' | 'valueLoc' | 'bare'>[], openLoc?: SourceLoc },
+	el: { attrs: Pick<SourceAttr, 'name' | 'value' | 'loc' | 'valueLoc' | 'bare' | 'raw'>[], openLoc?: SourceLoc },
 	excludeAttrs: string[],
 	ctx: AssetAttrCtx,
 ): { segments: AttrSegment[], hasBind: boolean, errors: BackflipError[] } {
@@ -127,10 +141,14 @@ export function classifyOpenTagAttrs(
 				attrName: realName,
 				originalValue,
 				refs,
+				// The value is rewritten, so only the author's quote style carries over;
+				// an unquoted source value falls back to `"` since the resolved path is
+				// not guaranteed to stay quote-free.
+				quote: attrQuote(attr.raw) || '"',
 				loc: attr.loc,
 			});
 		} else {
-			segments.push({ kind: 'static', text: attr.bare ? ` ${attr.name}` : ` ${attr.name}="${attr.value}"` });
+			segments.push({ kind: 'static', text: ' ' + (attr.raw ?? (attr.bare ? attr.name : `${attr.name}="${attr.value}"`)) });
 		}
 	}
 	return { segments, hasBind, errors };
@@ -151,7 +169,7 @@ export function buildAttrParts(segments: AttrSegment[], trailingStatic: string =
 		} else {
 			if (staticBuf) { parts.push({ type: 'static', raw: staticBuf }); staticBuf = ''; }
 			if (seg.kind === 'asset') {
-				parts.push({ type: 'asset', attrName: seg.attrName, originalValue: seg.originalValue, refs: seg.refs, loc: seg.loc });
+				parts.push({ type: 'asset', attrName: seg.attrName, originalValue: seg.originalValue, refs: seg.refs, quote: seg.quote, loc: seg.loc });
 			} else {
 				const part: AttrPart = { type: 'dynamic', name: seg.name, expr: seg.expr, isBoolean: seg.isBoolean, loc: seg.loc };
 				if (seg.isAsset) part.isAsset = true;

@@ -31,6 +31,8 @@ export interface SourceAttr {
 	                          // (absent means no location info — treat as equal to `name`)
 	valueLoc?: TextLoc;       // start of the value text; anchors sub-value locs (asset refs)
 	                          // without re-deriving them from the source text downstream
+	raw?: string;             // exact source text of the attribute (name, =, quotes, value) when a
+	                          // loc was available; re-emitted verbatim for static attrs
 	bare?: boolean;           // written with no value at all (`disabled`), as opposed to an
 	                          // explicit empty value (`disabled=""`); parse5 reports value ''
 	                          // for both, so the distinction is captured here from the source
@@ -162,6 +164,7 @@ export function buildSourceTree(html: string, filename?: string, locBase?: LocBa
 					if (a.value === '') {
 						attr.bare = !loc || (loc.endOffset - loc.startOffset) === a.name.length;
 					}
+					if (loc) attr.raw = html.slice(loc.startOffset, loc.endOffset);
 					return attr;
 				}),
 				selfClosing: !!tag.selfClosing,

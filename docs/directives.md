@@ -108,7 +108,16 @@ Multiple bindings can appear on the same element:
 <div :class="cls"></div>
 ```
 
-**Static attributes** (no binding) are re-emitted exactly as written, valueless ones included: `<input disabled>` renders as `<input disabled>`, while an explicit `<input disabled="">` keeps its empty value.
+**Static attributes** (no binding) are re-emitted byte-for-byte as written — the quote style, the name's case, and any character references are all preserved:
+
+```html
+<!-- renders exactly as written -->
+<a href='single' title="double" rel=unquoted data-x='say "hi"' href2="?a=1&amp;b=2">
+```
+
+Valueless attributes stay valueless too: `<input disabled>` renders as `<input disabled>`, while an explicit `<input disabled="">` keeps its empty value.
+
+Bound attributes are a different story — `:href="expr"` has no source value to preserve, so its rendered value is HTML-escaped and always double-quoted (see above). The same goes for the resolved value of an asset attribute (`src~`), though there the *quote style* still carries over from the source: `src~='@images/logo.png'` renders as `src='/img/logo.png'`. An unquoted asset attribute resolves to a double-quoted one, since the resolved path is not guaranteed to stay quote-free.
 
 ---
 

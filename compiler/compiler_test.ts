@@ -869,6 +869,65 @@ Deno.test("bare attr stays bare on a b-name root element", async () => {
 	assertEquals(staticRaw, ' hidden');
 });
 
+// ---- compileFile: static attr source fidelity ----
+
+Deno.test("static attr keeps the quote style it was written with", async () => {
+	const { root, errors } = await compileSnippet(`<a href='single' title="double" rel=unquoted>x</a>`);
+	assertEquals(errors.length, 0);
+	assertEquals(renderStatic(root.tnodes), `<a href='single' title="double" rel=unquoted>x</a>`);
+});
+
+Deno.test("single-quoted value may contain double quotes (and vice versa)", async () => {
+	const { root, errors } = await compileSnippet(`<a data-x='say "hi"' data-y="it's">x</a>`);
+	assertEquals(errors.length, 0);
+	assertEquals(renderStatic(root.tnodes), `<a data-x='say "hi"' data-y="it's">x</a>`);
+});
+
+Deno.test("an empty single-quoted value stays single-quoted", async () => {
+	const { root, errors } = await compileSnippet(`<div class='' data-y="">x</div>`);
+	assertEquals(errors.length, 0);
+	assertEquals(renderStatic(root.tnodes), `<div class='' data-y="">x</div>`);
+});
+
+Deno.test("camelCase SVG attrs keep their value and quoting", async () => {
+	// parse5 adjusts `viewbox` → `viewBox` on the token but keys the source-location
+	// map by the lowercase name, so these attrs used to come through with no location
+	// at all — and an empty one was then mistaken for a bare attr.
+	const { root, errors } = await compileSnippet(`<svg viewBox='' preserveAspectRatio='none'></svg>`);
+	assertEquals(errors.length, 0);
+	assertEquals(renderStatic(root.tnodes), `<svg viewBox='' preserveAspectRatio='none'></svg>`);
+});
+
+Deno.test("static attr keeps character references undecoded", async () => {
+	const { root, errors } = await compileSnippet('<a href="?a=1&amp;b=2">x</a>');
+	assertEquals(errors.length, 0);
+	assertEquals(renderStatic(root.tnodes), '<a href="?a=1&amp;b=2">x</a>');
+});
+
+Deno.test("static attr keeps the name case it was written with", async () => {
+	const { root, errors } = await compileSnippet(`<div data-Foo='y'>x</div>`);
+	assertEquals(errors.length, 0);
+	assertEquals(renderStatic(root.tnodes), `<div data-Foo='y'>x</div>`);
+});
+
+Deno.test("quote style is preserved on a tag that also has a bind", async () => {
+	const { compiled, errors } = await compileFile(`<div b-name="test"><a href='x' :id="v">L</a></div>`);
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('test')!;
+	const a = findElement(root.tnodes, 'a')!;
+	const staticRaw = a.attrs.filter(p => p.type === 'static').map(p => (p as { raw: string }).raw).join('');
+	assertEquals(staticRaw, ` href='x'`);
+});
+
+Deno.test("quote style is preserved on a b-name root element", async () => {
+	const { compiled, errors } = await compileFile(`<div b-name="card" id='hero' :class="cls">Hello</div>`);
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('card')!;
+	const el = root.tnodes[0] as ElementTNode;
+	const staticRaw = el.attrs.filter(p => p.type === 'static').map(p => (p as { raw: string }).raw).join('');
+	assertEquals(staticRaw, ` id='hero'`);
+});
+
 // ---- PartialMeta tests ----
 
 Deno.test("meta: fragment-level partial has correct startOffset, endOffset, isDocumentLevel=false", async () => {

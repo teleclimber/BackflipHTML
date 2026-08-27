@@ -139,7 +139,7 @@ export type PartialRegistry = Map<string, PartialDef[]>
 export type AttrPart =
 	| { type: 'static'; raw: string }
 	| { type: 'dynamic'; name: string; expr: Parsed; isBoolean: boolean; isAsset?: boolean; loc?: SourceLoc }
-	| { type: 'asset'; attrName: string; originalValue: string; refs: AssetRef[]; loc?: SourceLoc }
+	| { type: 'asset'; attrName: string; originalValue: string; refs: AssetRef[]; quote?: string; loc?: SourceLoc }
 
 export interface ElementTNode {
 	type: 'element',

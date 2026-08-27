@@ -205,7 +205,8 @@ export function resolveAttrParts(parts: AttrPart[], assetMap: Map<string, string
 	for (const part of parts) {
 		if (part.type === 'asset') {
 			const resolved = replaceAssetRef(part.originalValue, assetMap);
-			const raw = ` ${part.attrName}="${resolved}"`;
+			const q = part.quote ?? '"';
+			const raw = ` ${part.attrName}=${q}${resolved}${q}`;
 			// Merge into preceding static part if possible
 			const prev = result[result.length - 1];
 			if (prev && prev.type === 'static') {

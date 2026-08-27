@@ -26,6 +26,22 @@ Deno.test("attrLoc: undefined for missing attr or missing location", () => {
 	assertEquals(attrLoc({}, 'class'), undefined);
 });
 
+Deno.test("attrLoc: falls back to the lowercase name for adjusted SVG attrs", () => {
+	// parse5 keys the map by the lowercase source name but hands the token the
+	// foreign-content-adjusted `viewBox`.
+	const svgTag = {
+		sourceCodeLocation: {
+			startLine: 1, startCol: 1, startOffset: 0, endLine: 1, endCol: 20, endOffset: 19,
+			attrs: {
+				'viewbox': { startLine: 1, startCol: 6, startOffset: 5, endLine: 1, endCol: 19, endOffset: 18 },
+			},
+		},
+	};
+	assertEquals(attrLoc(svgTag, 'viewBox'), {
+		startLine: 1, startCol: 6, startOffset: 5, endLine: 1, endCol: 19, endOffset: 18,
+	});
+});
+
 Deno.test("tagLoc: line/col from the tag, empty object when absent", () => {
 	assertEquals(tagLoc(tagWithAttrs), { line: 2, col: 3 });
 	assertEquals(tagLoc({}), {});

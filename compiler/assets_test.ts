@@ -91,6 +91,26 @@ Deno.test("asset: static src~ with subpath", async () => {
 	assertStringIncludes(rootRenderStatic(resolved.partials.get("hero")!), 'src="/img/sub/nested.jpg"');
 });
 
+Deno.test("asset: resolved src~ keeps the quote style it was written with", async () => {
+	const { assetMap, assetDirs } = await makeAssetFixture();
+	const { compiled } = await compileFile(
+		`<div b-name="hero"><img src~='@images/photo.jpg' /></div>`,
+		undefined, 'test.html', { assetMap, assetDirs }
+	);
+	const resolved = resolveAssetRefs(compiled, assetMap);
+	assertStringIncludes(rootRenderStatic(resolved.partials.get("hero")!), `src='/img/photo.jpg'`);
+});
+
+Deno.test("asset: an unquoted src~ resolves to a double-quoted attr", async () => {
+	const { assetMap, assetDirs } = await makeAssetFixture();
+	const { compiled } = await compileFile(
+		'<div b-name="hero"><img src~=@images/photo.jpg></div>',
+		undefined, 'test.html', { assetMap, assetDirs }
+	);
+	const resolved = resolveAssetRefs(compiled, assetMap);
+	assertStringIncludes(rootRenderStatic(resolved.partials.get("hero")!), 'src="/img/photo.jpg"');
+});
+
 Deno.test("asset: error when @name not in asset map", async () => {
 	const assetMap = new Map([['images', '/img/']]);
 	const { errors } = await compileFile(

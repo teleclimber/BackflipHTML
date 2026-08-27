@@ -575,6 +575,14 @@ Deno.test("static attrs: bare attrs stay bare, explicit empty values are kept", 
     );
 });
 
+Deno.test("static attrs: source quoting is preserved verbatim", () => {
+    const mod = getModule("binds.html");
+    assertEquals(
+        normalize(renderRoot(mod.static_quotes, { v: "x" })),
+        `<div><a href='single' title="double" data-bare=unquoted data-mixed='say "hi"' data-amp="a &amp; b" class='' id="x">Link</a></div>`
+    );
+});
+
 Deno.test("attr-bind: link with url and cls string includes class", () => {
     const mod = getModule("binds.html");
     assertEquals(

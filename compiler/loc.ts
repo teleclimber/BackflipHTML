@@ -6,7 +6,13 @@ type LocAttrs = { attrs?: Record<string, { startLine: number; startCol: number; 
 
 export function attrLoc(tag: { sourceCodeLocation?: unknown }, attrName: string): SourceLoc | undefined {
 	const loc = tag.sourceCodeLocation as LocAttrs | null | undefined;
-	const a = loc?.attrs?.[attrName];
+	// parse5 keys the location map by the attribute name as written (lowercased by
+	// the tokenizer), but the token's `name` has already been through foreign-content
+	// adjustment, which restores camelCase for SVG/MathML attrs (`viewbox` → `viewBox`).
+	// Without the lowercase fallback those attrs get no location at all — and then no
+	// `raw`/`valueLoc`, and `bare` detection defaults to true, so `viewBox=""` would
+	// render as a valueless `viewBox`.
+	const a = loc?.attrs?.[attrName] ?? loc?.attrs?.[attrName.toLowerCase()];
 	if (!a) return undefined;
 	return { startLine: a.startLine, startCol: a.startCol, startOffset: a.startOffset,
 	         endLine: a.endLine, endCol: a.endCol, endOffset: a.endOffset };
