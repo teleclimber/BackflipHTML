@@ -103,3 +103,15 @@ Deno.test("slot outside head is not affected by a sibling head ElementTNode", ()
 	assertEquals(slotMap.meta.nodes.length, 0);
 	assertEquals(slotMap.content.nodes.length, 1);
 });
+
+Deno.test("generates placeholder for a slot forwarded into a call body", () => {
+	// <div b-part="#child"><b-unwrap b-in="inner" b-slot="outer"/></div>
+	// "outer" is a slot of the partial being previewed, so it needs a placeholder.
+	const tnodes: TNode[] = [
+		{ type: 'partial-ref', kind: 'b-part', file: null, partialName: 'child', bindings: [],
+			slots: { default: [], inner: [slotNode('outer')] } } as TNode,
+	];
+	const slotMap = generateSlotPlaceholders(tnodes);
+	assertEquals('outer' in slotMap, true);
+	assertStringIncludes((slotMap.outer.nodes[0] as any).raw, 'slot: outer');
+});

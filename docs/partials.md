@@ -151,6 +151,46 @@ If a slot is declared but no content is provided, the slot renders empty. If a s
 
 Called with slot content `Hi`, this renders `<div><span class="body">Hi</span></div>`.
 
+**Body content:** anything inside a `b-slot` tag renders *in addition to* the injected content, right after it — it is not fallback content. `<b-unwrap b-slot="note">(none)</b-unwrap>` renders `(none)` whether or not the caller fills `note`.
+
+---
+
+## Forwarding a slot
+
+A partial can hand a slot of its own on to a partial it calls, by putting `b-in` and `b-slot` on the same tag:
+
+```html
+<!-- child: declares slot "body" -->
+<div b-name="child">
+    <div class="inner"><b-unwrap b-slot="body" /></div>
+</div>
+
+<!-- mid: forwards its own slot "content" into child's "body" -->
+<div b-name="mid">
+    <div b-part="#child"><b-unwrap b-in="body" b-slot="content"></b-unwrap></div>
+</div>
+
+<!-- caller: fills mid's "content" -->
+<div b-name="page">
+    <b-unwrap b-part="#mid"><b-unwrap b-in="content">Hello</b-unwrap></b-unwrap>
+</div>
+```
+
+`page` renders `Hello` inside `child`'s `.inner`, without `mid` having to know anything about it.
+
+The two directives do different jobs, which is why both fit on one tag:
+
+- **`b-in` says where the tag goes** — which slot of the call it fills.
+- **`b-slot` says what fills the tag** — an insertion point for a slot of the *enclosing* partial.
+
+Everything else about slots still applies:
+
+- Either slot may be the default one. `<b-unwrap b-slot="content">` with no `b-in` forwards into the callee's default slot; `<b-unwrap b-in="body" b-slot>` forwards the enclosing partial's default slot.
+- On a regular tag, that tag wraps the injected content: `<span b-in="body" b-slot="content"></span>` puts a `<span>` in the callee's `body` slot with the forwarded content inside it.
+- Content is still evaluated in the **original caller's** context, however many partials it passes through. `b-data:` bindings along the way do not affect it.
+- A forwarded `b-slot` declares that slot on its enclosing partial, so the caller's `b-in` resolves against it. The same slot name may also be declared elsewhere in the partial, in which case every occurrence is filled.
+- Forwarding chains: a partial that receives a forwarded slot can forward it again.
+
 ---
 
 ## Passing data to partials

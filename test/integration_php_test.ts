@@ -611,3 +611,77 @@ Deno.test("php: plus: in attribute binding", async () => {
         '<a href="/users/42">link</a>'
     );
 });
+
+// ---------------------------------------------------------------------------
+// forwarding.html — slot forwarding (mirrors integration_test.ts)
+// ---------------------------------------------------------------------------
+
+Deno.test("php forwarding: named slot forwards into the callee's named slot", async () => {
+    assertEquals(
+        normalize(await renderPhp("forwarding.html", "page_named", {})),
+        "<div><div><div>[PAYLOAD]</div></div></div>"
+    );
+});
+
+Deno.test("php forwarding: named slot forwards into the callee's default slot", async () => {
+    assertEquals(
+        normalize(await renderPhp("forwarding.html", "page_default", {})),
+        "<div><div><div>[PAYLOAD]</div></div></div>"
+    );
+});
+
+Deno.test("php forwarding: the enclosing partial's default slot forwards into a named slot", async () => {
+    assertEquals(
+        normalize(await renderPhp("forwarding.html", "page_from_default", {})),
+        "<div><div><div>[PAYLOAD]</div></div></div>"
+    );
+});
+
+Deno.test("php forwarding: a real tag carrying the forward wraps the injected content", async () => {
+    assertEquals(
+        normalize(await renderPhp("forwarding.html", "page_wrapped", {})),
+        '<div><div><div>[<span class="w">PAYLOAD</span>]</div></div></div>'
+    );
+});
+
+Deno.test("php forwarding: body of a forwarded b-slot follows the injected content", async () => {
+    assertEquals(
+        normalize(await renderPhp("forwarding.html", "page_with_body", {})),
+        "<div><div><div>[PAYLOAD|tail]</div></div></div>"
+    );
+});
+
+Deno.test("php forwarding: a slot declared both normally and as a forward fills both places", async () => {
+    assertEquals(
+        normalize(await renderPhp("forwarding.html", "page_twice", {})),
+        "<div><div><div>[PAYLOAD]</div></div><em>PAYLOAD</em></div>"
+    );
+});
+
+Deno.test("php forwarding: works through a custom element call", async () => {
+    assertEquals(
+        normalize(await renderPhp("forwarding.html", "page_custom", {})),
+        "<div><fwd-card>[card:PAYLOAD]</fwd-card></div>"
+    );
+});
+
+Deno.test("php forwarding: chains through two levels of partials", async () => {
+    assertEquals(
+        normalize(await renderPhp("forwarding.html", "page_chained", {})),
+        "<div><div><div><div>[PAYLOAD]</div></div></div></div>"
+    );
+});
+
+Deno.test("php forwarding: forwarded slot content is evaluated in the caller's context", async () => {
+    assertEquals(
+        normalize(await renderPhp("forwarding.html", "page_scope", { who: "Ada" })),
+        "<div><div><div>[Ada]</div></div></div>"
+    );
+});
+
+Deno.test("php forwarding: b-data on the call does not leak into forwarded slot content", async () => {
+    assertEquals(
+        normalize(await renderPhp("forwarding.html", "page_shadowing", { who: "caller" })),
+        "<div><div><div>[child:caller]</div></div></div>"
+    );
+});

@@ -747,6 +747,82 @@ Deno.test("compileFile: named slot with b-in", async () => {
 	assertEquals(renderStatic(h1.tnodes), 'Title');
 });
 
+// ---- compileFile: slot forwarding (b-in + b-slot on one tag) ----
+
+Deno.test("compileFile: b-in + b-slot routes the slot insertion point into the named slot", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><b-unwrap b-part="#card"><b-unwrap b-in="header" b-slot="outer"/></b-unwrap></div>'
+	);
+	assertEquals(errors.length, 0);
+	const ref = findPartialRef(compiled.partials.get("page")!);
+	// The forwarded slot node lands in the *named* slot, not the default one.
+	assertEquals(ref.slots['header'].length, 1);
+	assertEquals(ref.slots['header'][0].type, 'slot');
+	assertEquals((ref.slots['header'][0] as SlotTNode).name, 'outer');
+	assertEquals(ref.slots['default'], []);
+	assertExists(ref.slotLocs!['header']);
+});
+
+Deno.test("compileFile: b-in + bare b-slot forwards the enclosing partial's default slot", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><b-unwrap b-part="#card"><b-unwrap b-in="header" b-slot/></b-unwrap></div>'
+	);
+	assertEquals(errors.length, 0);
+	const ref = findPartialRef(compiled.partials.get("page")!);
+	assertEquals(ref.slots['header'].length, 1);
+	assertEquals(ref.slots['header'][0].type, 'slot');
+	assertEquals((ref.slots['header'][0] as SlotTNode).name, undefined);
+});
+
+Deno.test("compileFile: b-in + b-slot on a regular tag wraps the insertion point", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><b-unwrap b-part="#card"><span class="w" b-in="header" b-slot="outer"></span></b-unwrap></div>'
+	);
+	assertEquals(errors.length, 0);
+	const ref = findPartialRef(compiled.partials.get("page")!);
+	const span = ref.slots['header'][0] as ElementTNode;
+	assertEquals(span.type, 'element');
+	assertEquals(span.tagName, 'span');
+	assertEquals(span.tnodes.length, 1);
+	assertEquals(span.tnodes[0].type, 'slot');
+	// Neither directive survives as a rendered attribute.
+	const attrText = span.attrs.map(a => a.type === 'static' ? a.raw : '').join('');
+	assertEquals(attrText.includes('b-in'), false, `b-in leaked into attrs: ${attrText}`);
+	assertEquals(attrText.includes('b-slot'), false, `b-slot leaked into attrs: ${attrText}`);
+	assertEquals(attrText.includes('class="w"'), true, `caller attrs should survive: ${attrText}`);
+});
+
+Deno.test("compileFile: body of a forwarded b-slot follows the insertion point as a sibling", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><b-unwrap b-part="#card"><b-unwrap b-in="header" b-slot="outer">tail</b-unwrap></b-unwrap></div>'
+	);
+	assertEquals(errors.length, 0);
+	const ref = findPartialRef(compiled.partials.get("page")!);
+	assertEquals(ref.slots['header'].length, 2);
+	assertEquals(ref.slots['header'][0].type, 'slot');
+	assertEquals(ref.slots['header'][1], { type: 'raw', raw: 'tail' });
+});
+
+Deno.test("compileFile: b-in + b-slot works on a custom element call body", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><my-card><b-unwrap b-in="header" b-slot="outer"/></my-card></div>'
+	);
+	assertEquals(errors.length, 0);
+	const ref = findPartialRef(compiled.partials.get("page")!);
+	assertEquals(ref.slots['header'].length, 1);
+	assertEquals(ref.slots['header'][0].type, 'slot');
+});
+
+Deno.test("compileFile: b-slot still wins over b-in outside a call body", async () => {
+	// No enclosing call, so b-in is not meaningful and stays a literal attribute.
+	const { compiled, errors } = await compileFile('<div b-name="page"><span b-in="x" b-slot="s"></span></div>');
+	assertEquals(errors.length, 0);
+	const pageDiv = compiled.partials.get("page")!.tnodes[0] as ElementTNode;
+	const span = pageDiv.tnodes[0] as ElementTNode;
+	assertEquals(span.tnodes[0].type, 'slot');
+	assertEquals(span.attrs.map(a => a.type === 'static' ? a.raw : '').join('').includes('b-in'), true);
+});
+
 Deno.test("compileFile: div b-part with no content does not create spurious default slot", async () => {
 	const { compiled: result } = await compileFile(
 		'<div b-name="page"><div class="leaderboard" b-part="#leaderboard"></div></div>'

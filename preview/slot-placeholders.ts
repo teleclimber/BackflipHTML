@@ -1,5 +1,6 @@
 import type { SlotMap, RawRNode } from '../runtime/js/render.js';
 import type { TNode, RawTNode, SlotTNode, ForTNode, IfTNode, ElementTNode } from '../compiler/types.js';
+import { collectSlots } from '../compiler/helpers.js';
 
 const PLACEHOLDER_STYLE = 'background:#e0e0e0;padding:16px;border:1px dashed #999;border-radius:4px;text-align:center;color:#666;font-style:italic;';
 
@@ -20,32 +21,15 @@ export function generateSlotPlaceholders(tnodes: TNode[]): SlotMap {
 	findHeadSlots(tnodes, false, headSlots);
 
 	const slotMap: SlotMap = {};
-	walkSlots(tnodes, (name) => {
+	for (const name of collectSlots(tnodes)) {
 		if (headSlots.has(name)) {
 			slotMap[name] = { nodes: [], ctx: {} };
 		} else {
 			const label = name === 'default' ? 'default content' : `slot: ${name}`;
 			slotMap[name] = { nodes: [placeholderNode(label)], ctx: {} };
 		}
-	});
-	return slotMap;
-}
-
-/** Walk tnodes and call fn for each slot found. */
-function walkSlots(tnodes: TNode[], fn: (name: string) => void): void {
-	for (const tnode of tnodes) {
-		if (tnode.type === 'slot') {
-			fn((tnode as SlotTNode).name ?? 'default');
-		} else if (tnode.type === 'for') {
-			walkSlots((tnode as ForTNode).tnodes, fn);
-		} else if (tnode.type === 'if') {
-			for (const branch of (tnode as IfTNode).branches) {
-				walkSlots(branch.tnodes, fn);
-			}
-		} else if (tnode.type === 'element') {
-			walkSlots((tnode as ElementTNode).tnodes, fn);
-		}
 	}
+	return slotMap;
 }
 
 /**
@@ -69,6 +53,12 @@ function findHeadSlots(tnodes: TNode[], inHead: boolean, out: Set<string>): bool
 		} else if (tnode.type === 'if') {
 			for (const branch of (tnode as IfTNode).branches) {
 				inHead = findHeadSlots(branch.tnodes, inHead, out);
+			}
+		} else if (tnode.type === 'partial-ref') {
+			// A b-slot written inside a call body is a slot of *this* partial
+			// (slot forwarding), so it counts here too.
+			for (const slotNodes of Object.values(tnode.slots)) {
+				inHead = findHeadSlots(slotNodes, inHead, out);
 			}
 		}
 	}

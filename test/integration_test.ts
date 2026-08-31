@@ -893,3 +893,100 @@ Deno.test("asset: mixed static asset and dynamic bind on same tag", () => {
     assertStringIncludes(html, 'src="/img/photo.jpg"');
     assertStringIncludes(html, 'class="hero"');
 });
+
+// ---------------------------------------------------------------------------
+// forwarding.html — a partial hands its own slot on to a partial it calls
+//
+//   <b-unwrap b-name="fwd_named">
+//       <div b-part="#named_target"><b-unwrap b-in="inner" b-slot="outer"/></div>
+//   </b-unwrap>
+//
+// b-in says where the tag goes (the callee's slot); b-slot says what fills it
+// (an insertion point for the enclosing partial's own slot).
+// ---------------------------------------------------------------------------
+
+Deno.test("forwarding: named slot forwards into the callee's named slot", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("forwarding.html").page_named, {})),
+        "<div><div><div>[PAYLOAD]</div></div></div>"
+    );
+});
+
+Deno.test("forwarding: named slot forwards into the callee's default slot", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("forwarding.html").page_default, {})),
+        "<div><div><div>[PAYLOAD]</div></div></div>"
+    );
+});
+
+Deno.test("forwarding: the enclosing partial's default slot forwards into a named slot", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("forwarding.html").page_from_default, {})),
+        "<div><div><div>[PAYLOAD]</div></div></div>"
+    );
+});
+
+Deno.test("forwarding: a real tag carrying the forward wraps the injected content", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("forwarding.html").page_wrapped, {})),
+        '<div><div><div>[<span class="w">PAYLOAD</span>]</div></div></div>'
+    );
+});
+
+Deno.test("forwarding: body of a forwarded b-slot follows the injected content", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("forwarding.html").page_with_body, {})),
+        "<div><div><div>[PAYLOAD|tail]</div></div></div>"
+    );
+});
+
+Deno.test("forwarding: body of a forwarded b-slot renders even when nothing is injected", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("forwarding.html").page_body_only, {})),
+        "<div><div><div>[|tail]</div></div></div>"
+    );
+});
+
+Deno.test("forwarding: a slot declared both normally and as a forward fills both places", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("forwarding.html").page_twice, {})),
+        "<div><div><div>[PAYLOAD]</div></div><em>PAYLOAD</em></div>"
+    );
+});
+
+Deno.test("forwarding: works through a custom element call", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("forwarding.html").page_custom, {})),
+        "<div><fwd-card>[card:PAYLOAD]</fwd-card></div>"
+    );
+});
+
+Deno.test("forwarding: chains through two levels of partials", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("forwarding.html").page_chained, {})),
+        "<div><div><div><div>[PAYLOAD]</div></div></div></div>"
+    );
+});
+
+Deno.test("forwarding: a forwarded slot renders empty when the caller fills nothing", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("forwarding.html").page_empty, {})),
+        "<div><div><div>[]</div></div></div>"
+    );
+});
+
+Deno.test("forwarding: forwarded slot content is evaluated in the caller's context", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("forwarding.html").page_scope, { who: "Ada" })),
+        "<div><div><div>[Ada]</div></div></div>"
+    );
+});
+
+Deno.test("forwarding: b-data on the call does not leak into forwarded slot content", () => {
+    // named_who's own body sees who='child' from b-data; the forwarded slot
+    // content keeps the caller's who='caller'.
+    assertEquals(
+        normalize(renderRoot(getModule("forwarding.html").page_shadowing, { who: "caller" })),
+        "<div><div><div>[child:caller]</div></div></div>"
+    );
+});

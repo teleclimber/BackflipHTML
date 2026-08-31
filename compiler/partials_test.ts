@@ -562,6 +562,66 @@ Deno.test("compileDirectory - no error when default slot content matches default
     assertEquals(errors.length, 0);
 });
 
+// --- Validation: slot forwarding ---
+
+Deno.test("compileDirectory - no error when a partial forwards its own slot into a call", async () => {
+    const dir = await makeTempDir("slot_forward_valid");
+    await writeFile(path.join(dir, "page.html"), `
+        <div b-name="child">
+            <b-unwrap b-slot="inner" />
+        </div>
+        <div b-name="mid">
+            <b-unwrap b-part="#child"><b-unwrap b-in="inner" b-slot="outer" /></b-unwrap>
+        </div>
+        <div b-name="page">
+            <b-unwrap b-part="#mid"><b-unwrap b-in="outer">Payload</b-unwrap></b-unwrap>
+        </div>
+    `);
+
+    const { errors } = await compileDirectory(dir);
+    assertEquals(errors.map(e => e.message), []);
+});
+
+Deno.test("compileDirectory - error when a forwarded slot targets a slot the callee lacks", async () => {
+    const dir = await makeTempDir("slot_forward_bad_target");
+    await writeFile(path.join(dir, "page.html"), `
+        <div b-name="child">
+            <b-unwrap b-slot="inner" />
+        </div>
+        <div b-name="mid">
+            <b-unwrap b-part="#child"><b-unwrap b-in="nope" b-slot="outer" /></b-unwrap>
+        </div>
+        <div b-name="page">
+            <b-unwrap b-part="#mid"><b-unwrap b-in="outer">Payload</b-unwrap></b-unwrap>
+        </div>
+    `);
+
+    const { errors } = await compileDirectory(dir);
+    assertEquals(errors.length, 1);
+    assertStringIncludes(errors[0].message, 'b-in references slot "nope"');
+    assertStringIncludes(errors[0].message, 'child');
+});
+
+Deno.test("compileDirectory - a forwarded b-slot declares the slot on its enclosing partial", async () => {
+    // `mid` declares no slot outside the call body; the forwarded b-slot is the
+    // only declaration of "outer", and the caller's b-in must still resolve.
+    const dir = await makeTempDir("slot_forward_declares");
+    await writeFile(path.join(dir, "page.html"), `
+        <div b-name="child">
+            <b-unwrap b-slot />
+        </div>
+        <div b-name="mid">
+            <b-unwrap b-part="#child"><b-unwrap b-slot="outer" /></b-unwrap>
+        </div>
+        <div b-name="page">
+            <b-unwrap b-part="#mid"><b-unwrap b-in="outer">Payload</b-unwrap></b-unwrap>
+        </div>
+    `);
+
+    const { errors } = await compileDirectory(dir);
+    assertEquals(errors.map(e => e.message), []);
+});
+
 // --- Validation: cross-file slot validation ---
 
 Deno.test("compileDirectory - error when b-in references non-existent slot in cross-file partial", async () => {

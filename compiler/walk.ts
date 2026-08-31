@@ -14,38 +14,27 @@ import type { TNode } from './types.js';
  * raw / comment / print / slot / attr-bind are leaves.
  */
 
-export interface VisitTNodesOptions {
-	/**
-	 * Skip partial-ref slot contents. Slot content declared inside a slot passed
-	 * to a child partial belongs to that child's call, not to the current tree, so
-	 * some walkers (e.g. collectSlots) must not descend through it.
-	 */
-	skipPartialRefSlots?: boolean;
-}
-
 /**
  * Depth-first pre-order traversal. Calls `visit` on every node in `tnodes`,
  * then recurses into each node's child containers. `IfBranch` is not a TNode,
  * so `visit` is not called on branches themselves — only their `tnodes` are
  * traversed.
  */
-export function visitTNodes(tnodes: TNode[], visit: (n: TNode) => void, opts?: VisitTNodesOptions): void {
+export function visitTNodes(tnodes: TNode[], visit: (n: TNode) => void): void {
 	for (const n of tnodes) {
 		visit(n);
 		switch (n.type) {
 			case 'for':
-				visitTNodes(n.tnodes, visit, opts);
+				visitTNodes(n.tnodes, visit);
 				break;
 			case 'if':
-				for (const branch of n.branches) visitTNodes(branch.tnodes, visit, opts);
+				for (const branch of n.branches) visitTNodes(branch.tnodes, visit);
 				break;
 			case 'element':
-				visitTNodes(n.tnodes, visit, opts);
+				visitTNodes(n.tnodes, visit);
 				break;
 			case 'partial-ref':
-				if (!opts?.skipPartialRefSlots) {
-					for (const slotNodes of Object.values(n.slots)) visitTNodes(slotNodes, visit, opts);
-				}
+				for (const slotNodes of Object.values(n.slots)) visitTNodes(slotNodes, visit);
 				break;
 			// raw / comment / print / slot / attr-bind: leaves
 		}

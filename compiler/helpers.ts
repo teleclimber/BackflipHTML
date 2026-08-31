@@ -84,14 +84,14 @@ export const INTERPOLATION_RE = new RegExp("({{[^{}]*}})", 'g');
 /**
  * Collect slot names declared (via b-slot) in a list of tnodes.
  *
- * `skipPartialRefSlots` is used because slot content passed to a *child* partial
- * (inside a partial-ref's slots) belongs to that other partial's call, not to
- * this one — so its b-slot declarations must not be collected here.
+ * Includes b-slot declarations written inside a call body (a partial-ref's slot
+ * content): those are lexically part of *this* partial and resolve against this
+ * partial's slot map at render time — that is what makes slot forwarding work.
  */
 export function collectSlots(tnodes: TNode[]): string[] {
 	const slots: string[] = [];
 	visitTNodes(tnodes, (tnode) => {
 		if (tnode.type === 'slot') slots.push(tnode.name ?? 'default');
-	}, { skipPartialRefSlots: true });
+	});
 	return slots;
 }

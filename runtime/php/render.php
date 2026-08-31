@@ -378,7 +378,7 @@ function backflip_streamRender(array $node, array $ctx, array $slots = [], array
             yield from backflip_streamRenderIf($node, $ctx, $slots, $scripts);
             break;
         case 'partial-ref':
-            yield from backflip_streamRenderPartialRef($node, $ctx, $scripts);
+            yield from backflip_streamRenderPartialRef($node, $ctx, $slots, $scripts);
             break;
         case 'slot':
             yield from backflip_streamRenderSlot($node, $slots, $scripts);
@@ -444,10 +444,10 @@ function backflip_renderPrint(array $node, array $ctx): string
 /**
  * Streaming render of a partial-ref node.
  */
-function backflip_streamRenderPartialRef(array $node, array $ctx, array &$scripts = []): Generator
+function backflip_streamRenderPartialRef(array $node, array $ctx, array $slots = [], array &$scripts = []): Generator
 {
     if (!empty($node['customElement'])) {
-        yield from backflip_streamRenderCustomElementRef($node, $ctx, $scripts);
+        yield from backflip_streamRenderCustomElementRef($node, $ctx, $slots, $scripts);
         return;
     }
 
@@ -457,10 +457,10 @@ function backflip_streamRenderPartialRef(array $node, array $ctx, array &$script
         $childCtx[$binding['name']] = backflip_evalBinding($binding, $ctx);
     }
 
-    // 2. Build slot map: capture nodes + caller ctx (NOT childCtx)
+    // 2. Build slot map: capture nodes + the caller's ctx AND slot map (NOT childCtx)
     $slotMap = [];
     foreach ($node['slots'] as $slotName => $nodes) {
-        $slotMap[$slotName] = ['nodes' => $nodes, 'ctx' => $ctx];
+        $slotMap[$slotName] = ['nodes' => $nodes, 'ctx' => $ctx, 'slots' => $slots];
     }
 
     // 3. Render the partial, with wrapper if present
@@ -478,7 +478,7 @@ function backflip_streamRenderPartialRef(array $node, array $ctx, array &$script
  * Streaming render of a custom-element partial-ref. Produces a single merged tag
  * with caller-side attrs (caller ctx) and definition-side attrs (childCtx) interleaved.
  */
-function backflip_streamRenderCustomElementRef(array $node, array $ctx, array &$scripts = []): Generator
+function backflip_streamRenderCustomElementRef(array $node, array $ctx, array $slots = [], array &$scripts = []): Generator
 {
     $tagName = $node['callerTagName'];
 
@@ -492,7 +492,7 @@ function backflip_streamRenderCustomElementRef(array $node, array $ctx, array &$
         $def = $node['slots']['default'] ?? null;
         if ($def !== null) {
             foreach ($def as $n) {
-                yield from backflip_streamRender($n, $ctx, [], $scripts);
+                yield from backflip_streamRender($n, $ctx, $slots, $scripts);
             }
         }
         yield '</' . $tagName . '>';
@@ -509,7 +509,7 @@ function backflip_streamRenderCustomElementRef(array $node, array $ctx, array &$
     }
     $slotMap = [];
     foreach ($node['slots'] as $slotName => $nodes) {
-        $slotMap[$slotName] = ['nodes' => $nodes, 'ctx' => $ctx];
+        $slotMap[$slotName] = ['nodes' => $nodes, 'ctx' => $ctx, 'slots' => $slots];
     }
 
     // Single merged open tag: caller-side attrs in caller ctx, definition-side attrs in childCtx.
@@ -581,7 +581,8 @@ function backflip_streamRenderSlot(array $node, array $slots, array &$scripts = 
 
     $slotEntry = $slots[$slotName];
     foreach ($slotEntry['nodes'] as $child) {
-        // Render with the caller's ctx; pass empty slots so they don't leak inward
-        yield from backflip_streamRender($child, $slotEntry['ctx'], [], $scripts);
+        // Render in the caller's lexical environment: its ctx and the slot map in
+        // effect where the content was written (so a nested b-slot forwards).
+        yield from backflip_streamRender($child, $slotEntry['ctx'], $slotEntry['slots'] ?? [], $scripts);
     }
 }

@@ -2,7 +2,7 @@ import { assertEquals } from "jsr:@std/assert";
 
 import type { RawTNode, TNode, PartialDef } from "./types.ts";
 import type { SourceNode, SourceText } from "./parse-tree.ts";
-import { isCustomElementTagName, parseBPartValue } from "./helpers.ts";
+import { collectSlots, isCustomElementTagName, parseBPartValue } from "./helpers.ts";
 import { lowerSlice } from "./lower.ts";
 import { interpretBackcode } from "./backcode.ts";
 
@@ -137,4 +137,25 @@ Deno.test("lowerText: empty braces skipped, treated as raw text", () => {
 	const tnodes = lowerTextRuns('before{{  }}after');
 	assertEquals(tnodes.length, 1);
 	assertEquals((tnodes[0] as RawTNode).raw, 'before{{  }}after');
+});
+
+// ---- collectSlots unit tests ----
+
+Deno.test("collectSlots: finds slots in nested containers", () => {
+	const tree: TNode[] = [
+		{ type: 'slot', name: 'a' },
+		{ type: 'element', tagName: 'div', attrs: [], tnodes: [{ type: 'slot', name: undefined }] },
+		{ type: 'if', branches: [{ tnodes: [{ type: 'slot', name: 'b' }] }] },
+	];
+	assertEquals(collectSlots(tree).sort(), ['a', 'b', 'default']);
+});
+
+Deno.test("collectSlots: finds a b-slot written inside a call body (slot forwarding)", () => {
+	// A b-slot nested in a partial-ref's slot content is lexically part of *this*
+	// partial and resolves against this partial's slot map, so it counts here.
+	const tree: TNode[] = [
+		{ type: 'partial-ref', kind: 'b-part', file: null, partialName: 'child', bindings: [],
+			slots: { default: [], target: [{ type: 'slot', name: 'forwarded' }] } },
+	];
+	assertEquals(collectSlots(tree), ['forwarded']);
 });

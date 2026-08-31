@@ -21,16 +21,6 @@ Deno.test("visitTNodes visits all containers including slot contents", () => {
 	assertEquals(seen, ['a', 'in-for', 'in-if-1', 'in-if-2', 'in-elem', 'in-slot']);
 });
 
-Deno.test("visitTNodes skipPartialRefSlots skips slot contents", () => {
-	const tree: TNode[] = [
-		{ type: 'partial-ref', kind: 'b-part', file: null, partialName: 'p', bindings: [],
-			slots: { default: [raw('in-slot')] } },
-	];
-	const seen: string[] = [];
-	visitTNodes(tree, (n) => { if (n.type === 'raw') seen.push(n.raw); }, { skipPartialRefSlots: true });
-	assertEquals(seen, []);
-});
-
 Deno.test("visitTNodes visits IfBranch tnodes but not the branch objects", () => {
 	const tree: TNode[] = [
 		{ type: 'if', branches: [{ tnodes: [raw('x')] }] },

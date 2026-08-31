@@ -328,4 +328,41 @@ describe('slot content CSS matching (integration)', () => {
 				'h2 should match selector spanning .page (caller) and .card-header (partial)');
 		});
 	});
+
+	describe('forwarded slots (a partial hands its own slot to a partial it calls)', () => {
+		// mid forwards its slot "outer" into child's slot "inner", so at runtime the
+		// caller's <h2> renders inside child's .inner, inside child's .child-root.
+		const html = [
+			'<div b-name="child" class="child-root">',
+			'  <div class="inner"><b-unwrap b-slot="inner" /></div>',
+			'</div>',
+			'<div b-name="mid">',
+			'  <div b-part="#child" class="wrap"><b-unwrap b-in="inner" b-slot="outer"></b-unwrap></div>',
+			'</div>',
+			'<div b-name="page">',
+			'  <b-unwrap b-part="#mid"><h2 b-in="outer">Title</h2></b-unwrap>',
+			'</div>',
+		].join('\n');
+
+		it('matches through the caller-side wrapper of the forwarding call', () => {
+			const result = analyze({ cssContent: '.wrap h2 { color: red; }', templateFiles: new Map([['t.html', html]]) });
+			ok(findMatch(result, 't.html', '.wrap h2'), 'h2 should match .wrap h2');
+		});
+
+		it('matches through the forwarded-into partial internals', () => {
+			const result = analyze({ cssContent: '.inner h2 { color: red; }', templateFiles: new Map([['t.html', html]]) });
+			ok(findMatch(result, 't.html', '.inner h2'), 'h2 renders inside .inner, so it should match');
+		});
+
+		it('matches through the forwarded-into partial root', () => {
+			const result = analyze({ cssContent: '.child-root h2 { color: red; }', templateFiles: new Map([['t.html', html]]) });
+			ok(findMatch(result, 't.html', '.child-root h2'), 'h2 renders inside .child-root, so it should match');
+		});
+
+		it('matches a selector spanning both partials internals', () => {
+			const result = analyze({ cssContent: '.child-root .inner h2 { color: red; }', templateFiles: new Map([['t.html', html]]) });
+			ok(findMatch(result, 't.html', '.child-root .inner h2'),
+				'the forwarded-into partial ancestors should be in the right order');
+		});
+	});
 });

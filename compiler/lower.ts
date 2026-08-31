@@ -394,13 +394,14 @@ function lowerElement(el: SourceElement, pctx: PartialCtx, siblings: TNode[], ca
 	const bPartAttr = findAttr(el, 'b-part');
 	if (bPartAttr) return lowerBPart(el, bPartAttr, pctx);
 
-	const bSlotAttr = findAttr(el, 'b-slot');
-	if (bSlotAttr) return lowerBSlot(el, bSlotAttr, pctx);
-
 	// b-in is only meaningful directly inside a call body — elsewhere it stays a
-	// literal attribute.
+	// literal attribute. Inside one it outranks b-slot on the same tag: b-in says
+	// where the tag goes, b-slot says what fills it (slot forwarding).
 	const bInAttr = findAttr(el, 'b-in');
 	if (bInAttr && callBody) return lowerBIn(el, bInAttr, callBody, pctx);
+
+	const bSlotAttr = findAttr(el, 'b-slot');
+	if (bSlotAttr) return lowerBSlot(el, bSlotAttr, pctx);
 
 	// Track document-level tags inside partials
 	if (DOCUMENT_LEVEL_TAGS.has(el.tagName)) {
@@ -815,21 +816,22 @@ function lowerBPart(el: SourceElement, bPartAttr: SourceAttr, pctx: PartialCtx):
 
 // --- slots ---
 
-function lowerBSlot(el: SourceElement, bSlotAttr: SourceAttr, pctx: PartialCtx): TNode[] {
+function lowerBSlot(el: SourceElement, bSlotAttr: SourceAttr, pctx: PartialCtx, alsoExclude: string[] = []): TNode[] {
 	const slotName = bSlotAttr.value !== '' ? bSlotAttr.value : undefined;
 	const slot_node: SlotTNode = { type: 'slot', name: slotName };
 	slot_node.loc = findAttrLoc(el, 'b-slot');
 
 	if (el.tagName === 'b-unwrap') {
 		// No wrapping element; the slot insertion point is emitted directly, and
-		// the tag's body (the slot's default content) follows as its siblings.
+		// the tag's body follows as its siblings. The body is NOT fallback content:
+		// it renders whether or not the caller fills the slot.
 		const out: TNode[] = [slot_node];
 		if (isContainer(el)) lowerInto(out, el.children, pctx);
 		return out;
 	}
 	// Wrapping ElementTNode with the slot insertion point as its first child; any
 	// body content follows as later children of the element.
-	const elem = buildElement(el, ['b-slot'], pctx);
+	const elem = buildElement(el, ['b-slot', ...alsoExclude], pctx);
 	elem.tnodes.push(slot_node);
 	if (isContainer(el)) lowerInto(elem.tnodes, el.children, pctx);
 	return [elem];
@@ -850,7 +852,13 @@ function lowerBIn(el: SourceElement, bInAttr: SourceAttr, partialRef: PartialRef
 		partialRef.slotLocs[slotName] = bInLoc;
 	}
 
-	if (el.tagName === 'b-unwrap') {
+	const bSlotAttr = findAttr(el, 'b-slot');
+	if (bSlotAttr) {
+		// Slot forwarding: b-in routes this tag into the target slot, b-slot turns
+		// its content into an insertion point for the *enclosing* partial's slot.
+		const arr = partialRef.slots[slotName];
+		for (const n of lowerBSlot(el, bSlotAttr, pctx, ['b-in'])) appendCoalesced(arr, n);
+	} else if (el.tagName === 'b-unwrap') {
 		// Switch the target slot for this tag's own children; no wrapping element.
 		// (A self-closing <b-unwrap b-in/> simply has no body — the named slot is
 		// created and stays empty.)

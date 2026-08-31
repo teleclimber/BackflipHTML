@@ -87,7 +87,7 @@ export interface AttrBindRNode {
 
 export type RNode = RawRNode | CommentRNode | PrintRNode | ForRNode | IfRNode | SlotRNode | PartialRefRNode | AttrBindRNode;
 
-export type SlotMap = { [name: string]: { nodes: RNode[], ctx: any } }
+export type SlotMap = { [name: string]: { nodes: RNode[], ctx: any, slots?: SlotMap } }
 
 export function render(n :RNode, ctx:any, slots?: SlotMap) :string {
 	return Array.from(streamRender(n, ctx, slots)).join('');
@@ -133,7 +133,7 @@ function* streamRender(n :RNode, ctx:any, slots?: SlotMap, scripts?: ScriptColle
 			yield `<!--${n.text}-->`;
 			break;
 		case 'partial-ref':
-			yield* streamRenderPartialRef(n, ctx, scripts);
+			yield* streamRenderPartialRef(n, ctx, slots, scripts);
 			break;
 		case 'slot':
 			yield* streamRenderSlot(n, slots, scripts);
@@ -254,9 +254,9 @@ function evalBinding(binding: PartialBindingR, ctx: any): any {
 	return value;
 }
 
-function* streamRenderPartialRef(node: PartialRefRNode, ctx: any, scripts?: ScriptCollector) :Generator<string> {
+function* streamRenderPartialRef(node: PartialRefRNode, ctx: any, slots?: SlotMap, scripts?: ScriptCollector) :Generator<string> {
 	if (node.customElement) {
-		yield* streamRenderCustomElementRef(node, ctx, scripts);
+		yield* streamRenderCustomElementRef(node, ctx, slots, scripts);
 		return;
 	}
 	// Evaluate bindings in caller ctx, build child ctx
@@ -267,7 +267,7 @@ function* streamRenderPartialRef(node: PartialRefRNode, ctx: any, scripts?: Scri
 	// Build slot map: capture caller ctx with each slot's nodes
 	const slotMap: SlotMap = {};
 	for( const [name, nodes] of Object.entries(node.slots) ) {
-		slotMap[name] = { nodes, ctx };  // caller's ctx, not childCtx
+		slotMap[name] = { nodes, ctx, slots };  // caller's ctx + caller's slot map, not childCtx
 	}
 	// Render the partial with child ctx and slot map
 	if (node.wrapper) {
@@ -279,7 +279,7 @@ function* streamRenderPartialRef(node: PartialRefRNode, ctx: any, scripts?: Scri
 	}
 }
 
-function* streamRenderCustomElementRef(node: PartialRefRNode, ctx: any, scripts?: ScriptCollector) :Generator<string> {
+function* streamRenderCustomElementRef(node: PartialRefRNode, ctx: any, slots?: SlotMap, scripts?: ScriptCollector) :Generator<string> {
 	const tagName = node.callerTagName!;
 
 	if (node.unresolved) {
@@ -288,7 +288,7 @@ function* streamRenderCustomElementRef(node: PartialRefRNode, ctx: any, scripts?
 		for (const n of node.callerOpenTag ?? []) yield* streamRender(n, ctx, undefined, scripts);
 		yield `>`;
 		const def = node.slots?.['default'];
-		if (def) for (const n of def) yield* streamRender(n, ctx, undefined, scripts);
+		if (def) for (const n of def) yield* streamRender(n, ctx, slots, scripts);
 		yield `</${tagName}>`;
 		return;
 	}
@@ -304,7 +304,7 @@ function* streamRenderCustomElementRef(node: PartialRefRNode, ctx: any, scripts?
 	}
 	const slotMap: SlotMap = {};
 	for (const [name, nodes] of Object.entries(node.slots)) {
-		slotMap[name] = { nodes, ctx };
+		slotMap[name] = { nodes, ctx, slots };
 	}
 
 	// Single merged open tag: caller-side attrs in caller ctx, definition-side attrs in childCtx.
@@ -320,9 +320,10 @@ function* streamRenderSlot(node: SlotRNode, slots: SlotMap | undefined, scripts?
 	const slotName = node.name ?? 'default';
 	const slotEntry = slots?.[slotName];
 	if( !slotEntry ) return;
-	// Render slot content in the caller's context, slots don't leak inward
+	// Render slot content in the caller's lexical environment: its ctx and the slot
+	// map in effect where the content was written (so a nested b-slot forwards).
 	for (const n of slotEntry.nodes) {
-		yield* streamRender(n, slotEntry.ctx, undefined, scripts);
+		yield* streamRender(n, slotEntry.ctx, slotEntry.slots, scripts);
 	}
 }
 

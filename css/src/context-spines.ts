@@ -117,20 +117,31 @@ function findSlotNameForChild(
  * Compute the internal ancestor chain from a b-slot element up to (and including)
  * the b-name root element. Returns SpineNodes from outermost (b-name) to innermost
  * (direct parent of b-slot). Skips b-unwrap elements.
+ *
+ * When the b-slot sits inside a b-part call body the partial is *forwarding* its
+ * slot (`<div b-part="#child"><b-unwrap b-in="inner" b-slot="outer"/></div>`): at
+ * runtime the content lands inside the callee's own DOM, so that callee's internal
+ * chain down to the forwarded-into slot is spliced in below the b-part element.
+ *
+ * `seen` guards against a b-part cycle, which the compiler rejects but raw HTML
+ * analysis can still encounter.
  */
 export function computeSlotSpineAncestors(
 	partialName: string,
 	slotName: string,
 	usageGraph: UsageGraph,
+	seen: Set<string> = new Set(),
 ): SpineNode[] {
 	const defs = usageGraph.definitions.get(partialName);
 	if (!defs || defs.length === 0) return [];
+	if (seen.has(partialName)) return [];
+	seen = new Set(seen).add(partialName);
 
 	const def = defs[0];
 	const slotElement = def.slotElements.get(slotName);
 	if (!slotElement) return [];
 
-	// Walk from b-slot up to (and including) the b-name root
+	// Walk from b-slot up to (and including) the b-name root, innermost first.
 	const ancestors: SpineNode[] = [];
 	let current: unknown = slotElement;
 
@@ -141,6 +152,21 @@ export function computeSlotSpineAncestors(
 
 	while (current && isElement(current)) {
 		const dirInfo = usageGraph.directives.get(current);
+
+		// A b-part ancestor means this b-slot is a forward: splice the callee's
+		// chain down to the slot being forwarded into. Those nodes are inner to
+		// the b-part element, so they go in first (this list is innermost-first).
+		if (dirInfo?.bPartParsed) {
+			const forwardedTo = findSlotNameForChild(slotElement, current as Element, usageGraph);
+			const calleeAncestors = computeSlotSpineAncestors(
+				dirInfo.bPartParsed.partialName, forwardedTo, usageGraph, seen,
+			);
+			for (let i = calleeAncestors.length - 1; i >= 0; i--) ancestors.push(calleeAncestors[i]);
+			// The carrying tag renders unless it is a b-unwrap.
+			if (current.tagName !== 'b-unwrap') ancestors.push(makeSpineNode(current, dirInfo, def.file));
+			current = (current as any).parentNode;
+			continue;
+		}
 
 		if (current.tagName === 'b-unwrap') {
 			current = (current as any).parentNode;
