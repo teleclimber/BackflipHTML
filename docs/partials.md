@@ -136,6 +136,31 @@ Children of the `b-part` element become the default slot content. The `<b-unwrap
 
 Use `b-in="name"` inside the `b-part` element to direct content to a named slot. Use `b-slot="name"` in the partial definition to declare where that slot renders.
 
+**What `b-in` can carry:** `b-in` only says *where* the tag goes — which slot of the call it fills. What the tag *is* is still decided by its other directives, so any of them can ride along:
+
+```html
+<b-unwrap b-part="#card">
+    <!-- a call: #chip is stamped into the "header" slot -->
+    <b-unwrap b-in="header" b-part="#chip"></b-unwrap>
+
+    <!-- a custom element call: same thing -->
+    <my-chip b-in="header"></my-chip>
+
+    <!-- a conditional: whichever branch wins renders in "header" -->
+    <b-unwrap b-in="header" b-if="urgent">!</b-unwrap>
+    <b-unwrap b-in="header" b-else>ok</b-unwrap>
+
+    <!-- a loop, carried by a real tag: every <span> lands in "header" -->
+    <span b-in="header" b-for="tag in tags">{{ tag }}</span>
+</b-unwrap>
+```
+
+On a regular tag (anything other than `<b-unwrap>`), that tag goes into the slot and whatever it carries renders inside it: `<div class="w" b-in="header" b-part="#chip"></div>` puts a `<div class="w">` in the `header` slot with `#chip`'s output inside it. `b-in` itself never renders as an attribute.
+
+`b-data:` on the same tag binds the *call's* data as usual — it travels with the call, not with the slot.
+
+Outside a call body there is nothing for `b-in` to route into, so there it stays a plain HTML attribute.
+
 **Slot scoping:** Slot content is evaluated in the *caller's* data context, not the partial's. Expressions like `{{ user.name }}` inside slot content refer to the caller's variables.
 
 If a slot is declared but no content is provided, the slot renders empty. If a slot does not exist in the partial, that is a compilation error.
@@ -157,7 +182,7 @@ Called with slot content `Hi`, this renders `<div><span class="body">Hi</span></
 
 ## Forwarding a slot
 
-A partial can hand a slot of its own on to a partial it calls, by putting `b-in` and `b-slot` on the same tag:
+A partial can hand a slot of its own on to a partial it calls, by putting `b-in` and `b-slot` on the same tag — `b-slot` is one more directive `b-in` can carry:
 
 ```html
 <!-- child: declares slot "body" -->

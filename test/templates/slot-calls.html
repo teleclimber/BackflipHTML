@@ -1,0 +1,39 @@
+<!-- b-in on a call site: b-in says where the tag goes, the tag's other
+     directives still say what it is, so the call is stamped into the slot. -->
+
+<b-unwrap b-name="chip">[chip]</b-unwrap>
+
+<b-unwrap b-name="chip_who">[chip:{{ who }}]</b-unwrap>
+
+<sc-chip>[sc-chip:<b-unwrap b-slot />]</sc-chip>
+
+<div b-name="card">H(<b-unwrap b-slot="header" />)B(<b-unwrap b-slot />)</div>
+
+<!-- a b-part call carrying b-in -->
+<div b-name="call_named">
+    <b-unwrap b-part="#card"><b-unwrap b-in="header" b-part="#chip"></b-unwrap>body</b-unwrap>
+</div>
+
+<!-- carried by a real tag: the tag wraps the call inside the slot -->
+<div b-name="call_wrapped">
+    <b-unwrap b-part="#card"><div class="w" b-in="header" b-part="#chip"></div></b-unwrap>
+</div>
+
+<!-- a custom element call carrying b-in -->
+<div b-name="call_custom">
+    <b-unwrap b-part="#card"><sc-chip b-in="header">x</sc-chip></b-unwrap>
+</div>
+
+<!-- b-data on a call that carries b-in binds the callee's data as usual -->
+<div b-name="call_data">
+    <b-unwrap b-part="#card"><b-unwrap b-in="header" b-part="#chip_who" b-data:who="name"></b-unwrap></b-unwrap>
+</div>
+
+<!-- a flow directive on a tag carrying b-in runs inside the slot -->
+<div b-name="call_if">
+    <b-unwrap b-part="#card"><b-unwrap b-in="header" b-if="show">yes</b-unwrap><b-unwrap b-in="header" b-else>no</b-unwrap></b-unwrap>
+</div>
+
+<div b-name="call_for">
+    <b-unwrap b-part="#card"><span b-in="header" b-for="x in items">{{ x }}</span></b-unwrap>
+</div>

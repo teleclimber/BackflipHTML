@@ -685,3 +685,53 @@ Deno.test("php forwarding: b-data on the call does not leak into forwarded slot 
         "<div><div><div>[child:caller]</div></div></div>"
     );
 });
+
+// ---------------------------------------------------------------------------
+// slot-calls.html — b-in on a call site (mirrors integration_test.ts)
+// ---------------------------------------------------------------------------
+
+Deno.test("php slot calls: a b-part call carrying b-in renders in the named slot", async () => {
+    assertEquals(
+        normalize(await renderPhp("slot-calls.html", "call_named", {})),
+        "<div><div>H([chip])B(body)</div></div>"
+    );
+});
+
+Deno.test("php slot calls: a real tag carrying b-in + b-part wraps the call in the slot", async () => {
+    assertEquals(
+        normalize(await renderPhp("slot-calls.html", "call_wrapped", {})),
+        '<div><div>H(<div class="w">[chip]</div>)B()</div></div>'
+    );
+});
+
+Deno.test("php slot calls: a custom element call carrying b-in renders in the named slot", async () => {
+    assertEquals(
+        normalize(await renderPhp("slot-calls.html", "call_custom", {})),
+        "<div><div>H(<sc-chip>[sc-chip:x]</sc-chip>)B()</div></div>"
+    );
+});
+
+Deno.test("php slot calls: b-data on a call carrying b-in binds the callee's data", async () => {
+    assertEquals(
+        normalize(await renderPhp("slot-calls.html", "call_data", { name: "Ada" })),
+        "<div><div>H([chip:Ada])B()</div></div>"
+    );
+});
+
+Deno.test("php slot calls: b-if/b-else on tags carrying b-in run inside the slot", async () => {
+    assertEquals(
+        normalize(await renderPhp("slot-calls.html", "call_if", { show: true })),
+        "<div><div>H(yes)B()</div></div>"
+    );
+    assertEquals(
+        normalize(await renderPhp("slot-calls.html", "call_if", { show: false })),
+        "<div><div>H(no)B()</div></div>"
+    );
+});
+
+Deno.test("php slot calls: b-for on a tag carrying b-in loops inside the slot", async () => {
+    assertEquals(
+        normalize(await renderPhp("slot-calls.html", "call_for", { items: ["a", "b"] })),
+        "<div><div>H(<span>a</span><span>b</span>)B()</div></div>"
+    );
+});

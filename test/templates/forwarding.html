@@ -1,0 +1,70 @@
+<!-- Slot forwarding: a partial hands its own slot on to a partial it calls. -->
+
+<div b-name="named_target">[<b-unwrap b-slot="inner" />]</div>
+
+<div b-name="default_target">[<b-unwrap b-slot />]</div>
+
+<!-- named slot "outer" → child's named slot "inner" -->
+<b-unwrap b-name="fwd_named">
+    <div b-part="#named_target"><b-unwrap b-in="inner" b-slot="outer"></b-unwrap></div>
+</b-unwrap>
+
+<!-- named slot "outer" → child's default slot -->
+<b-unwrap b-name="fwd_default">
+    <div b-part="#default_target"><b-unwrap b-slot="outer"></b-unwrap></div>
+</b-unwrap>
+
+<!-- own default slot → child's named slot "inner" -->
+<b-unwrap b-name="fwd_from_default">
+    <div b-part="#named_target"><b-unwrap b-in="inner" b-slot></b-unwrap></div>
+</b-unwrap>
+
+<!-- forward carried by a real tag: the tag wraps the injected content -->
+<b-unwrap b-name="fwd_wrapped">
+    <div b-part="#named_target"><span class="w" b-in="inner" b-slot="outer"></span></div>
+</b-unwrap>
+
+<!-- body content of a forwarded b-slot follows the injected content -->
+<b-unwrap b-name="fwd_with_body">
+    <div b-part="#named_target"><b-unwrap b-in="inner" b-slot="outer">|tail</b-unwrap></div>
+</b-unwrap>
+
+<!-- the same slot declared both normally and as a forward: both are filled -->
+<b-unwrap b-name="fwd_twice">
+    <div b-part="#named_target"><b-unwrap b-in="inner" b-slot="outer"></b-unwrap></div>
+    <em><b-unwrap b-slot="outer" /></em>
+</b-unwrap>
+
+<!-- a b-data binding on the call is visible to the callee's body but must not
+     leak into the forwarded slot content, which stays in the caller's context -->
+<div b-name="named_who">[{{ who }}:<b-unwrap b-slot="inner" />]</div>
+
+<b-unwrap b-name="fwd_shadowing">
+    <div b-part="#named_who" b-data:who="'child'"><b-unwrap b-in="inner" b-slot="outer"></b-unwrap></div>
+</b-unwrap>
+
+<!-- forwarding through a custom element call -->
+<fwd-card>[card:<b-unwrap b-slot="inner" />]</fwd-card>
+
+<b-unwrap b-name="fwd_custom">
+    <fwd-card><b-unwrap b-in="inner" b-slot="outer"></b-unwrap></fwd-card>
+</b-unwrap>
+
+<!-- two levels: page → fwd_chained → fwd_named → named_target -->
+<b-unwrap b-name="fwd_chained">
+    <div b-part="#fwd_named"><b-unwrap b-in="outer" b-slot="outer"></b-unwrap></div>
+</b-unwrap>
+
+<!-- callers -->
+<div b-name="page_named"><b-unwrap b-part="#fwd_named"><b-unwrap b-in="outer">PAYLOAD</b-unwrap></b-unwrap></div>
+<div b-name="page_default"><b-unwrap b-part="#fwd_default"><b-unwrap b-in="outer">PAYLOAD</b-unwrap></b-unwrap></div>
+<div b-name="page_from_default"><b-unwrap b-part="#fwd_from_default">PAYLOAD</b-unwrap></div>
+<div b-name="page_wrapped"><b-unwrap b-part="#fwd_wrapped"><b-unwrap b-in="outer">PAYLOAD</b-unwrap></b-unwrap></div>
+<div b-name="page_with_body"><b-unwrap b-part="#fwd_with_body"><b-unwrap b-in="outer">PAYLOAD</b-unwrap></b-unwrap></div>
+<div b-name="page_body_only"><b-unwrap b-part="#fwd_with_body"></b-unwrap></div>
+<div b-name="page_twice"><b-unwrap b-part="#fwd_twice"><b-unwrap b-in="outer">PAYLOAD</b-unwrap></b-unwrap></div>
+<div b-name="page_custom"><b-unwrap b-part="#fwd_custom"><b-unwrap b-in="outer">PAYLOAD</b-unwrap></b-unwrap></div>
+<div b-name="page_chained"><b-unwrap b-part="#fwd_chained"><b-unwrap b-in="outer">PAYLOAD</b-unwrap></b-unwrap></div>
+<div b-name="page_empty"><b-unwrap b-part="#fwd_named"></b-unwrap></div>
+<div b-name="page_scope"><b-unwrap b-part="#fwd_named"><b-unwrap b-in="outer">{{ who }}</b-unwrap></b-unwrap></div>
+<div b-name="page_shadowing"><b-unwrap b-part="#fwd_shadowing"><b-unwrap b-in="outer">{{ who }}</b-unwrap></b-unwrap></div>

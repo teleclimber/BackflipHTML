@@ -990,3 +990,58 @@ Deno.test("forwarding: b-data on the call does not leak into forwarded slot cont
         "<div><div><div>[child:caller]</div></div></div>"
     );
 });
+
+// ---------------------------------------------------------------------------
+// slot-calls.html — b-in on a call site
+//
+//   <b-unwrap b-part="#card"><b-unwrap b-in="header" b-part="#chip"/></b-unwrap>
+//
+// b-in says where the tag goes (the callee's slot); the tag's remaining
+// directives still say what it is, so the inner call is stamped into "header".
+// ---------------------------------------------------------------------------
+
+Deno.test("slot calls: a b-part call carrying b-in renders in the named slot", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("slot-calls.html").call_named, {})),
+        "<div><div>H([chip])B(body)</div></div>"
+    );
+});
+
+Deno.test("slot calls: a real tag carrying b-in + b-part wraps the call in the slot", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("slot-calls.html").call_wrapped, {})),
+        '<div><div>H(<div class="w">[chip]</div>)B()</div></div>'
+    );
+});
+
+Deno.test("slot calls: a custom element call carrying b-in renders in the named slot", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("slot-calls.html").call_custom, {})),
+        "<div><div>H(<sc-chip>[sc-chip:x]</sc-chip>)B()</div></div>"
+    );
+});
+
+Deno.test("slot calls: b-data on a call carrying b-in binds the callee's data", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("slot-calls.html").call_data, { name: "Ada" })),
+        "<div><div>H([chip:Ada])B()</div></div>"
+    );
+});
+
+Deno.test("slot calls: b-if/b-else on tags carrying b-in run inside the slot", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("slot-calls.html").call_if, { show: true })),
+        "<div><div>H(yes)B()</div></div>"
+    );
+    assertEquals(
+        normalize(renderRoot(getModule("slot-calls.html").call_if, { show: false })),
+        "<div><div>H(no)B()</div></div>"
+    );
+});
+
+Deno.test("slot calls: b-for on a tag carrying b-in loops inside the slot", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("slot-calls.html").call_for, { items: ["a", "b"] })),
+        "<div><div>H(<span>a</span><span>b</span>)B()</div></div>"
+    );
+});

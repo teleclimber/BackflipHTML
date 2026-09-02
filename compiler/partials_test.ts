@@ -622,6 +622,60 @@ Deno.test("compileDirectory - a forwarded b-slot declares the slot on its enclos
     assertEquals(errors.map(e => e.message), []);
 });
 
+// --- Validation: b-in on a call site (b-part / custom element) ---
+
+Deno.test("compileDirectory - no error when a b-part call is stamped into a named slot", async () => {
+    const dir = await makeTempDir("slot_call_valid");
+    await writeFile(path.join(dir, "page.html"), `
+        <div b-name="chip">CHIP</div>
+        <div b-name="card">
+            <b-unwrap b-slot="title" />
+        </div>
+        <div b-name="page">
+            <b-unwrap b-part="#card"><b-unwrap b-in="title" b-part="#chip"></b-unwrap></b-unwrap>
+        </div>
+    `);
+
+    const { errors } = await compileDirectory(dir);
+    assertEquals(errors.map(e => e.message), []);
+});
+
+Deno.test("compileDirectory - error when a b-part call carrying b-in targets a slot that does not exist", async () => {
+    const dir = await makeTempDir("slot_call_missing");
+    await writeFile(path.join(dir, "page.html"), `
+        <div b-name="chip">CHIP</div>
+        <div b-name="card">
+            <b-unwrap b-slot="title" />
+        </div>
+        <div b-name="page">
+            <b-unwrap b-part="#card"><b-unwrap b-in="footer" b-part="#chip"></b-unwrap></b-unwrap>
+        </div>
+    `);
+
+    const { errors } = await compileDirectory(dir);
+    assertEquals(errors.length, 1);
+    assertStringIncludes(errors[0].message, 'b-in references slot "footer"');
+    assertStringIncludes(errors[0].message, 'card');
+});
+
+Deno.test("compileDirectory - error when a custom element call carrying b-in targets a slot that does not exist", async () => {
+    const dir = await makeTempDir("slot_call_ce_missing");
+    await writeFile(path.join(dir, "page.html"), `
+        <my-chip>CHIP</my-chip>
+        <div b-name="card">
+            <b-unwrap b-slot="title" />
+        </div>
+        <div b-name="page">
+            <b-unwrap b-part="#card"><my-chip b-in="footer"></my-chip></b-unwrap>
+        </div>
+    `);
+
+    const { errors } = await compileDirectory(dir);
+    assertEquals(errors.length, 1);
+    assertStringIncludes(errors[0].message, 'b-in references slot "footer"');
+    assertStringIncludes(errors[0].message, 'card');
+});
+
 // --- Validation: cross-file slot validation ---
 
 Deno.test("compileDirectory - error when b-in references non-existent slot in cross-file partial", async () => {

@@ -36,11 +36,12 @@ import type {
  * - `siblings` — the output list being built at this level. Only b-else /
  *   b-else-if reads it, to find the b-if it chains onto (`findPrecedingIf`).
  *
- * Slot routing lives in exactly one place: `lowerCallBody`, which fills a
- * partial-ref's slots. Being "in a call body" is not a state — it is simply
- * being a direct child of that loop, which is the only caller that passes a
- * `callBody` partial-ref down. Everything deeper recurses through the ordinary
- * `lowerChildren`.
+ * Slot routing lives in exactly one place: `lowerCallBodyInto`, which lowers a
+ * call body into one of the partial-ref's slots. Being "in a call body" is not a
+ * state — it is simply being a direct child of that loop, which is the only
+ * caller that passes a `callBody` partial-ref down. Everything deeper recurses
+ * through the ordinary `lowerChildren`. A `b-in` there re-points the loop at
+ * another slot (`lowerBIn`); it never changes what the tag it sits on lowers to.
  */
 
 // Per-run context: error sink, output, and services. Created once per
@@ -310,7 +311,7 @@ function lowerText(node: SourceText, ctx: Ctx): TNode[] {
  * Lower one source node. `siblings` is the output list being built at this
  * level — read only by b-else/b-else-if, to chain onto a preceding b-if.
  * `callBody` is the partial-ref whose body this node sits directly in (only
- * lowerCallBody passes it), which is what makes `b-in` meaningful here.
+ * lowerCallBodyInto passes it), which is what makes `b-in` meaningful here.
  */
 function lowerNode(node: SourceNode, pctx: PartialCtx, siblings: TNode[], callBody: PartialRefTNode | null): TNode[] {
 	if (node.kind === 'text') return lowerText(node, pctx);
@@ -377,9 +378,14 @@ function walkOutsidePartial(nodes: SourceNode[], ctx: Ctx): void {
 // --- the dispatcher ---
 
 /**
- * Precedence: b-name (nested → error) → b-attr/b-script errors → b-part →
- * b-slot → b-in → document-level tracking → multi-flow error → custom element
- * call → flow → regular tag.
+ * Precedence: b-name (nested → error) → b-attr/b-script errors → b-in (only
+ * inside a call body) → whatever the tag itself is (`lowerTag`).
+ *
+ * b-in is resolved first because it answers a different question from every
+ * other directive: it says *where the lowered tag goes* (which slot of the
+ * enclosing call), not what the tag is. What it is stays with `lowerTag`, so a
+ * call, a flow directive or a forwarded b-slot all keep their meaning when a
+ * b-in routes them.
  */
 function lowerElement(el: SourceElement, pctx: PartialCtx, siblings: TNode[], callBody: PartialRefTNode | null): TNode[] {
 	// Every element reached here is inside a partial, i.e. nested: a top-level
@@ -391,17 +397,30 @@ function lowerElement(el: SourceElement, pctx: PartialCtx, siblings: TNode[], ca
 
 	reportDirectiveMisplacement(el, pctx);
 
-	const bPartAttr = findAttr(el, 'b-part');
-	if (bPartAttr) return lowerBPart(el, bPartAttr, pctx);
-
 	// b-in is only meaningful directly inside a call body — elsewhere it stays a
-	// literal attribute. Inside one it outranks b-slot on the same tag: b-in says
-	// where the tag goes, b-slot says what fills it (slot forwarding).
-	const bInAttr = findAttr(el, 'b-in');
-	if (bInAttr && callBody) return lowerBIn(el, bInAttr, callBody, pctx);
+	// literal attribute.
+	if (callBody) {
+		const bInAttr = findAttr(el, 'b-in');
+		if (bInAttr) return lowerBIn(el, bInAttr, callBody, pctx);
+	}
+
+	return lowerTag(el, pctx, siblings, []);
+}
+
+/**
+ * What the tag *is*, independent of any b-in that routed it somewhere.
+ * Precedence: b-part → b-slot → document-level tracking → multi-flow error →
+ * custom element call → flow → regular tag.
+ *
+ * `exclude` names attributes the caller already consumed and that must not
+ * reach the rendered tag — `b-in`, when `lowerBIn` routed this tag into a slot.
+ */
+function lowerTag(el: SourceElement, pctx: PartialCtx, siblings: TNode[], exclude: string[]): TNode[] {
+	const bPartAttr = findAttr(el, 'b-part');
+	if (bPartAttr) return lowerBPart(el, bPartAttr, pctx, exclude);
 
 	const bSlotAttr = findAttr(el, 'b-slot');
-	if (bSlotAttr) return lowerBSlot(el, bSlotAttr, pctx);
+	if (bSlotAttr) return lowerBSlot(el, bSlotAttr, pctx, exclude);
 
 	// Track document-level tags inside partials
 	if (DOCUMENT_LEVEL_TAGS.has(el.tagName)) {
@@ -420,13 +439,13 @@ function lowerElement(el: SourceElement, pctx: PartialCtx, siblings: TNode[], ca
 	// <b-unwrap b-for|if|...>). Without a flow directive, it's a plain call.
 	// b-part precedence already won above; this only runs for plain custom element tags.
 	if (isCustomElementTagName(el.tagName)) {
-		if (b_as.length === 1) return lowerCustomElementCallWithFlow(el, b_as[0], pctx, siblings);
-		return lowerCustomElementCall(el, pctx);
+		if (b_as.length === 1) return lowerCustomElementCallWithFlow(el, b_as[0], pctx, siblings, exclude);
+		return lowerCustomElementCall(el, pctx, exclude);
 	}
 
-	if (b_as.length === 1) return lowerFlowOnRegularTag(el, b_as[0], pctx, siblings);
+	if (b_as.length === 1) return lowerFlowOnRegularTag(el, b_as[0], pctx, siblings, exclude);
 
-	return lowerRegularTag(el, pctx);
+	return lowerRegularTag(el, pctx, exclude);
 }
 
 function ctx_error(ctx: Ctx, message: string, loc: ErrLoc | undefined): void {
@@ -673,14 +692,14 @@ function findPrecedingIf(siblings: TNode[]): IfTNode | null {
 // (non-custom-element) tag. If the carrying tag isn't b-unwrap, an ElementTNode
 // nests inside the flow container so the tag renders inside each iteration /
 // branch.
-function lowerFlowOnRegularTag(el: SourceElement, flowAttr: SourceAttr, pctx: PartialCtx, siblings: TNode[]): TNode[] {
+function lowerFlowOnRegularTag(el: SourceElement, flowAttr: SourceAttr, pctx: PartialCtx, siblings: TNode[], exclude: string[]): TNode[] {
 	const fc = setupFlow(el, flowAttr, pctx, siblings);
 	if (!fc) return lowerFallbackTag(el, pctx);
 	if (el.tagName === 'b-unwrap') {
 		// Body flows directly into the flow container (no wrapping element).
 		if (isContainer(el)) lowerInto(fc.container.tnodes!, el.children, pctx);
 	} else {
-		const elem = buildElement(el, [flowAttr.name], pctx);
+		const elem = buildElement(el, [flowAttr.name, ...exclude], pctx);
 		if (isContainer(el)) lowerInto(elem.tnodes, el.children, pctx);
 		fc.container.tnodes!.push(elem);
 	}
@@ -690,14 +709,14 @@ function lowerFlowOnRegularTag(el: SourceElement, flowAttr: SourceAttr, pctx: Pa
 // --- call sites ---
 
 // Build the PartialRefTNode for a custom element call site.
-function buildCustomElementPartialRef(el: SourceElement, pctx: PartialCtx): CustomElementCallTNode {
+function buildCustomElementPartialRef(el: SourceElement, pctx: PartialCtx, exclude: string[]): CustomElementCallTNode {
 	const bindings = collectBDataBindings(el, pctx);
 
 	// Flow directives on the call site are consumed by the wrapping ForTNode /
 	// IfTNode (built in lowerCustomElementCallWithFlow) and must never appear in
 	// the rendered tag. They're excluded here so the AttrPart[] doesn't contain them.
 	// In the non-flow call path they're absent anyway, so the extra excludes are no-ops.
-	const callerAttrs = buildAttrPartsFromTag(el, ['b-export', 'b-if', 'b-for', 'b-else', 'b-else-if'], pctx);
+	const callerAttrs = buildAttrPartsFromTag(el, ['b-export', 'b-if', 'b-for', 'b-else', 'b-else-if', ...exclude], pctx);
 
 	const callerAttrInfos: NonNullable<CustomElementCallTNode['callerAttrInfos']> = [];
 	for (const attr of el.attrs) {
@@ -751,38 +770,44 @@ function buildCustomElementPartialRef(el: SourceElement, pctx: PartialCtx): Cust
 }
 
 /**
- * Lower the body of a call site into `partialRef`'s slots. This is the only
- * place slot routing exists: `slotName` is the slot the body's own children
- * land in, and a `b-in` child (which only the `callBody` argument below makes
- * meaningful) diverts itself or its children elsewhere.
+ * Lower the body of a call site into one of `partialRef`'s slots: `slotName` is
+ * the slot the body's own children land in, and a `b-in` child (which only the
+ * `callBody` argument below makes meaningful) diverts itself elsewhere.
  */
 function lowerCallBody(children: SourceNode[], partialRef: PartialRefTNode, slotName: string, pctx: PartialCtx): void {
-	const arr = (partialRef.slots[slotName] ??= []);
+	lowerCallBodyInto(children, (partialRef.slots[slotName] ??= []), partialRef, pctx);
+}
+
+/**
+ * Lower call-body `children` into `out`, keeping `partialRef` as the enclosing
+ * call — the only thing that makes a `b-in` on a direct child meaningful.
+ */
+function lowerCallBodyInto(children: SourceNode[], out: TNode[], partialRef: PartialRefTNode, pctx: PartialCtx): void {
 	for (const child of children) {
-		for (const n of lowerNode(child, pctx, arr, partialRef)) appendCoalesced(arr, n);
+		for (const n of lowerNode(child, pctx, out, partialRef)) appendCoalesced(out, n);
 	}
 }
 
-function lowerCustomElementCall(el: SourceElement, pctx: PartialCtx): TNode[] {
+function lowerCustomElementCall(el: SourceElement, pctx: PartialCtx, exclude: string[]): TNode[] {
 	// Pre-conditions: isCustomElementTagName, no b-name / b-part / flow directive
 	// (see lowerCustomElementCallWithFlow for flow), inside a partial.
-	const partialRef = buildCustomElementPartialRef(el, pctx);
+	const partialRef = buildCustomElementPartialRef(el, pctx, exclude);
 	if (isContainer(el)) lowerCallBody(el.children, partialRef, 'default', pctx);
 	return [partialRef];
 }
 
 // `<my-elem b-for|if|else-if|else>` — the call site is wrapped in a ForTNode
 // or IfTNode (semantically identical to <b-unwrap b-for=...><my-elem>...</my-elem></b-unwrap>).
-function lowerCustomElementCallWithFlow(el: SourceElement, flowAttr: SourceAttr, pctx: PartialCtx, siblings: TNode[]): TNode[] {
+function lowerCustomElementCallWithFlow(el: SourceElement, flowAttr: SourceAttr, pctx: PartialCtx, siblings: TNode[], exclude: string[]): TNode[] {
 	const fc = setupFlow(el, flowAttr, pctx, siblings);
 	if (!fc) return lowerFallbackTag(el, pctx);
-	const partialRef = buildCustomElementPartialRef(el, pctx);
+	const partialRef = buildCustomElementPartialRef(el, pctx, exclude);
 	fc.container.tnodes!.push(partialRef);
 	if (isContainer(el)) lowerCallBody(el.children, partialRef, 'default', pctx);
 	return fc.emit;
 }
 
-function lowerBPart(el: SourceElement, bPartAttr: SourceAttr, pctx: PartialCtx): TNode[] {
+function lowerBPart(el: SourceElement, bPartAttr: SourceAttr, pctx: PartialCtx, exclude: string[]): TNode[] {
 	const { file, partialName } = parseBPartValue(bPartAttr.value);
 
 	const bindings = collectBDataBindings(el, pctx);
@@ -805,7 +830,7 @@ function lowerBPart(el: SourceElement, bPartAttr: SourceAttr, pctx: PartialCtx):
 	} else {
 		// A wrapping ElementTNode whose single child is the partial-ref. Its attrs
 		// come from the source tag (excluding b-part / b-data:*).
-		const elem = buildElement(el, ['b-part'], pctx);
+		const elem = buildElement(el, ['b-part', ...exclude], pctx);
 		elem.tnodes.push(partialRef);
 		out = [elem];
 	}
@@ -816,7 +841,7 @@ function lowerBPart(el: SourceElement, bPartAttr: SourceAttr, pctx: PartialCtx):
 
 // --- slots ---
 
-function lowerBSlot(el: SourceElement, bSlotAttr: SourceAttr, pctx: PartialCtx, alsoExclude: string[] = []): TNode[] {
+function lowerBSlot(el: SourceElement, bSlotAttr: SourceAttr, pctx: PartialCtx, exclude: string[]): TNode[] {
 	const slotName = bSlotAttr.value !== '' ? bSlotAttr.value : undefined;
 	const slot_node: SlotTNode = { type: 'slot', name: slotName };
 	slot_node.loc = findAttrLoc(el, 'b-slot');
@@ -831,50 +856,53 @@ function lowerBSlot(el: SourceElement, bSlotAttr: SourceAttr, pctx: PartialCtx, 
 	}
 	// Wrapping ElementTNode with the slot insertion point as its first child; any
 	// body content follows as later children of the element.
-	const elem = buildElement(el, ['b-slot', ...alsoExclude], pctx);
+	const elem = buildElement(el, ['b-slot', ...exclude], pctx);
 	elem.tnodes.push(slot_node);
 	if (isContainer(el)) lowerInto(elem.tnodes, el.children, pctx);
 	return [elem];
 }
 
 /**
- * `b-in` on a direct child of a call body: route content into a named slot.
- * Produces no output of its own — it fills the target slot itself.
+ * `b-in` on a direct child of a call body: route the tag into a named slot of
+ * that call. It produces no output of its own — it resolves the target slot and
+ * lowers the tag by its remaining directives *into* that slot, so a b-part call,
+ * a custom element call, a flow directive or a forwarded b-slot all keep their
+ * meaning while landing in the named slot.
  */
 function lowerBIn(el: SourceElement, bInAttr: SourceAttr, partialRef: PartialRefTNode, pctx: PartialCtx): TNode[] {
 	const slotName = bInAttr.value || 'default';
-	if (!partialRef.slots[slotName]) {
-		partialRef.slots[slotName] = [];
-	}
+	const target = (partialRef.slots[slotName] ??= []);
 	const bInLoc = findAttrLoc(el, 'b-in');
 	if (bInLoc) {
 		if (!partialRef.slotLocs) partialRef.slotLocs = {};
 		partialRef.slotLocs[slotName] = bInLoc;
 	}
 
-	const bSlotAttr = findAttr(el, 'b-slot');
-	if (bSlotAttr) {
-		// Slot forwarding: b-in routes this tag into the target slot, b-slot turns
-		// its content into an insertion point for the *enclosing* partial's slot.
-		const arr = partialRef.slots[slotName];
-		for (const n of lowerBSlot(el, bSlotAttr, pctx, ['b-in'])) appendCoalesced(arr, n);
-	} else if (el.tagName === 'b-unwrap') {
-		// Switch the target slot for this tag's own children; no wrapping element.
-		// (A self-closing <b-unwrap b-in/> simply has no body — the named slot is
-		// created and stays empty.)
-		lowerCallBody(el.children, partialRef, slotName, pctx);
-	} else {
-		// The carrying tag becomes an element pushed into the target slot; its body
-		// nests inside it.
-		const elem = buildElement(el, ['b-in'], pctx);
-		if (isContainer(el)) lowerInto(elem.tnodes, el.children, pctx);
-		partialRef.slots[slotName].push(elem);
+	if (el.tagName === 'b-unwrap' && !hasTagDirective(el)) {
+		// Pure routing: <b-unwrap b-in> contributes no node, and its children stay
+		// direct children of the call body, so their own b-in still applies.
+		// (A self-closing one simply has no body — the named slot is created and
+		// stays empty.)
+		lowerCallBodyInto(el.children, target, partialRef, pctx);
+		return [];
 	}
+
+	// `target` doubles as the sibling list, so a b-else on a following b-in tag
+	// chains onto the b-if already routed into the same slot.
+	for (const n of lowerTag(el, pctx, target, ['b-in'])) appendCoalesced(target, n);
 	return [];
 }
 
-function lowerRegularTag(el: SourceElement, pctx: PartialCtx): TNode[] {
-	const elem = buildElement(el, [], pctx);
+// The directives that decide what a tag *is* — i.e. everything lowerTag
+// dispatches on. A <b-unwrap b-in> carrying none of them is pure slot routing.
+const TAG_DIRECTIVES = ['b-part', 'b-slot', 'b-for', 'b-if', 'b-else-if', 'b-else'];
+
+function hasTagDirective(el: SourceElement): boolean {
+	return el.attrs.some(attr => TAG_DIRECTIVES.includes(attr.name));
+}
+
+function lowerRegularTag(el: SourceElement, pctx: PartialCtx, exclude: string[]): TNode[] {
+	const elem = buildElement(el, exclude, pctx);
 	if (isContainer(el)) lowerInto(elem.tnodes, el.children, pctx);
 	return [elem];
 }

@@ -823,6 +823,120 @@ Deno.test("compileFile: b-slot still wins over b-in outside a call body", async 
 	assertEquals(span.attrs.map(a => a.type === 'static' ? a.raw : '').join('').includes('b-in'), true);
 });
 
+
+// ---- compileFile: b-in on a call site (b-part / custom element / flow) ----
+//
+// b-in says *where* the tag goes; the tag's remaining directives still say what
+// it is. A call carrying b-in is therefore stamped into the named slot.
+
+Deno.test("compileFile: b-in + b-part stamps the called partial into the named slot", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><b-unwrap b-part="#card"><b-unwrap b-in="header" b-part="#chip"></b-unwrap></b-unwrap></div>'
+	);
+	assertEquals(errors.length, 0);
+	const ref = findPartialRef(compiled.partials.get("page")!);
+	assertEquals(ref.partialName, 'card');
+	assertEquals(ref.slots['header'].length, 1);
+	const chip = ref.slots['header'][0] as PartialRefTNode;
+	assertEquals(chip.type, 'partial-ref');
+	assertEquals(chip.partialName, 'chip');
+	assertEquals(ref.slots['default'], []);
+	assertExists(ref.slotLocs!['header']);
+});
+
+Deno.test("compileFile: a b-part call carrying b-in keeps its own slot content", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><b-unwrap b-part="#card"><b-unwrap b-in="header" b-part="#chip">inner</b-unwrap></b-unwrap></div>'
+	);
+	assertEquals(errors.length, 0);
+	const ref = findPartialRef(compiled.partials.get("page")!);
+	const chip = ref.slots['header'][0] as PartialRefTNode;
+	assertEquals(chip.partialName, 'chip');
+	assertEquals(renderStatic(chip.slots['default']), 'inner');
+});
+
+Deno.test("compileFile: b-in + b-part on a regular tag wraps the call and drops b-in", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><b-unwrap b-part="#card"><div class="w" b-in="header" b-part="#chip"></div></b-unwrap></div>'
+	);
+	assertEquals(errors.length, 0);
+	const ref = findPartialRef(compiled.partials.get("page")!);
+	const wrapper = ref.slots['header'][0] as ElementTNode;
+	assertEquals(wrapper.type, 'element');
+	assertEquals(wrapper.tagName, 'div');
+	assertEquals(wrapper.tnodes.length, 1);
+	assertEquals((wrapper.tnodes[0] as PartialRefTNode).partialName, 'chip');
+	const attrText = wrapper.attrs.map(a => a.type === 'static' ? a.raw : '').join('');
+	assertEquals(attrText.includes('b-in'), false, `b-in leaked into attrs: ${attrText}`);
+	assertEquals(attrText.includes('class="w"'), true, `caller attrs should survive: ${attrText}`);
+});
+
+Deno.test("compileFile: b-in on a custom element call routes the call into the named slot", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><b-unwrap b-part="#card"><my-chip class="w" b-in="header">body</my-chip></b-unwrap></div>'
+	);
+	assertEquals(errors.length, 0);
+	const ref = findPartialRef(compiled.partials.get("page")!);
+	const call = ref.slots['header'][0] as PartialRefTNode;
+	assertEquals(call.type, 'partial-ref');
+	if (call.kind !== 'custom-element') throw new Error(`expected a custom element call, got ${call.kind}`);
+	assertEquals(call.partialName, 'my-chip');
+	assertEquals(renderStatic(call.slots['default']), 'body');
+	const attrText = (call.callerAttrs ?? []).map(a => a.type === 'static' ? a.raw : '').join('');
+	assertEquals(attrText.includes('b-in'), false, `b-in leaked into caller attrs: ${attrText}`);
+	assertEquals(attrText.includes('class="w"'), true, `caller attrs should survive: ${attrText}`);
+});
+
+Deno.test("compileFile: b-data on a call carrying b-in still binds the callee's data", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><b-unwrap b-part="#card"><b-unwrap b-in="header" b-part="#chip" b-data:who="name"></b-unwrap></b-unwrap></div>'
+	);
+	assertEquals(errors.length, 0);
+	const ref = findPartialRef(compiled.partials.get("page")!);
+	const chip = ref.slots['header'][0] as PartialRefTNode;
+	assertEquals(chip.bindings.length, 1);
+	assertEquals(chip.bindings[0].name, 'who');
+});
+
+Deno.test("compileFile: b-in + b-if routes the conditional into the named slot", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><b-unwrap b-part="#card"><b-unwrap b-in="header" b-if="show">yes</b-unwrap><b-unwrap b-in="header" b-else>no</b-unwrap></b-unwrap></div>'
+	);
+	assertEquals(errors.length, 0);
+	const ref = findPartialRef(compiled.partials.get("page")!);
+	assertEquals(ref.slots['header'].length, 1);
+	const ifNode = ref.slots['header'][0] as IfTNode;
+	assertEquals(ifNode.type, 'if');
+	assertEquals(ifNode.branches.length, 2);
+	assertEquals(renderStatic(ifNode.branches[0].tnodes), 'yes');
+	assertEquals(renderStatic(ifNode.branches[1].tnodes), 'no');
+	assertEquals(ref.slots['default'], []);
+});
+
+Deno.test("compileFile: b-in + b-for on a regular tag routes the loop into the named slot", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><b-unwrap b-part="#card"><span b-in="header" b-for="x in items">y</span></b-unwrap></div>'
+	);
+	assertEquals(errors.length, 0);
+	const ref = findPartialRef(compiled.partials.get("page")!);
+	const forNode = ref.slots['header'][0] as ForTNode;
+	assertEquals(forNode.type, 'for');
+	const span = forNode.tnodes[0] as ElementTNode;
+	assertEquals(span.tagName, 'span');
+	const attrText = span.attrs.map(a => a.type === 'static' ? a.raw : '').join('');
+	assertEquals(attrText.includes('b-in'), false, `b-in leaked into attrs: ${attrText}`);
+	assertEquals(attrText.includes('b-for'), false, `b-for leaked into attrs: ${attrText}`);
+});
+
+Deno.test("compileFile: b-part still wins over b-in outside a call body", async () => {
+	// No enclosing call, so b-in is not meaningful and stays a literal attribute.
+	const { compiled, errors } = await compileFile('<div b-name="page"><div b-in="x" b-part="#chip"></div></div>');
+	assertEquals(errors.length, 0);
+	const pageDiv = compiled.partials.get("page")!.tnodes[0] as ElementTNode;
+	const wrapper = pageDiv.tnodes[0] as ElementTNode;
+	assertEquals((wrapper.tnodes[0] as PartialRefTNode).partialName, 'chip');
+	assertEquals(wrapper.attrs.map(a => a.type === 'static' ? a.raw : '').join('').includes('b-in'), true);
+});
 Deno.test("compileFile: div b-part with no content does not create spurious default slot", async () => {
 	const { compiled: result } = await compileFile(
 		'<div b-name="page"><div class="leaderboard" b-part="#leaderboard"></div></div>'
@@ -1901,15 +2015,20 @@ Deno.test("flow-wrapped b-for elements get closeTagLoc and a spanning loc", asyn
 	assertEquals(liEl.loc!.endOffset, src.indexOf('</li>') + '</li>'.length);
 });
 
-Deno.test("b-in wins over a flow directive on the same tag (flow attr becomes literal)", async () => {
+Deno.test("b-in routes a flow directive on the same tag into the named slot", async () => {
+	// b-in says where the tag goes; b-if still says what it is, so the whole
+	// conditional lands in slot "s" and neither directive renders.
 	const { compiled, errors } = await compileFile('<div b-name="x"><my-card><span b-in="s" b-if="c">y</span></my-card></div>');
 	assertEquals(errors.length, 0);
 	const root = compiled.partials.get("x")!;
 	const ref = findPartialRef(root);
-	const spanEl = ref.slots['s'][0] as ElementTNode;
+	const ifNode = ref.slots['s'][0] as IfTNode;
+	assertEquals(ifNode.type, 'if');
+	const spanEl = ifNode.branches[0].tnodes[0] as ElementTNode;
 	assertEquals(spanEl.tagName, 'span');
 	const staticRaw = spanEl.attrs.filter(p => p.type === 'static').map(p => (p as { raw: string }).raw).join('');
-	assertStringIncludes(staticRaw, 'b-if="c"');
+	assertEquals(staticRaw.includes('b-if'), false, `b-if leaked into attrs: ${staticRaw}`);
+	assertEquals(staticRaw.includes('b-in'), false, `b-in leaked into attrs: ${staticRaw}`);
 });
 
 Deno.test("b-in outside a call body is a literal attribute", async () => {
