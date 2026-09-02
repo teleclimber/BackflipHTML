@@ -49,9 +49,14 @@ function collectAncestors(
 	while (current && isElement(current)) {
 		const dirInfo = usageGraph.directives.get(current);
 
-		// Check if this ancestor defines a partial (b-name)
+		// Check if this ancestor defines a partial (b-name). The partial's root
+		// element renders around this usage site, so it belongs in the chain;
+		// the ancestors above it come from the outer partial's own spines.
 		if (dirInfo?.bName) {
 			outerPartialName = dirInfo.bName;
+			if (current.tagName !== 'b-unwrap') {
+				ancestors.push(makeSpineNode(current, dirInfo, sourceFile));
+			}
 			break;
 		}
 

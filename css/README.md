@@ -23,6 +23,22 @@ Each match is classified as one of:
 - **conditional** — the selector matches only in some `b-if`/`b-else-if` branches
 - **dynamic** — the selector matches only if a `b-bind:class` or `b-bind:id` expression evaluates to a matching value
 
+## Selector support
+
+Matching runs against a *grafted* tree: a partial's own subtree hung off a single-child chain of spine ancestors (`graftOntoSpine`). So sibling and position information is only accurate **within** one source subtree — across a partial or slot boundary the chain has exactly one child per level, and a `b-part` usage stays an unexpanded leaf in the caller's tree.
+
+Works:
+
+- Descendant and child combinators, in both directions across partial and slot boundaries — every partial is matched against its own upward spine, so `.wrap span` finds a `span` inside a partial used under `.wrap`
+- `+` and `~` between elements in the same source subtree
+
+Does not work:
+
+- `+` and `~` across a partial or slot boundary — no match, e.g. `.hd + .body` where `.body` is slot content injected right after `.hd`
+- `:has()` reaching into a partial — spines expand upward only, so `.wrap:has(.t)` misses a `.t` that lives inside a partial used under `.wrap`. `:has(*)` does match, but against the `b-part` placeholder, which doesn't survive to runtime
+- Structural pseudos at a boundary, which match *wrongly* rather than not at all. Given `<div class="wrap"><p class="lead"></p><div b-part="card"></div></div>`, `.wrap > :first-child` and `.wrap > :only-child` match the card as `definite`, while the correct `.wrap > :nth-child(2)` does not
+- `b-for` repetition — only one element is modeled, so `.item:first-child` reports `definite` and `.item + .item` reports nothing
+
 ## Key files
 
 | File | Purpose |

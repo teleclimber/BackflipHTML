@@ -126,11 +126,50 @@ describe('computeSpines', () => {
 		]);
 		const spines = computeSpines('inner', graph);
 		strictEqual(spines.length, 1);
-		// Should include: div.page (from outer's usage) + span (from inside outer's definition)
+		// div.page (from outer's usage) + outer's own root + span (inside outer's definition)
 		const tags = spines[0].ancestors.map(a => a.tagName);
-		deepStrictEqual(tags, ['div', 'span']);
+		deepStrictEqual(tags, ['div', 'div', 'span']);
 		const classAttr = spines[0].ancestors[0].attrs.find(a => a.name === 'class');
 		strictEqual(classAttr?.value, 'page');
+	});
+
+	it('includes the enclosing partial root element in the spine', () => {
+		const graph = buildGraph([
+			{
+				html: '<div b-name="page" class="page"><div class="mid"><div b-part="card"></div></div></div><div b-name="card">content</div>',
+				file: 'a.html',
+			},
+		]);
+		const spines = computeSpines('card', graph);
+		strictEqual(spines.length, 1);
+		// The b-name root renders around the usage site, so it belongs in the chain
+		const classes = spines[0].ancestors.map(a => a.attrs.find(at => at.name === 'class')?.value);
+		deepStrictEqual(classes, ['page', 'mid']);
+	});
+
+	it('omits a b-unwrap partial root from the spine', () => {
+		const graph = buildGraph([
+			{
+				html: '<b-unwrap b-name="page"><div class="mid"><div b-part="card"></div></div></b-unwrap><div b-name="card">content</div>',
+				file: 'a.html',
+			},
+		]);
+		const spines = computeSpines('card', graph);
+		strictEqual(spines.length, 1);
+		const tags = spines[0].ancestors.map(a => a.tagName);
+		deepStrictEqual(tags, ['div'], 'b-unwrap renders no tag, so it must not appear');
+	});
+
+	it('marks the spine conditional when the enclosing partial root is conditional', () => {
+		const graph = buildGraph([
+			{
+				html: '<div b-name="page" b-if="show"><div b-part="card"></div></div><div b-name="card">content</div>',
+				file: 'a.html',
+			},
+		]);
+		const spines = computeSpines('card', graph);
+		strictEqual(spines.length, 1);
+		strictEqual(spines[0].isConditional, true);
 	});
 
 	it('respects maxDepth to prevent infinite recursion', () => {

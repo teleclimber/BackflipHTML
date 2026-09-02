@@ -122,6 +122,31 @@ describe('analyzeCss', () => {
 		ok(h2Match, 'h2 in b-in should match .card-header h2 via slot spine');
 	});
 
+	it('matches selectors anchored on the enclosing partial root element', () => {
+		const result = analyze({
+			cssContent: '.page .t { color: red; } .page .card { color: blue; }',
+			templateFiles: new Map([
+				['page.html', [
+					'<div b-name="page" class="page">',
+					'  <div class="mid"><div b-part="#card"></div></div>',
+					'</div>',
+					'<div b-name="card" class="card"><span class="t">x</span></div>',
+				].join('\n')],
+			]),
+		});
+
+		const matches = result.elementMatches.get('page.html');
+		ok(matches, 'should have matches');
+		ok(
+			matches.some(m => m.matches.some(r => r.selector === '.page .t')),
+			'span.t is rendered inside div.page, so .page .t must match',
+		);
+		ok(
+			matches.some(m => m.matches.some(r => r.selector === '.page .card')),
+			'the card root is rendered inside div.page, so .page .card must match',
+		);
+	});
+
 	it('matches slot content against ancestors outside the partial (caller context)', () => {
 		const result = analyze({
 			cssContent: '.page-wrapper .card-body p { margin: 0; }',
