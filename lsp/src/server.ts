@@ -16,7 +16,7 @@ import {
 } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { compileDirectory, loadConfig, resolveConfigRoot, resolveAssetDirs, resolveDomPatchOutputDirs, CONFIG_FILENAME, previewPartial, parseBPartValue, type BackflipError, type CompiledFile, type CompileOptions, type LoadConfigResult } from '@backflip/html';
-import { analyzeCss, discoverCssFiles, type CssAnalysisResult, type PartialSourceInfo } from '@backflip/css';
+import { analyzeCss, discoverCssFiles, type CssAnalysisResult } from '@backflip/css';
 import { discoverAssetFileInfos, collectAllAssetReferences, validateAssetFiles, buildAssetUsageReport, filterReport, renderAssetReportHtml } from '@backflip/assets';
 import { buildIndex, type ProjectIndex } from './index.js';
 import { errorsToDiagnostics } from './diagnostics.js';
@@ -194,7 +194,7 @@ async function recompile(): Promise<void> {
 		projectIndex = buildIndex(directory);
 		connection.console.log(`[backflip] recompile: ${directory.files.size} files, ${errors.length} errors, ${projectIndex.partialDefs.size} partials, ${projectIndex.partialRefs.length} refs`);
 
-		// Read template file contents (used for asset references and CSS analysis)
+		// Read template file contents (used for asset reference lookups)
 		templateFileContents = new Map();
 		for (const [filePath] of directory.files) {
 			try {
@@ -215,21 +215,8 @@ async function recompile(): Promise<void> {
 					cssChunks.push(await fs.readFile(cssPath, 'utf-8'));
 				}
 				const cssContent = cssChunks.join('\n');
-				const partialInfo = new Map<string, Map<string, PartialSourceInfo>>();
-				for (const [filePath, compiledFile] of directory.files) {
-					const fileInfo = new Map<string, PartialSourceInfo>();
-					for (const [name, root] of compiledFile.partials) {
-						if (root.meta) fileInfo.set(name, root.meta);
-					}
-					partialInfo.set(filePath, fileInfo);
-				}
 				const cssStart = performance.now();
-				cssAnalysis = analyzeCss({
-					cssContent,
-					templateFiles: templateFileContents,
-					partialInfo,
-					compiled: directory.files,
-				});
+				cssAnalysis = analyzeCss({ cssContent, compiled: directory.files });
 				const cssElapsed = performance.now() - cssStart;
 				const matchCount = Array.from(cssAnalysis.elementMatches.values())
 					.reduce((sum, arr) => sum + arr.length, 0);

@@ -2,20 +2,12 @@ import { describe, it } from 'node:test';
 import { strictEqual, ok, match } from 'node:assert';
 import { getHover, findRulesForElement, findElementsForSelector } from './hover.js';
 import { makeIndex, makeLoc } from './test-helpers.js';
-import { analyzeCss, type PartialSourceInfo } from '@backflip/css';
+import { analyzeCss } from '@backflip/css';
 import { compileFiles } from '@backflip/html';
 
 async function analyze(input: { cssContent: string; templateFiles: Map<string, string> }) {
 	const { directory } = await compileFiles(input.templateFiles);
-	const partialInfo = new Map<string, Map<string, PartialSourceInfo>>();
-	for (const [filePath, file] of directory.files) {
-		const fileInfo = new Map<string, PartialSourceInfo>();
-		for (const [name, root] of file.partials) {
-			if (root.meta) fileInfo.set(name, root.meta);
-		}
-		partialInfo.set(filePath, fileInfo);
-	}
-	return analyzeCss({ ...input, partialInfo, compiled: directory.files });
+	return analyzeCss({ cssContent: input.cssContent, compiled: directory.files });
 }
 
 import type { TextDocument } from 'vscode-languageserver-textdocument';

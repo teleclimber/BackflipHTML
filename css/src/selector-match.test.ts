@@ -1,9 +1,10 @@
 import { describe, it } from 'node:test';
 import { strictEqual, deepStrictEqual, ok } from 'node:assert';
 import { compileFiles } from '@backflip/html';
-import { matchSelectors, type MatchRoots } from './selector-match.js';
-import { tagNameOf } from './tnode-view.js';
-import type { CssRule, ContextSpine, SpineNode } from './types.js';
+import { matchSelectors } from './selector-match.js';
+import { buildInstanceForest } from './instance-tree.js';
+import { attrIndexOf, tagNameOf } from './tnode-view.js';
+import type { CssRule, ElementMatches } from './types.js';
 
 function makeRule(selector: string, props: Record<string, string> = {}, media: string[] = []): CssRule {
 	return {
@@ -16,291 +17,212 @@ function makeRule(selector: string, props: Record<string, string> = {}, media: s
 	};
 }
 
-/**
- * Compile `html` as the body of a partial and return it as match roots. The
- * partial is wrapped in `<b-unwrap b-name>` so the snippet's own top-level
- * elements are the roots, with no wrapper element of their own.
- */
-async function setupPartial(html: string, partialName = 'test'): Promise<Map<string, MatchRoots>> {
-	const source = `<b-unwrap b-name="${partialName}">${html}</b-unwrap>`;
-	const { directory, errors } = await compileFiles(new Map([['test.html', source]]));
-	if (errors.length > 0) throw new Error(`compile failed: ${errors.map(e => e.message).join('; ')}`);
-	const root = directory.files.get('test.html')!.partials.get(partialName)!;
-	return new Map([[partialName, { roots: root.tnodes, file: 'test.html', partialName }]]);
+/** Compile `files`, expand them, and match `selectors` (one rule each) over the result. */
+async function match(files: Record<string, string>, ...selectors: string[]) {
+	const { directory } = await compileFiles(new Map(Object.entries(files)));
+	const rules = selectors.map((s, i) => {
+		const rule = makeRule(s);
+		rule.sourceLine = i + 1;  // keep same-text selectors from deduplicating
+		return rule;
+	});
+	return matchSelectors(rules, buildInstanceForest(directory.files));
 }
 
-/** Compile several files, returning match roots for one named partial of one of them. */
-async function setupFiles(
-	files: Record<string, string>,
-	file: string,
-	partialName: string,
-): Promise<Map<string, MatchRoots>> {
-	const { directory, errors } = await compileFiles(new Map(Object.entries(files)));
-	if (errors.length > 0) throw new Error(`compile failed: ${errors.map(e => e.message).join('; ')}`);
-	const root = directory.files.get(file)!.partials.get(partialName)!;
-	return new Map([[partialName, { roots: root.tnodes, file, partialName }]]);
+/** Compile one snippet as the body of a partial with no tag of its own. */
+async function matchBody(html: string, ...selectors: string[]) {
+	return match({ 't.html': `<b-unwrap b-name="test">${html}</b-unwrap>` }, ...selectors);
 }
 
-function spineNode(tagName: string, attrs: { name: string; value: string }[] = [], opts: Partial<SpineNode> = {}): SpineNode {
-	return {
-		tagName,
-		attrs,
-		dynamicAttrs: [],
-		isConditional: false,
-		children: [],
-		parent: null,
-		sourceFile: 'test.html',
-		sourceElement: null,
-		...opts,
-	};
-}
-
-function spines(...list: ContextSpine[]): Map<string, ContextSpine[]> {
-	return new Map([['test', list]]);
-}
-
-function emptySpines(): Map<string, ContextSpine[]> {
-	return new Map();
+/** Every `selector=matchType` reported for the element carrying `class="<cls>"`. */
+function on(result: Map<string, ElementMatches[]>, cls: string): string[] {
+	const out: string[] = [];
+	for (const entries of result.values()) {
+		for (const entry of entries) {
+			const classes = attrIndexOf(entry.element).values.get('class')?.split(/\s+/) ?? [];
+			if (!classes.includes(cls)) continue;
+			for (const m of entry.matches) out.push(`${m.selector}=${m.matchType}`);
+		}
+	}
+	return out.sort();
 }
 
 describe('matchSelectors', () => {
-	it('matches a tag selector', async () => {
-		const partials = await setupPartial('<div>hello</div>');
-		const rules = [makeRule('div')];
-		const result = matchSelectors(rules, partials, emptySpines());
-		const matches = result.get('test.html');
-		ok(matches);
-		strictEqual(matches.length, 1);
-		strictEqual(matches[0].matches[0].selector, 'div');
-	});
-
-	it('matches a class selector', async () => {
-		const partials = await setupPartial('<div class="card">hello</div>');
-		const rules = [makeRule('.card')];
-		const result = matchSelectors(rules, partials, emptySpines());
-		const matches = result.get('test.html')!;
-		strictEqual(matches.length, 1);
-		strictEqual(matches[0].matches[0].selector, '.card');
-	});
-
-	it('does not match when selector does not apply', async () => {
-		const partials = await setupPartial('<div class="card">hello</div>');
-		const rules = [makeRule('.panel')];
-		const result = matchSelectors(rules, partials, emptySpines());
-		const matches = result.get('test.html');
-		strictEqual(matches, undefined);
+	it('matches by tag, class, id and attribute quoting style', async () => {
+		const result = await matchBody(
+			`<div class=card id='main' data-x="1">hello</div>`,
+			'div', '.card', '#main', '[data-x="1"]',
+		);
+		deepStrictEqual(on(result, 'card').sort(),
+			['#main=definite', '.card=definite', '[data-x="1"]=definite', 'div=definite'].sort());
 	});
 
 	it('reports the matched element as the compiler TNode, with its source location', async () => {
-		const partials = await setupPartial('<div class="card">hello</div>');
-		const result = matchSelectors([makeRule('.card')], partials, emptySpines());
-		const entry = result.get('test.html')![0];
+		const result = await matchBody('<div class="card">hello</div>', '.card');
+		const entry = result.get('t.html')![0];
 		strictEqual(entry.element.type, 'element');
 		strictEqual(tagNameOf(entry.element), 'div');
+		strictEqual(entry.partialName, 'test');
 		strictEqual(entry.startLine, 1);
-		// The open tag starts right after `<b-unwrap b-name="test">`.
 		strictEqual(entry.startOffset, '<b-unwrap b-name="test">'.length);
 	});
 
-	it('matches unquoted and single-quoted attribute values', async () => {
-		const partials = await setupPartial(`<div class=card id='main'>hello</div>`);
-		const result = matchSelectors([makeRule('.card'), makeRule('#main')], partials, emptySpines());
-		const sels = result.get('test.html')![0].matches.map(m => m.selector);
-		ok(sels.includes('.card'));
-		ok(sels.includes('#main'));
+	it('reports nothing when no selector applies', async () => {
+		const result = await matchBody('<div class="card">hello</div>', '.panel');
+		strictEqual(result.size, 0);
 	});
 
-	it('matches descendant selector with spine ancestors', async () => {
-		const partials = await setupPartial('<span class="title">text</span>');
-		const rules = [makeRule('.card .title')];
-		const result = matchSelectors(rules, partials, spines({
-			ancestors: [spineNode('div', [{ name: 'class', value: 'card' }])],
-			isConditional: false,
-		}));
-		const matches = result.get('test.html')!;
-		strictEqual(matches.length, 1);
-		strictEqual(matches[0].matches[0].selector, '.card .title');
+	it('sorts a match list by specificity, descending', async () => {
+		const result = await matchBody('<div id="main" class="card">x</div>', 'div', '.card', '#main');
+		const selectors = result.get('t.html')![0].matches.map(m => m.selector);
+		deepStrictEqual(selectors, ['#main', '.card', 'div']);
 	});
 
-	it('does not match descendant selector without matching ancestor', async () => {
-		const partials = await setupPartial('<span class="title">text</span>');
-		const rules = [makeRule('.card .title')];
-		const result = matchSelectors(rules, partials, spines({
-			ancestors: [spineNode('div', [{ name: 'class', value: 'panel' }])],
-			isConditional: false,
-		}));
-		strictEqual(result.get('test.html'), undefined);
+	it('carries the rule\'s media conditions through', async () => {
+		const { directory } = await compileFiles(new Map([
+			['t.html', '<div b-name="test" class="card">x</div>'],
+		]));
+		const rule = makeRule('.card', { color: 'red' }, ['(min-width:768px)']);
+		const result = matchSelectors([rule], buildInstanceForest(directory.files));
+		deepStrictEqual(result.get('t.html')![0].matches[0].mediaConditions, ['(min-width:768px)']);
 	});
 
-	it('matches child combinator', async () => {
-		const partials = await setupPartial('<div class="card"><span class="title">text</span></div>');
-		const rules = [makeRule('.card > .title')];
-		const result = matchSelectors(rules, partials, emptySpines());
-		const matches = result.get('test.html')!;
-		ok(matches.some(m => m.matches.some(r => r.selector === '.card > .title')));
+	// --- Navigation across boundaries: what the adapter buys ---
+
+	it('crosses a partial boundary in both directions', async () => {
+		const result = await match({
+			'page.html': '<div b-name="page" class="wrap"><b-unwrap b-part="c.html#card" /></div>',
+			'c.html': '<div b-name="card" b-export class="card"><span class="t">x</span></div>',
+		}, '.wrap .t', '.wrap:has(.t)', '.card .t');
+		deepStrictEqual(on(result, 't'), ['.card .t=definite', '.wrap .t=definite']);
+		deepStrictEqual(on(result, 'wrap'), ['.wrap:has(.t)=definite']);
 	});
 
-	it('marks dynamic match type for elements with b-bind:class', async () => {
-		const partials = await setupPartial('<div :class="expr">text</div>');
-		const rules = [makeRule('.active')];
-		const result = matchSelectors(rules, partials, emptySpines());
-		// Dynamic class means we can't definitively say it matches or doesn't
-		// The element doesn't have class="active" statically, so it won't match
-		strictEqual(result.get('test.html'), undefined);
+	it('sees the tag carrying a b-part as an ancestor of the partial\'s content', async () => {
+		const result = await match({
+			't.html': [
+				'<div b-name="page"><div class="wrap" b-part="#card"></div></div>',
+				'<div b-name="card"><p class="item">x</p></div>',
+			].join('\n'),
+		}, '.wrap .item');
+		deepStrictEqual(on(result, 'item'), ['.wrap .item=definite']);
 	});
 
-	it('marks a static match dynamic when the same element also binds :class', async () => {
-		const partials = await setupPartial('<div class="btn" :class="expr">text</div>');
-		const result = matchSelectors([makeRule('.btn')], partials, emptySpines());
-		strictEqual(result.get('test.html')![0].matches[0].matchType, 'dynamic');
+	it('matches sibling combinators across a slot boundary', async () => {
+		const result = await match({
+			't.html': [
+				'<div b-name="card"><span class="hd">h</span><b-unwrap b-slot /></div>',
+				'<div b-name="page"><b-unwrap b-part="#card"><p class="body">b</p></b-unwrap></div>',
+			].join('\n'),
+		}, '.hd + .body', '.hd ~ .body');
+		deepStrictEqual(on(result, 'body'), ['.hd + .body=definite', '.hd ~ .body=definite']);
 	});
 
-	it('marks conditional match type when spine is conditional', async () => {
-		const partials = await setupPartial('<span>text</span>');
-		const rules = [makeRule('span')];
-		const result = matchSelectors(rules, partials, spines({
-			ancestors: [spineNode('div', [], { isConditional: true })],
-			isConditional: true,
-		}));
-		const matches = result.get('test.html')!;
-		strictEqual(matches[0].matches[0].matchType, 'conditional');
+	it('matches :has() with a leading sibling combinator across a slot boundary', async () => {
+		// This is the one css-select path that locates an element among its
+		// siblings with a raw `indexOf` (`getNextSiblings` in subselects.js), so
+		// it only works while instance identity is stable.
+		const result = await match({
+			't.html': [
+				'<div b-name="card"><span class="hd">h</span><b-unwrap b-slot /></div>',
+				'<div b-name="page"><b-unwrap b-part="#card"><p class="body">b</p></b-unwrap></div>',
+			].join('\n'),
+		}, '.hd:has(+ .body)');
+		deepStrictEqual(on(result, 'hd'), ['.hd:has(+ .body)=definite']);
 	});
 
-	it('marks the tag carrying b-if conditional, but not its contents', async () => {
-		const partials = await setupPartial(
+	it('counts children across a partial boundary for structural pseudos', async () => {
+		const result = await match({
+			't.html': [
+				'<div b-name="page">',
+				'  <div class="wrap"><p class="lead">l</p><div class="host" b-part="#card"></div></div>',
+				'</div>',
+				'<div b-name="card" class="card">c</div>',
+			].join('\n'),
+		}, '.wrap > :first-child', '.wrap > :nth-child(2)', '.wrap > :last-child');
+		deepStrictEqual(on(result, 'lead'), ['.wrap > :first-child=definite']);
+		deepStrictEqual(on(result, 'host'),
+			['.wrap > :last-child=definite', '.wrap > :nth-child(2)=definite']);
+		deepStrictEqual(on(result, 'card'), [], 'the partial root is a child of .host, not of .wrap');
+	});
+
+	// --- Match types ---
+
+	it('reports a b-for element definite for a plain selector, conditional for a positional one', async () => {
+		const result = await matchBody(
+			'<ul class="list"><li b-for="i in items" class="item">x</li></ul>',
+			'.item', '.item:first-child', '.item + .item',
+		);
+		deepStrictEqual(on(result, 'item'),
+			['.item + .item=conditional', '.item:first-child=conditional', '.item=definite']);
+	});
+
+	it('reports an element that matches in only some uses of its partial as conditional', async () => {
+		const result = await match({
+			't.html': [
+				'<div b-name="page">',
+				'  <div class="wrap"><b-unwrap b-part="#card" /></div>',
+				'  <div class="other"><b-unwrap b-part="#card" /></div>',
+				'</div>',
+				'<div b-name="card"><p class="item">x</p></div>',
+			].join('\n'),
+		}, '.wrap .item', '.item');
+		deepStrictEqual(on(result, 'item'), ['.item=definite', '.wrap .item=conditional']);
+	});
+
+	it('marks the tag carrying b-if conditional but not its contents', async () => {
+		const result = await matchBody(
 			'<div b-if="show" class="banner"><span class="inner">x</span></div>',
+			'.banner', '.inner',
 		);
-		const result = matchSelectors([makeRule('.banner'), makeRule('.inner')], partials, emptySpines());
-		const matches = result.get('test.html')!;
-		const banner = matches.find(m => m.matches.some(r => r.selector === '.banner'))!;
-		const inner = matches.find(m => m.matches.some(r => r.selector === '.inner'))!;
-		strictEqual(banner.matches[0].matchType, 'conditional');
-		strictEqual(inner.matches[0].matchType, 'definite');
+		deepStrictEqual(on(result, 'banner'), ['.banner=conditional']);
+		deepStrictEqual(on(result, 'inner'), ['.inner=definite']);
 	});
 
-	it('matches elements in every b-if branch', async () => {
-		const partials = await setupPartial([
-			'<div b-if="show" class="banner">a</div>',
-			'<div b-else class="fallback">b</div>',
-		].join(''));
-		const result = matchSelectors([makeRule('.banner'), makeRule('.fallback')], partials, emptySpines());
-		const matches = result.get('test.html')!;
-		strictEqual(matches.length, 2);
-		for (const entry of matches) strictEqual(entry.matches[0].matchType, 'conditional');
-	});
-
-	it('matches elements inside a b-for body', async () => {
-		const partials = await setupPartial('<ul class="list"><li b-for="i in items" class="item">x</li></ul>');
-		const result = matchSelectors([makeRule('.list > .item')], partials, emptySpines());
-		const matches = result.get('test.html')!;
-		ok(matches.some(m => m.matches.some(r => r.selector === '.list > .item')));
-	});
-
-	it('sorts matches by specificity descending', async () => {
-		const partials = await setupPartial('<div id="main" class="card">text</div>');
-		const rules = [
-			makeRule('div', {}, []),
-			makeRule('.card', {}, []),
-			makeRule('#main', {}, []),
-		];
-		// Give each rule a unique source location
-		rules[0].sourceLine = 1;
-		rules[1].sourceLine = 2;
-		rules[2].sourceLine = 3;
-		const result = matchSelectors(rules, partials, emptySpines());
-		const matches = result.get('test.html')!;
-		const sels = matches[0].matches.map(m => m.selector);
-		strictEqual(sels[0], '#main');  // highest specificity
-		strictEqual(sels[1], '.card');
-		strictEqual(sels[2], 'div');    // lowest specificity
-	});
-
-	it('preserves media conditions from rules', async () => {
-		const partials = await setupPartial('<div class="card">text</div>');
-		const rules = [makeRule('.card', { color: 'red' }, ['(min-width:768px)'])];
-		const result = matchSelectors(rules, partials, emptySpines());
-		const matches = result.get('test.html')!;
-		deepStrictEqual(matches[0].matches[0].mediaConditions, ['(min-width:768px)']);
-	});
-
-	it('matches across multiple spines (union)', async () => {
-		const partials = await setupPartial('<span class="title">text</span>');
-		const rules = [makeRule('.card .title'), makeRule('.panel .title')];
-		rules[0].sourceLine = 1;
-		rules[1].sourceLine = 2;
-		const result = matchSelectors(rules, partials, spines(
-			{ ancestors: [spineNode('div', [{ name: 'class', value: 'card' }])], isConditional: false },
-			{ ancestors: [spineNode('div', [{ name: 'class', value: 'panel' }])], isConditional: false },
-		));
-		const matches = result.get('test.html')!;
-		const sels = matches[0].matches.map(m => m.selector);
-		ok(sels.includes('.card .title'));
-		ok(sels.includes('.panel .title'));
-	});
-
-	it('keeps each spine independent: a deep selector matched under one spine is not carried into another', async () => {
-		const partials = await setupPartial('<div class="outer"><span class="title">text</span></div>');
-		const result = matchSelectors([makeRule('.card .outer .title')], partials, spines(
-			{ ancestors: [spineNode('div', [{ name: 'class', value: 'card' }])], isConditional: false },
-			{ ancestors: [spineNode('div', [{ name: 'class', value: 'panel' }])], isConditional: false },
-		));
-		// Matches under the .card spine only, but it must match at all: css-select's
-		// per-selector ancestor cache must not persist a "no" from the other spine.
-		const matches = result.get('test.html')!;
-		ok(matches.some(m => m.matches.some(r => r.selector === '.card .outer .title')));
-	});
-
-	it('matches nested elements', async () => {
-		const partials = await setupPartial('<div class="card"><p><span>text</span></p></div>');
-		const rules = [makeRule('.card span')];
-		const result = matchSelectors(rules, partials, emptySpines());
-		const matches = result.get('test.html')!;
-		ok(matches.some(m => m.matches.some(r => r.selector === '.card span')));
-	});
-
-	it('matches sibling combinators within one subtree', async () => {
-		const partials = await setupPartial(
-			'<div class="row"><p class="a">1</p><p class="b">2</p></div>',
+	it('matches every b-if branch', async () => {
+		const result = await matchBody(
+			'<div b-if="show" class="banner">a</div><div b-else class="fallback">b</div>',
+			'.banner', '.fallback',
 		);
-		const result = matchSelectors([makeRule('.a + .b'), makeRule('.a ~ .b')], partials, emptySpines());
-		const matches = result.get('test.html')!;
-		const sels = matches.flatMap(m => m.matches.map(r => r.selector));
-		ok(sels.includes('.a + .b'), 'adjacent sibling should match');
-		ok(sels.includes('.a ~ .b'), 'general sibling should match');
+		deepStrictEqual(on(result, 'banner'), ['.banner=conditional']);
+		deepStrictEqual(on(result, 'fallback'), ['.fallback=conditional']);
 	});
 
-	it('sees b-part slot content under the tag that carries the call', async () => {
-		const partials = await setupFiles({
-			'test.html': [
-				'<div b-name="test">',
-				'  <div class="host" b-part="#card">',
-				'    <h2 b-in="header" class="fill">Title</h2>',
-				'  </div>',
-				'</div>',
-				'<div b-name="card"><b-unwrap b-slot="header" /></div>',
-			].join('\n'),
-		}, 'test.html', 'test');
-		const result = matchSelectors([makeRule('.host > .fill')], partials, emptySpines());
-		const matches = result.get('test.html')!;
-		ok(matches.some(m => m.matches.some(r => r.selector === '.host > .fill')),
-			"slot content is a child of the carrying tag in the caller's own tree");
+	it('reports a statically matched element as dynamic when it also binds :class', async () => {
+		const result = await matchBody('<div class="btn" :class="expr">x</div>', '.btn', 'div');
+		deepStrictEqual(on(result, 'btn'), ['.btn=dynamic', 'div=definite']);
 	});
 
-	it('matches a custom-element call site as a tag with its call-site attrs', async () => {
-		const partials = await setupFiles({
-			'test.html': [
-				'<div b-name="test">',
-				'  <my-card class="call"><span class="inside">x</span></my-card>',
-				'</div>',
-				'<my-card b-export><div class="ce-body"><b-unwrap b-slot /></div></my-card>',
-			].join('\n'),
-		}, 'test.html', 'test');
-		const result = matchSelectors(
-			[makeRule('my-card.call'), makeRule('.call > .inside')], partials, emptySpines(),
-		);
-		const matches = result.get('test.html')!;
-		const sels = matches.flatMap(m => m.matches.map(r => r.selector));
-		ok(sels.includes('my-card.call'), 'the call site matches by tag name and call-site class');
-		ok(sels.includes('.call > .inside'), 'its slot content are its children');
+	it('cannot predict the value of a bound class', async () => {
+		const result = await matchBody('<div :class="expr">x</div>', '.active');
+		strictEqual(result.size, 0);
+	});
+
+	// --- Custom elements ---
+
+	it('matches a custom-element call site as one tag carrying both sides\' attrs', async () => {
+		const result = await match({
+			'page.html': '<div b-name="page"><my-card class="call"><span class="inside">x</span></my-card></div>',
+			'c.html': '<my-card b-export data-role="card"><div class="ce-body"><b-unwrap b-slot /></div></my-card>',
+		}, 'my-card.call', 'my-card[data-role="card"]', '.call .inside', '.ce-body .inside');
+		deepStrictEqual(on(result, 'call'),
+			['my-card.call=definite', 'my-card[data-role="card"]=definite']);
+		deepStrictEqual(on(result, 'inside'), ['.call .inside=definite', '.ce-body .inside=definite']);
+	});
+
+	it('skips an invalid selector instead of failing the run', async () => {
+		const result = await matchBody('<div class="card">x</div>', '.card', ':::nope');
+		deepStrictEqual(on(result, 'card'), ['.card=definite']);
+	});
+
+	it('attributes each match to the file and partial the element is written in', async () => {
+		const result = await match({
+			'page.html': '<div b-name="page"><b-unwrap b-part="c.html#card"><p class="fill">x</p></b-unwrap></div>',
+			'c.html': '<div b-name="card" b-export class="card"><b-unwrap b-slot /></div>',
+		}, '.card .fill', '.card');
+		const fill = result.get('page.html')!.find(e => e.matches.some(m => m.selector === '.card .fill'));
+		ok(fill, 'the fill is reported in the file that writes it');
+		strictEqual(fill!.partialName, 'page');
+		const card = result.get('c.html')![0];
+		strictEqual(card.partialName, 'card');
 	});
 });

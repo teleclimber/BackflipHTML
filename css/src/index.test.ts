@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import { strictEqual, ok } from 'node:assert';
 import { analyzeSource as analyze } from './test-helpers.js';
+import { attrIndexOf } from './tnode-view.js';
 
 describe('analyzeCss', () => {
 	it('matches CSS rules to template elements', async () => {
@@ -21,18 +22,21 @@ describe('analyzeCss', () => {
 		ok(titleMatch, 'should match .title');
 	});
 
-	it('matches descendant selectors using context spines', async () => {
+	it('matches a descendant selector across a partial boundary', async () => {
 		const result = await analyze({
 			cssContent: '.container .inner { color: blue; }',
 			templateFiles: new Map([
-				['page.html', '<div class="container"><div b-part="card"></div></div><div b-name="card"><span class="inner">text</span></div>'],
+				['page.html', [
+					'<div b-name="page"><div class="container"><div b-part="#card"></div></div></div>',
+					'<div b-name="card"><span class="inner">text</span></div>',
+				].join('\n')],
 			]),
 		});
 
 		const matches = result.elementMatches.get('page.html');
 		ok(matches, 'should have matches');
 		const innerMatch = matches.find(m => m.matches.some(r => r.selector === '.container .inner'));
-		ok(innerMatch, 'should match .container .inner via context spine');
+		ok(innerMatch, 'the span renders inside .container, so .container .inner must match');
 	});
 
 	it('analyzes the body of a custom-element partial, and the call site as a tag', async () => {
@@ -231,5 +235,119 @@ describe('analyzeCss', () => {
 		strictEqual(el.matches[0].selector, '#main');  // highest specificity
 		strictEqual(el.matches[1].selector, '.card');
 		strictEqual(el.matches[2].selector, 'div');    // lowest specificity
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Phase 8: cases the context-spine model gets wrong. Written before the
+// instance-model rewrite; see claude-specs/phase-8-css-instance-model.md.
+// Selector strings are css-tree's normalized form (`.a>.b`, `.a+.b`).
+// ---------------------------------------------------------------------------
+
+type Analysis = Awaited<ReturnType<typeof analyze>>;
+
+/** The match type of `selector` on the element carrying `class="<cls>"`, or undefined. */
+function matchType(result: Analysis, file: string, cls: string, selector: string): string | undefined {
+	for (const entry of result.elementMatches.get(file) ?? []) {
+		const classes = attrIndexOf(entry.element).values.get('class')?.split(/\s+/) ?? [];
+		if (!classes.includes(cls)) continue;
+		const found = entry.matches.find(m => m.selector === selector);
+		if (found) return found.matchType;
+	}
+	return undefined;
+}
+
+describe('render-tree matching across partial, slot and loop boundaries', () => {
+	it('matches a class on the tag that carries the b-part call', async () => {
+		const result = await analyze({
+			cssContent: '.wrap .item { color: red; }',
+			templateFiles: new Map([['page.html', [
+				'<div b-name="page">',
+				'  <div class="wrap" b-part="#card"></div>',
+				'</div>',
+				'<div b-name="card"><p class="item">x</p></div>',
+			].join('\n')]]),
+		});
+		strictEqual(matchType(result, 'page.html', 'item', '.wrap .item'), 'definite');
+	});
+
+	it('matches an adjacent sibling across a slot boundary', async () => {
+		const result = await analyze({
+			cssContent: '.hd + .body { color: red; }',
+			templateFiles: new Map([['page.html', [
+				'<div b-name="card">',
+				'  <span class="hd">h</span>',
+				'  <b-unwrap b-slot />',
+				'</div>',
+				'<div b-name="page">',
+				'  <b-unwrap b-part="#card"><p class="body">b</p></b-unwrap>',
+				'</div>',
+			].join('\n')]]),
+		});
+		strictEqual(matchType(result, 'page.html', 'body', '.hd+.body'), 'definite');
+	});
+
+	it('resolves :has() into a partial used below the subject', async () => {
+		const result = await analyze({
+			cssContent: '.wrap:has(.t) { color: red; }',
+			templateFiles: new Map([['page.html', [
+				'<div b-name="page">',
+				'  <div class="wrap"><b-unwrap b-part="#card" /></div>',
+				'</div>',
+				'<div b-name="card"><p class="t">x</p></div>',
+			].join('\n')]]),
+		});
+		strictEqual(matchType(result, 'page.html', 'wrap', '.wrap:has(.t)'), 'definite');
+	});
+
+	it('gives structural pseudos the real child list at a partial boundary', async () => {
+		const result = await analyze({
+			cssContent: '.wrap > :first-child { color: red; } .wrap > :nth-child(2) { color: blue; }',
+			templateFiles: new Map([['page.html', [
+				'<div b-name="page">',
+				'  <div class="wrap">',
+				'    <p class="lead">l</p>',
+				'    <div class="slot-wrap" b-part="#card"></div>',
+				'  </div>',
+				'</div>',
+				'<div b-name="card" class="card">c</div>',
+			].join('\n')]]),
+		});
+		strictEqual(matchType(result, 'page.html', 'lead', '.wrap>:first-child'), 'definite');
+		strictEqual(matchType(result, 'page.html', 'card', '.wrap>:first-child'), undefined,
+			'the partial root renders inside .slot-wrap, so it is no child of .wrap at all');
+		strictEqual(matchType(result, 'page.html', 'slot-wrap', '.wrap>:nth-child(2)'), 'definite');
+	});
+
+	it('models a b-for body as several iterations', async () => {
+		const result = await analyze({
+			cssContent: '.item + .item { color: red; } .item:first-child { color: blue; }',
+			templateFiles: new Map([['page.html', [
+				'<div b-name="page">',
+				'  <ul class="list"><li b-for="i in items" class="item">x</li></ul>',
+				'</div>',
+			].join('\n')]]),
+		});
+		strictEqual(matchType(result, 'page.html', 'item', '.item+.item'), 'conditional',
+			'a looped element follows a copy of itself in all but the first iteration');
+		strictEqual(matchType(result, 'page.html', 'item', '.item:first-child'), 'conditional',
+			'a looped element is only first in the first iteration');
+	});
+
+	it('matches slot content forwarded through two levels of partial', async () => {
+		const templateFiles = new Map([['page.html', [
+			'<div b-name="inner" class="inner"><b-unwrap b-slot="deep" /></div>',
+			'<div b-name="outer" class="outer">',
+			'  <b-unwrap b-part="#inner"><b-unwrap b-in="deep" b-slot="fwd" /></b-unwrap>',
+			'</div>',
+			'<div b-name="page">',
+			'  <b-unwrap b-part="#outer"><b class="leaf" b-in="fwd">x</b></b-unwrap>',
+			'</div>',
+		].join('\n')]]);
+		const result = await analyze({ cssContent: '.inner .leaf { color: red; }', templateFiles });
+		strictEqual(matchType(result, 'page.html', 'leaf', '.inner .leaf'), 'definite');
+
+		const negative = await analyze({ cssContent: '.nope .leaf { color: red; }', templateFiles });
+		strictEqual(matchType(negative, 'page.html', 'leaf', '.nope .leaf'), undefined);
 	});
 });

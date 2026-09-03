@@ -6,6 +6,8 @@ export { BackflipError } from './compiler/errors.js';
 export { loadConfig, resolveConfigRoot, resolveAssetDirs, resolveDomPatchOutputDirs, CONFIG_FILENAME } from './compiler/config.js';
 export type { BackflipConfig, OutputConfig, AssetDirConfig, LoadConfigResult } from './compiler/config.js';
 export { collectSlots, resolveAssetRefs, parseBPartValue, parseAssetRef } from './compiler/helpers.js';
+export { resolvePartial } from './compiler/link.js';
+export { visitTNodes, mapTNodes } from './compiler/walk.js';
 export { flattenStatics, flattenCompiledFile } from './compiler/flatten.js';
 export type { SourceLoc, CompiledFile, CompileOptions, RootTNode, NamedPartialRoot, CustomElementPartialRoot, TNode, PartialRefTNode, BPartCallTNode, CustomElementCallTNode, ForTNode, IfTNode, IfBranch, SlotTNode, PrintTNode, RawTNode, ElementTNode, AssetRef, AttrPart, PartialMeta, PartialScript } from './compiler/types.js';
 export { inferDataShape, inferFreeVars } from './compiler/data-shape.js';

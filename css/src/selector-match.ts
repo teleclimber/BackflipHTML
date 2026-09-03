@@ -1,159 +1,89 @@
 import { compile as cssCompile } from 'css-select';
 import { calculate } from 'specificity';
-import type { TNode, ElementTNode } from '@backflip/html';
-import type {
-	CssRule, MatchedRule, ElementMatches, SpineNode, ContextSpine,
-} from './types.js';
+import type { CssRule, MatchedRule, ElementMatches } from './types.js';
+import { tagNameOf, type AttrIndex, type ElementLikeTNode } from './tnode-view.js';
 import {
-	attrIndexFromPairs, attrIndexOf, buildElementView, setAttrIndex, tagNameOf,
-	type ElementLikeTNode, type ElementView,
-} from './tnode-view.js';
-
-// --- Navigation ---
-
-/**
- * Parent/child navigation for one subtree grafted onto one context spine.
- *
- * The subtree's own links come from its `ElementView` and are shared by every
- * spine; the spine chain is synthesized per graft. Child arrays are stable
- * objects because css-select locates an element among its siblings by identity
- * (`equals` in `general.js`, a raw `indexOf` in `subselects.js`).
- */
-interface Nav {
-	parentOf(node: ElementLikeTNode): ElementLikeTNode | null;
-	childrenOf(node: ElementLikeTNode): ElementLikeTNode[];
-	siblingsOf(node: ElementLikeTNode): ElementLikeTNode[];
-}
-
-/**
- * A stand-in element for one spine ancestor.
- *
- * Spine ancestors are DOM-side descriptions of where a partial renders, so they
- * carry name/value attribute pairs rather than AttrParts; the index is attached
- * directly. A fresh node per graft keeps identity per spine, so nothing a
- * selector concluded under one spine can leak into another.
- */
-function makeSpineElement(spine: SpineNode): ElementTNode {
-	const el: ElementTNode = { type: 'element', tagName: spine.tagName, attrs: [], tnodes: [] };
-	setAttrIndex(el, attrIndexFromPairs(spine.attrs, spine.dynamicAttrs));
-	return el;
-}
-
-/** Hang `view`'s top elements off a chain of spine ancestors, outermost first. */
-function graftOntoSpine(view: ElementView, spine: ContextSpine): Nav {
-	const chain = spine.ancestors.map(makeSpineElement);
-	const spineParent = new Map<ElementLikeTNode, ElementLikeTNode | null>();
-	const spineChildren = new Map<ElementLikeTNode, ElementLikeTNode[]>();
-	for (let i = 0; i < chain.length; i++) {
-		spineParent.set(chain[i], i === 0 ? null : chain[i - 1]);
-		spineChildren.set(chain[i], i === chain.length - 1 ? view.tops : [chain[i + 1]]);
-	}
-	const graftPoint = chain.length > 0 ? chain[chain.length - 1] : null;
-
-	const parentOf = (node: ElementLikeTNode): ElementLikeTNode | null => {
-		if (spineParent.has(node)) return spineParent.get(node)!;
-		// A top of the subtree maps to null in the view; under a spine its parent
-		// is the innermost ancestor.
-		return view.parent.get(node) ?? graftPoint;
-	};
-	const childrenOf = (node: ElementLikeTNode): ElementLikeTNode[] =>
-		spineChildren.get(node) ?? view.children.get(node) ?? [];
-	const siblingsOf = (node: ElementLikeTNode): ElementLikeTNode[] => {
-		const parent = parentOf(node);
-		if (parent) return childrenOf(parent);
-		return spineParent.has(node) ? [node] : view.tops;
-	};
-	return { parentOf, childrenOf, siblingsOf };
-}
+	attrsOf, childrenOf, siblingsOf,
+	type ExpandCtx, type InstanceForest, type InstanceNode,
+} from './instance-tree.js';
 
 // --- css-select adapter ---
 
 /**
- * The adapter reads whichever graft is being matched right now. Selectors are
- * compiled once per `matchSelectors` call and reused across every spine, so the
- * navigation they see has to be swappable.
+ * The adapter navigates the instance forest (see `instance-tree.ts`). Every
+ * traversal goes through `childrenOf`, so a selector that reaches into a
+ * partial — `:has()`, a descendant combinator — expands it on demand, and the
+ * arrays handed to `getChildren` / `getSiblings` are the memoized ones
+ * css-select needs for its identity scans.
  */
-function makeAdapter(getNav: () => Nav) {
-	const isTag = (node: ElementLikeTNode): node is ElementLikeTNode => node != null;
-
+function makeAdapter(ctx: ExpandCtx) {
 	const adapter = {
-		isTag,
-
-		existsOne(test: (node: ElementLikeTNode) => boolean, elems: ElementLikeTNode[]): boolean {
-			for (const el of elems) {
-				if (test(el)) return true;
-				if (adapter.existsOne(test, getNav().childrenOf(el))) return true;
-			}
-			return false;
+		isTag(node: InstanceNode): node is InstanceNode {
+			return node != null;
 		},
 
-		getAttributeValue(elem: ElementLikeTNode, name: string): string | undefined {
-			return attrIndexOf(elem).values.get(name.toLowerCase());
+		getName(elem: InstanceNode): string {
+			return tagNameOf(elem.tnode);
 		},
 
-		getChildren(node: ElementLikeTNode): ElementLikeTNode[] {
-			return getNav().childrenOf(node);
+		getAttributeValue(elem: InstanceNode, name: string): string | undefined {
+			return attrsOf(elem).values.get(name.toLowerCase());
 		},
 
-		getName(elem: ElementLikeTNode): string {
-			return tagNameOf(elem);
+		hasAttrib(elem: InstanceNode, name: string): boolean {
+			return attrsOf(elem).values.has(name.toLowerCase());
 		},
 
-		getParent(node: ElementLikeTNode): ElementLikeTNode | null {
-			return getNav().parentOf(node);
+		getChildren(node: InstanceNode): InstanceNode[] {
+			return childrenOf(node, ctx);
 		},
 
-		getSiblings(node: ElementLikeTNode): ElementLikeTNode[] {
-			return getNav().siblingsOf(node);
+		getParent(node: InstanceNode): InstanceNode | null {
+			return node.parent;
 		},
 
-		getText(_node: ElementLikeTNode): string {
+		getSiblings(node: InstanceNode): InstanceNode[] {
+			return siblingsOf(node, ctx);
+		},
+
+		getText(_node: InstanceNode): string {
 			// Template text is not modelled, so `:contains()` never matches.
 			return '';
 		},
 
-		hasAttrib(elem: ElementLikeTNode, name: string): boolean {
-			return attrIndexOf(elem).values.has(name.toLowerCase());
-		},
-
-		removeSubsets(nodes: ElementLikeTNode[]): ElementLikeTNode[] {
-			const nav = getNav();
-			const result: ElementLikeTNode[] = [];
-			for (const node of nodes) {
-				let dominated = false;
-				for (const other of nodes) {
-					if (node === other) continue;
-					let parent = nav.parentOf(node);
-					while (parent) {
-						if (parent === other) { dominated = true; break; }
-						parent = nav.parentOf(parent);
-					}
-					if (dominated) break;
-				}
-				if (!dominated) result.push(node);
+		existsOne(test: (node: InstanceNode) => boolean, elems: InstanceNode[]): boolean {
+			for (const el of elems) {
+				if (test(el)) return true;
+				if (adapter.existsOne(test, childrenOf(el, ctx))) return true;
 			}
-			return result;
+			return false;
 		},
 
-		findAll(test: (node: ElementLikeTNode) => boolean, nodes: ElementLikeTNode[]): ElementLikeTNode[] {
-			const result: ElementLikeTNode[] = [];
-			const walk = (list: ElementLikeTNode[]) => {
+		findAll(test: (node: InstanceNode) => boolean, nodes: InstanceNode[]): InstanceNode[] {
+			const result: InstanceNode[] = [];
+			const walk = (list: InstanceNode[]): void => {
 				for (const node of list) {
 					if (test(node)) result.push(node);
-					walk(getNav().childrenOf(node));
+					walk(childrenOf(node, ctx));
 				}
 			};
 			walk(nodes);
 			return result;
 		},
 
-		findOne(test: (node: ElementLikeTNode) => boolean, elems: ElementLikeTNode[]): ElementLikeTNode | null {
+		findOne(test: (node: InstanceNode) => boolean, elems: InstanceNode[]): InstanceNode | null {
 			for (const el of elems) {
 				if (test(el)) return el;
-				const found = adapter.findOne(test, getNav().childrenOf(el));
+				const found = adapter.findOne(test, childrenOf(el, ctx));
 				if (found) return found;
 			}
 			return null;
+		},
+
+		// Nothing calls `select()`: matching is `compile()` plus a per-instance
+		// predicate, so subset removal never runs on a result set.
+		removeSubsets(nodes: InstanceNode[]): InstanceNode[] {
+			return nodes;
 		},
 	};
 	return adapter;
@@ -172,7 +102,7 @@ function getSpecificity(selector: string): [number, number, number] {
 	return cached;
 }
 
-// --- Selector uses class/id check ---
+// --- Match types ---
 
 function selectorUsesClass(selector: string): boolean {
 	return /\.[\w-]/.test(selector);
@@ -182,137 +112,147 @@ function selectorUsesId(selector: string): boolean {
 	return /#[\w-]/.test(selector);
 }
 
-// --- Main matching ---
-
-function determineMatchType(
-	node: ElementLikeTNode,
-	view: ElementView,
-	spine: ContextSpine,
+/**
+ * - `dynamic` — the selector keys off a class or id this element binds at
+ *   runtime, so whether it matches is not knowable here. Checked first.
+ * - `definite` — every instance of the element matched, and none of them was
+ *   inside a `b-if` branch.
+ * - `conditional` — anything else: matched in some instances but not all, or
+ *   only under a branch that may not be taken.
+ */
+function matchTypeOf(
+	attrs: AttrIndex,
 	selector: string,
+	hits: number,
+	total: number,
+	conditionalHit: boolean,
 ): 'definite' | 'conditional' | 'dynamic' {
-	// Check dynamic: does selector reference class/id and the element has dynamic class/id?
-	const dynamic = attrIndexOf(node).dynamic;
-	if ((dynamic.has('class') && selectorUsesClass(selector)) ||
-		(dynamic.has('id') && selectorUsesId(selector))) {
+	if ((attrs.dynamic.has('class') && selectorUsesClass(selector)) ||
+		(attrs.dynamic.has('id') && selectorUsesId(selector))) {
 		return 'dynamic';
 	}
-
-	// Check conditional: the element itself, or any ancestor, is in a b-if branch
-	if (spine.isConditional || view.conditional.has(node)) {
-		return 'conditional';
-	}
-
-	return 'definite';
+	if (hits === total && !conditionalHit) return 'definite';
+	return 'conditional';
 }
 
-export interface MatchRoots {
-	/** The TNodes to match against: a partial root's `tnodes`, or one slot's content. */
-	roots: TNode[];
+// --- Matching ---
+
+/** One selector of one rule. The same selector text in two rules is two of these. */
+interface Occurrence {
+	rule: CssRule;
+	selector: string;
+	test: (node: InstanceNode) => boolean;
+}
+
+/** Everything the instances of one source TNode add up to. */
+interface Accumulator {
+	tnode: ElementLikeTNode;
 	file: string;
 	partialName: string;
+	attrs: AttrIndex;
+	total: number;
+	hits: Map<Occurrence, { count: number; conditional: boolean }>;
 }
 
+/**
+ * Match every rule against the render forest, reporting one entry per source
+ * element. Counting hits against the element's instance total is what makes
+ * `definite` mean "in every context", rather than "in the first context tried".
+ */
 export function matchSelectors(
 	rules: CssRule[],
-	partialRoots: Map<string, MatchRoots>,
-	spinesCache: Map<string, ContextSpine[]>,
+	forest: InstanceForest,
 ): Map<string, ElementMatches[]> {
 	const result = new Map<string, ElementMatches[]>();
 
-	let nav: Nav | null = null;
-	const adapter = makeAdapter(() => nav!);
-
-	// Pre-compile all selectors once. `cacheResults: false` disables css-select's
-	// per-selector "this ancestor did not match" WeakSet: the same TNode is
-	// matched under several spines, so an ancestor verdict is not stable across
-	// calls the way it is for a fixed DOM.
-	const adapterOpts = { adapter: adapter as any, cacheResults: false };
-	const compiledSelectors = new Map<string, (node: ElementLikeTNode) => boolean>();
+	// Selectors are compiled once per run. css-select's per-selector "this
+	// ancestor did not match" cache is sound here because instances are
+	// immutable for the life of the run — but only because the compiled
+	// selectors die with it too, so nothing outlives the forest it cached.
+	const adapterOpts = { adapter: makeAdapter(forest.ctx) as any };
+	const compiled = new Map<string, ((node: InstanceNode) => boolean) | null>();
+	const occurrences: Occurrence[] = [];
+	const seen = new Set<string>();
 	for (const rule of rules) {
 		for (const selector of rule.selectors) {
-			if (!compiledSelectors.has(selector)) {
+			const key = `${selector}:${rule.sourceLine}:${rule.sourceCol}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
+			let test = compiled.get(selector);
+			if (test === undefined) {
 				try {
-					const compiled = cssCompile<ElementLikeTNode, ElementLikeTNode>(selector, adapterOpts);
-					compiledSelectors.set(selector, compiled);
+					test = cssCompile<InstanceNode, InstanceNode>(selector, adapterOpts);
 				} catch {
-					// Skip invalid selectors
+					test = null;  // invalid selector: skip it, don't fail the run
 				}
+				compiled.set(selector, test);
 			}
+			if (test) occurrences.push({ rule, selector, test });
+		}
+	}
+	if (occurrences.length === 0) return result;
+
+	const accumulators = new Map<ElementLikeTNode, Accumulator>();
+	for (const instance of forest.all) {
+		let acc = accumulators.get(instance.tnode);
+		if (!acc) {
+			acc = {
+				tnode: instance.tnode,
+				file: instance.file,
+				partialName: instance.partialName,
+				attrs: attrsOf(instance),
+				total: 0,
+				hits: new Map(),
+			};
+			accumulators.set(instance.tnode, acc);
+		}
+		acc.total++;
+		for (const occurrence of occurrences) {
+			if (!occurrence.test(instance)) continue;
+			let hit = acc.hits.get(occurrence);
+			if (!hit) {
+				hit = { count: 0, conditional: false };
+				acc.hits.set(occurrence, hit);
+			}
+			hit.count++;
+			if (instance.conditional) hit.conditional = true;
 		}
 	}
 
-	for (const [key, partial] of partialRoots) {
-		const spines = spinesCache.get(key) ?? [{ ancestors: [], isConditional: false }];
+	for (const acc of accumulators.values()) {
+		if (acc.hits.size === 0) continue;
 
-		// The element view is spine-independent: only the graft point changes.
-		const view = buildElementView(partial.roots);
-		if (view.all.length === 0) continue;
-
-		// Per-element match accumulator, keyed by the compiler's own TNode.
-		const elementMatchMap = new Map<ElementLikeTNode, { seen: Set<string>; matches: MatchedRule[] }>();
-
-		for (const spine of spines) {
-			nav = graftOntoSpine(view, spine);
-
-			for (const node of view.all) {
-				let entry = elementMatchMap.get(node);
-				if (!entry) {
-					entry = { seen: new Set(), matches: [] };
-					elementMatchMap.set(node, entry);
-				}
-
-				for (const rule of rules) {
-					for (const selector of rule.selectors) {
-						const matchKey = `${selector}:${rule.sourceLine}:${rule.sourceCol}`;
-						if (entry.seen.has(matchKey)) continue;
-
-						const compiled = compiledSelectors.get(selector);
-						if (compiled && compiled(node)) {
-							entry.seen.add(matchKey);
-							entry.matches.push({
-								rule,
-								selector,
-								specificity: getSpecificity(selector),
-								mediaConditions: rule.mediaConditions,
-								matchType: determineMatchType(node, view, spine, selector),
-							});
-						}
-					}
-				}
-			}
-		}
-
-		// Convert accumulated matches to result
-		for (const [node, { matches }] of elementMatchMap) {
-			if (matches.length === 0) continue;
-
-			matches.sort((a, b) => {
-				for (let i = 0; i < 3; i++) {
-					if (b.specificity[i] !== a.specificity[i]) {
-						return b.specificity[i] - a.specificity[i];
-					}
-				}
-				return 0;
+		const matches: MatchedRule[] = [];
+		for (const [occurrence, hit] of acc.hits) {
+			matches.push({
+				rule: occurrence.rule,
+				selector: occurrence.selector,
+				specificity: getSpecificity(occurrence.selector),
+				mediaConditions: occurrence.rule.mediaConditions,
+				matchType: matchTypeOf(acc.attrs, occurrence.selector, hit.count, acc.total, hit.conditional),
 			});
-
-			const loc = node.type === 'element' ? (node.openTagLoc ?? node.loc) : node.loc;
-			const entry: ElementMatches = {
-				element: node,
-				file: partial.file,
-				partialName: partial.partialName,
-				startLine: loc?.startLine ?? 0,
-				startCol: loc?.startCol ?? 0,
-				startOffset: loc?.startOffset ?? 0,
-				matches,
-			};
-
-			const existing = result.get(partial.file);
-			if (existing) {
-				existing.push(entry);
-			} else {
-				result.set(partial.file, [entry]);
-			}
 		}
+		matches.sort((a, b) => {
+			for (let i = 0; i < 3; i++) {
+				if (b.specificity[i] !== a.specificity[i]) return b.specificity[i] - a.specificity[i];
+			}
+			return 0;
+		});
+
+		const loc = acc.tnode.type === 'element' ? (acc.tnode.openTagLoc ?? acc.tnode.loc) : acc.tnode.loc;
+		const entry: ElementMatches = {
+			element: acc.tnode,
+			file: acc.file,
+			partialName: acc.partialName,
+			startLine: loc?.startLine ?? 0,
+			startCol: loc?.startCol ?? 0,
+			startOffset: loc?.startOffset ?? 0,
+			matches,
+		};
+
+		const existing = result.get(acc.file);
+		if (existing) existing.push(entry);
+		else result.set(acc.file, [entry]);
 	}
 
 	return result;

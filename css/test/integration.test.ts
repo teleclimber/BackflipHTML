@@ -29,8 +29,7 @@ async function analyzeFixture(name: string): Promise<CssAnalysisResult> {
 			templateFiles.set(file, fs.readFileSync(path.join(templatesDir, file), 'utf-8'));
 		}
 	}
-	const { compiled, partialInfo } = await compileTemplates(templateFiles);
-	return analyzeCss({ cssContent, templateFiles, partialInfo, compiled });
+	return analyzeCss({ cssContent, compiled: await compileTemplates(templateFiles) });
 }
 
 function findMatchedRule(result: CssAnalysisResult, file: string, selector: string) {
