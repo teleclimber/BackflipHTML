@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@backflip/assets": "file:../assets",
+    "@backflip/html": "file:..",
     "css-select": "^5.1.0",
     "css-tree": "^3.1.0",
     "css-what": "^6.1.0",

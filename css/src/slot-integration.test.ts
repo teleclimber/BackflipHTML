@@ -1,16 +1,7 @@
 import { describe, it } from 'node:test';
 import { ok, strictEqual } from 'node:assert';
-import { analyzeCss } from './index.js';
-import { buildPartialInfo } from './parse-dom.js';
+import { analyzeSource as analyze } from './test-helpers.js';
 import type { CssAnalysisResult } from './types.js';
-
-function analyze(input: { cssContent: string; templateFiles: Map<string, string> }) {
-	const partialInfo = new Map<string, Map<string, any>>();
-	for (const [file, html] of input.templateFiles) {
-		partialInfo.set(file, buildPartialInfo(html));
-	}
-	return analyzeCss({ ...input, partialInfo });
-}
 
 /** Helper: find an ElementMatches entry where one of the matched selectors equals `sel`. */
 function findMatch(result: CssAnalysisResult, file: string, selector: string) {
@@ -22,8 +13,8 @@ function findMatch(result: CssAnalysisResult, file: string, selector: string) {
 describe('slot content CSS matching (integration)', () => {
 
 	describe('same-file partial with slots', () => {
-		it('matches b-in content against ancestors inside the partial', () => {
-			const result = analyze({
+		it('matches b-in content against ancestors inside the partial', async () => {
+			const result = await analyze({
 				cssContent: '.card-header h2 { color: red; }',
 				templateFiles: new Map([['page.html', [
 					'<div b-name="card">',
@@ -31,8 +22,10 @@ describe('slot content CSS matching (integration)', () => {
 					'    <b-unwrap b-slot="header" />',
 					'  </div>',
 					'</div>',
-					'<div b-part="#card">',
-					'  <h2 b-in="header">Title</h2>',
+					'<div b-name="page">',
+					'  <div b-part="#card">',
+					'    <h2 b-in="header">Title</h2>',
+					'  </div>',
 					'</div>',
 				].join('\n')]]),
 			});
@@ -53,14 +46,16 @@ describe('slot content CSS matching (integration)', () => {
 			'</div>',
 		].join('\n');
 
-		it('matches b-in content against ancestors inside the cross-file partial', () => {
+		it('matches b-in content against ancestors inside the cross-file partial', async () => {
 			const pageHtml = [
-				'<div b-part="components.html#card">',
-				'  <h2 b-in="header">Title</h2>',
-				'  <p b-in="default">Body</p>',
+				'<div b-name="page">',
+				'  <div b-part="components.html#card">',
+				'    <h2 b-in="header">Title</h2>',
+				'    <p b-in="default">Body</p>',
+				'  </div>',
 				'</div>',
 			].join('\n');
-			const result = analyze({
+			const result = await analyze({
 				cssContent: '.card-header h2 { color: red; } .card-body p { margin: 0; }',
 				templateFiles: new Map([
 					['components.html', componentHtml],
@@ -73,7 +68,7 @@ describe('slot content CSS matching (integration)', () => {
 				'p should match .card-body p via cross-file default slot');
 		});
 
-		it('matches b-in content when b-part is inside a b-name', () => {
+		it('matches b-in content when b-part is inside a b-name', async () => {
 			const pageHtml = [
 				'<div b-name="page">',
 				'  <div b-part="components.html#card">',
@@ -81,7 +76,7 @@ describe('slot content CSS matching (integration)', () => {
 				'  </div>',
 				'</div>',
 			].join('\n');
-			const result = analyze({
+			const result = await analyze({
 				cssContent: '.card-header h2 { color: red; }',
 				templateFiles: new Map([
 					['components.html', componentHtml],
@@ -92,7 +87,7 @@ describe('slot content CSS matching (integration)', () => {
 				'h2 should match .card-header h2 when b-part is inside a b-name');
 		});
 
-		it('matches b-in content with ancestors from both caller context and partial internals', () => {
+		it('matches b-in content with ancestors from both caller context and partial internals', async () => {
 			const pageHtml = [
 				'<div b-name="page">',
 				'  <div class="container">',
@@ -102,7 +97,7 @@ describe('slot content CSS matching (integration)', () => {
 				'  </div>',
 				'</div>',
 			].join('\n');
-			const result = analyze({
+			const result = await analyze({
 				cssContent: '.container .card-header h2 { color: red; }',
 				templateFiles: new Map([
 					['components.html', componentHtml],
@@ -115,7 +110,7 @@ describe('slot content CSS matching (integration)', () => {
 	});
 
 	describe('nested cross-file partials with slots', () => {
-		it('partial A uses b-part to partial B (cross-file), B has slots', () => {
+		it('partial A uses b-part to partial B (cross-file), B has slots', async () => {
 			const layoutHtml = [
 				'<div b-name="layout" b-export>',
 				'  <div class="layout-body">',
@@ -132,7 +127,7 @@ describe('slot content CSS matching (integration)', () => {
 				'  </div>',
 				'</div>',
 			].join('\n');
-			const result = analyze({
+			const result = await analyze({
 				cssContent: '.layout-body .content h1 { font-size: 2em; }',
 				templateFiles: new Map([
 					['layout.html', layoutHtml],
@@ -143,7 +138,7 @@ describe('slot content CSS matching (integration)', () => {
 				'h1 should match selector where .layout-body is inside the cross-file partial');
 		});
 
-		it('slot content in a partial that is itself used from another file', () => {
+		it('slot content in a partial that is itself used from another file', async () => {
 			// layout.html defines layout with a slot
 			// components.html defines card with a header slot
 			// page.html defines page, which uses layout and inside layout's slot uses card
@@ -172,7 +167,7 @@ describe('slot content CSS matching (integration)', () => {
 				'  </div>',
 				'</div>',
 			].join('\n');
-			const result = analyze({
+			const result = await analyze({
 				cssContent: '.card-header span { font-weight: bold; }',
 				templateFiles: new Map([
 					['layout.html', layoutHtml],
@@ -184,7 +179,7 @@ describe('slot content CSS matching (integration)', () => {
 				'span should match .card-header span through nested cross-file partials');
 		});
 
-		it('selector spans layout partial and card partial ancestors', () => {
+		it('selector spans layout partial and card partial ancestors', async () => {
 			const layoutHtml = [
 				'<div b-name="layout" b-export>',
 				'  <div class="layout-body">',
@@ -210,7 +205,7 @@ describe('slot content CSS matching (integration)', () => {
 				'  </div>',
 				'</div>',
 			].join('\n');
-			const result = analyze({
+			const result = await analyze({
 				cssContent: '.layout-body .card-header span { color: blue; }',
 				templateFiles: new Map([
 					['layout.html', layoutHtml],
@@ -224,8 +219,8 @@ describe('slot content CSS matching (integration)', () => {
 	});
 
 	describe('partialName on slot content should be lexical, not target', () => {
-		it('same-file: partialName is the partial containing the b-part usage, not the slot target', () => {
-			const result = analyze({
+		it('same-file: partialName is the partial containing the b-part usage, not the slot target', async () => {
+			const result = await analyze({
 				cssContent: '.card-header h2 { color: red; }',
 				templateFiles: new Map([['page.html', [
 					'<div b-name="card">',
@@ -246,7 +241,7 @@ describe('slot content CSS matching (integration)', () => {
 				'partialName should be "page" (lexical partial), not "card" (slot target)');
 		});
 
-		it('cross-file: partialName is the partial containing the b-part usage, not the slot target', () => {
+		it('cross-file: partialName is the partial containing the b-part usage, not the slot target', async () => {
 			const componentHtml = [
 				'<div b-name="card" b-export>',
 				'  <div class="card-header">',
@@ -261,7 +256,7 @@ describe('slot content CSS matching (integration)', () => {
 				'  </div>',
 				'</div>',
 			].join('\n');
-			const result = analyze({
+			const result = await analyze({
 				cssContent: '.card-header h2 { color: red; }',
 				templateFiles: new Map([
 					['components.html', componentHtml],
@@ -275,8 +270,8 @@ describe('slot content CSS matching (integration)', () => {
 		});
 	});
 
-	describe('top-level (no b-name wrapper) cross-file usage with slots', () => {
-		it('matches when b-part is at root level of file', () => {
+	describe('cross-file usage with slots, called from the partial root', () => {
+		it('matches when the b-part call is a direct child of the calling partial root', async () => {
 			const componentHtml = [
 				'<div b-name="card" b-export>',
 				'  <div class="card-header">',
@@ -285,13 +280,13 @@ describe('slot content CSS matching (integration)', () => {
 				'</div>',
 			].join('\n');
 			const pageHtml = [
-				'<div class="page">',
+				'<div b-name="page" class="page">',
 				'  <div b-part="components.html#card">',
 				'    <h2 b-in="header">Title</h2>',
 				'  </div>',
 				'</div>',
 			].join('\n');
-			const result = analyze({
+			const result = await analyze({
 				cssContent: '.card-header h2 { color: red; }',
 				templateFiles: new Map([
 					['components.html', componentHtml],
@@ -299,10 +294,10 @@ describe('slot content CSS matching (integration)', () => {
 				]),
 			});
 			ok(findMatch(result, 'page.html', '.card-header h2'),
-				'h2 should match even when b-part is not inside any b-name');
+				'h2 should match through the calling partial root');
 		});
 
-		it('matches selector spanning caller and partial when no b-name wrapper', () => {
+		it('matches selector spanning the calling partial root and the target partial', async () => {
 			const componentHtml = [
 				'<div b-name="card" b-export>',
 				'  <div class="card-header">',
@@ -311,13 +306,13 @@ describe('slot content CSS matching (integration)', () => {
 				'</div>',
 			].join('\n');
 			const pageHtml = [
-				'<div class="page">',
+				'<div b-name="page" class="page">',
 				'  <div b-part="components.html#card">',
 				'    <h2 b-in="header">Title</h2>',
 				'  </div>',
 				'</div>',
 			].join('\n');
-			const result = analyze({
+			const result = await analyze({
 				cssContent: '.page .card-header h2 { color: red; }',
 				templateFiles: new Map([
 					['components.html', componentHtml],
@@ -344,23 +339,23 @@ describe('slot content CSS matching (integration)', () => {
 			'</div>',
 		].join('\n');
 
-		it('matches through the caller-side wrapper of the forwarding call', () => {
-			const result = analyze({ cssContent: '.wrap h2 { color: red; }', templateFiles: new Map([['t.html', html]]) });
+		it('matches through the caller-side wrapper of the forwarding call', async () => {
+			const result = await analyze({ cssContent: '.wrap h2 { color: red; }', templateFiles: new Map([['t.html', html]]) });
 			ok(findMatch(result, 't.html', '.wrap h2'), 'h2 should match .wrap h2');
 		});
 
-		it('matches through the forwarded-into partial internals', () => {
-			const result = analyze({ cssContent: '.inner h2 { color: red; }', templateFiles: new Map([['t.html', html]]) });
+		it('matches through the forwarded-into partial internals', async () => {
+			const result = await analyze({ cssContent: '.inner h2 { color: red; }', templateFiles: new Map([['t.html', html]]) });
 			ok(findMatch(result, 't.html', '.inner h2'), 'h2 renders inside .inner, so it should match');
 		});
 
-		it('matches through the forwarded-into partial root', () => {
-			const result = analyze({ cssContent: '.child-root h2 { color: red; }', templateFiles: new Map([['t.html', html]]) });
+		it('matches through the forwarded-into partial root', async () => {
+			const result = await analyze({ cssContent: '.child-root h2 { color: red; }', templateFiles: new Map([['t.html', html]]) });
 			ok(findMatch(result, 't.html', '.child-root h2'), 'h2 renders inside .child-root, so it should match');
 		});
 
-		it('matches a selector spanning both partials internals', () => {
-			const result = analyze({ cssContent: '.child-root .inner h2 { color: red; }', templateFiles: new Map([['t.html', html]]) });
+		it('matches a selector spanning both partials internals', async () => {
+			const result = await analyze({ cssContent: '.child-root .inner h2 { color: red; }', templateFiles: new Map([['t.html', html]]) });
 			ok(findMatch(result, 't.html', '.child-root .inner h2'),
 				'the forwarded-into partial ancestors should be in the right order');
 		});

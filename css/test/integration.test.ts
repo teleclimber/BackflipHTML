@@ -4,8 +4,8 @@ import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import { JSDOM } from 'jsdom';
-import { analyzeCss } from '../src/index.js';
-import { buildPartialInfo } from '../src/parse-dom.js';
+import { analyzeCss, attrIndexOf } from '../src/index.js';
+import { compileTemplates } from '../src/test-helpers.js';
 import type { CssAnalysisResult } from '../src/types.js';
 // @ts-ignore — dist build has no .d.ts for render
 import { compileDirectory, fileToJsModule } from '../../dist/mod.js';
@@ -19,7 +19,7 @@ const TMPDIR = path.join(process.env.TMPDIR || '/tmp/claude-1000/', 'css-render-
 // Helpers: load fixtures for CSS analysis
 // ---------------------------------------------------------------------------
 
-function loadFixture(name: string) {
+async function analyzeFixture(name: string): Promise<CssAnalysisResult> {
 	const dir = path.join(FIXTURES, name);
 	const cssContent = fs.readFileSync(path.join(dir, 'styles.css'), 'utf-8');
 	const templatesDir = path.join(dir, 'templates');
@@ -29,11 +29,8 @@ function loadFixture(name: string) {
 			templateFiles.set(file, fs.readFileSync(path.join(templatesDir, file), 'utf-8'));
 		}
 	}
-	const partialInfo = new Map<string, Map<string, any>>();
-	for (const [file, html] of templateFiles) {
-		partialInfo.set(file, buildPartialInfo(html));
-	}
-	return { cssContent, templateFiles, partialInfo };
+	const { compiled, partialInfo } = await compileTemplates(templateFiles);
+	return analyzeCss({ cssContent, templateFiles, partialInfo, compiled });
 }
 
 function findMatchedRule(result: CssAnalysisResult, file: string, selector: string) {
@@ -115,7 +112,7 @@ function cssMarks(result: CssAnalysisResult, file: string, selector: string): Se
 	const marks = new Set<string>();
 	for (const entry of entries) {
 		if (entry.matches.some(m => m.selector === selector)) {
-			const mark = entry.element.attrs?.find((a: any) => a.name === 'data-mark')?.value;
+			const mark = attrIndexOf(entry.element).values.get('data-mark');
 			if (mark) marks.add(mark);
 		}
 	}
@@ -165,7 +162,7 @@ describe('integration: simple', () => {
 	let doc: Document;
 
 	before(async () => {
-		result = analyzeCss(loadFixture('simple'));
+		result = await analyzeFixture('simple');
 		const modules = await compileFixture('simple');
 		doc = renderToDoc(modules, 'page.html', 'page');
 	});
@@ -205,7 +202,7 @@ describe('integration: multi-file', () => {
 	let doc: Document;
 
 	before(async () => {
-		result = analyzeCss(loadFixture('multi-file'));
+		result = await analyzeFixture('multi-file');
 		const modules = await compileFixture('multi-file');
 		doc = renderToDoc(modules, 'page.html', 'page');
 	});
@@ -232,7 +229,7 @@ describe('integration: slots', () => {
 	let doc: Document;
 
 	before(async () => {
-		result = analyzeCss(loadFixture('slots'));
+		result = await analyzeFixture('slots');
 		const modules = await compileFixture('slots');
 		doc = renderToDoc(modules, 'page.html', 'page');
 	});
@@ -263,7 +260,7 @@ describe('integration: media-queries', () => {
 	let doc: Document;
 
 	before(async () => {
-		result = analyzeCss(loadFixture('media-queries'));
+		result = await analyzeFixture('media-queries');
 		const modules = await compileFixture('media-queries');
 		doc = renderToDoc(modules, 'page.html', 'page');
 	});
@@ -310,7 +307,7 @@ describe('integration: dynamic-classes', () => {
 	let docWithClass: Document;
 
 	before(async () => {
-		result = analyzeCss(loadFixture('dynamic-classes'));
+		result = await analyzeFixture('dynamic-classes');
 		const modules = await compileFixture('dynamic-classes');
 		docNoData = renderToDoc(modules, 'page.html', 'page', {});
 		docWithClass = renderToDoc(modules, 'page.html', 'page', { activeClass: 'btn-primary' });
@@ -356,7 +353,7 @@ describe('integration: conditionals', () => {
 	let docBannerFalse: Document;
 
 	before(async () => {
-		result = analyzeCss(loadFixture('conditionals'));
+		result = await analyzeFixture('conditionals');
 		const modules = await compileFixture('conditionals');
 		docBannerTrue = renderToDoc(modules, 'page.html', 'page', { showBanner: true });
 		docBannerFalse = renderToDoc(modules, 'page.html', 'page', { showBanner: false });
@@ -412,7 +409,7 @@ describe('integration: nested-partials', () => {
 	let doc: Document;
 
 	before(async () => {
-		result = analyzeCss(loadFixture('nested-partials'));
+		result = await analyzeFixture('nested-partials');
 		const modules = await compileFixture('nested-partials');
 		doc = renderToDoc(modules, 'page.html', 'page');
 	});
@@ -440,7 +437,7 @@ describe('integration: multi-document (multiple document-level partials in one f
 	let docAbout: Document;
 
 	before(async () => {
-		result = analyzeCss(loadFixture('multi-document'));
+		result = await analyzeFixture('multi-document');
 		const modules = await compileFixture('multi-document');
 		docHome = renderToDoc(modules, 'pages.html', 'homePage');
 		docAbout = renderToDoc(modules, 'pages.html', 'aboutPage');
@@ -483,6 +480,15 @@ describe('integration: multi-document (multiple document-level partials in one f
 		ok(cMarks.has('about-bio'), '.bio should match in aboutPage');
 	});
 
+	it('attributes each match to the partial it is written in', () => {
+		const entries = result.elementMatches.get('pages.html')!;
+		const bio = entries.find(e => e.matches.some(m => m.selector === '.bio'))!;
+		strictEqual(bio.partialName, 'aboutPage');
+		const header = entries.find(e =>
+			attrIndexOf(e.element).values.get('data-mark') === 'home-header')!;
+		strictEqual(header.partialName, 'homePage');
+	});
+
 	it('has the correct total number of rules', () => {
 		strictEqual(result.rules.length, 6);
 	});
@@ -493,7 +499,7 @@ describe('integration: mixed-doc-fragment (document and fragment partials in one
 	let docLayout: Document;
 
 	before(async () => {
-		result = analyzeCss(loadFixture('mixed-doc-fragment'));
+		result = await analyzeFixture('mixed-doc-fragment');
 		const modules = await compileFixture('mixed-doc-fragment');
 		docLayout = renderToDoc(modules, 'views.html', 'layout');
 	});

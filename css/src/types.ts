@@ -1,4 +1,6 @@
 import type { DefaultTreeAdapterMap } from 'parse5';
+import type { CompiledFile } from '@backflip/html';
+import type { ElementLikeTNode } from './tnode-view.js';
 
 // --- CSS Rule types ---
 
@@ -133,7 +135,8 @@ export interface MatchedRule {
 }
 
 export interface ElementMatches {
-	element: Element;
+	/** The compiled TNode that renders this element. */
+	element: ElementLikeTNode;
 	file: string;
 	partialName: string;
 	/** Source location for mapping back to editor positions */
@@ -166,6 +169,14 @@ export interface CssAnalysisInput {
 	templateFiles: Map<string, string>;
 	/** Per-file partial metadata from the compiler. filePath -> partialName -> info */
 	partialInfo: Map<string, Map<string, PartialSourceInfo>>;
+	/**
+	 * Compiled trees for the same files, keyed by the same relative paths.
+	 * Selector matching runs against these — `templateFiles` is only used to
+	 * work out where each partial renders. Note these must NOT have been through
+	 * `flattenStatics`: it collapses static elements into raw HTML strings, which
+	 * a selector cannot match.
+	 */
+	compiled: Map<string, CompiledFile>;
 }
 
 export interface CssAnalysisResult {

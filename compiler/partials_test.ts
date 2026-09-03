@@ -5,7 +5,7 @@
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
-import { compileDirectory, scanPartials, validateCustomElementUniqueness } from './partials.ts';
+import { compileDirectory, compileFiles, scanPartials, validateCustomElementUniqueness } from './partials.ts';
 import type { ElementTNode, PartialRegistry, PartialRefTNode, PrintTNode, TNode } from './types.ts';
 import { findElement } from './test-helpers.ts';
 
@@ -1805,4 +1805,57 @@ Deno.test("compileDirectory - data-loc strings in a second partial are file-rela
         'page.html#second:7:3',   // <p b-if="">
         'page.html#second:8:3',   // <img>
     ]);
+});
+
+// ---- compileFiles (in-memory sources) ----
+
+Deno.test("compileFiles - compiles sources held in memory, no disk access", async () => {
+    const { directory, errors } = await compileFiles(new Map([
+        ["components.html", `<div b-name="card" b-export>\n  <span class="t">Hi</span>\n</div>`],
+        ["page.html", `<div b-name="page">\n  <div b-part="components.html#card"></div>\n</div>`],
+    ]));
+
+    assertEquals(errors.length, 0);
+    assertEquals(directory.files.size, 2);
+    const page = directory.files.get("page.html")!.partials.get("page")!;
+    const refs: PartialRefTNode[] = [];
+    const collect = (tnodes: TNode[]) => {
+        for (const n of tnodes) {
+            if (n.type === 'partial-ref') refs.push(n);
+            else if (n.type === 'element') collect(n.tnodes);
+        }
+    };
+    collect(page.tnodes);
+    assertEquals(refs.length, 1);
+    const ref = refs[0];
+    assertEquals(ref.partialName, "card");
+    assertEquals(ref.file, "components.html");
+});
+
+Deno.test("compileFiles - locations are file-relative, matching compileDirectory", async () => {
+    const html = `<div b-name="first">\n  <p>a</p>\n</div>\n<div b-name="second">\n  <span class="s">b</span>\n</div>`;
+    const dir = await makeTempDir("compilefiles_parity");
+    await writeFile(path.join(dir, "page.html"), html);
+
+    const fromDisk = (await compileDirectory(dir)).directory.files.get("page.html")!;
+    const inMemory = (await compileFiles(new Map([["page.html", html]]))).directory.files.get("page.html")!;
+
+    for (const [name, tag] of [["first", "p"], ["second", "span"]] as const) {
+        const a = findElement(fromDisk.partials.get(name)!.tnodes, tag)!;
+        const b = findElement(inMemory.partials.get(name)!.tnodes, tag)!;
+        assertEquals(b.openTagLoc?.startOffset, a.openTagLoc?.startOffset);
+        assertEquals(b.openTagLoc?.startLine, a.openTagLoc?.startLine);
+    }
+    // The second partial's own location is offset into the file, not slice-relative.
+    const second = inMemory.partials.get("second")!;
+    assertEquals(second.meta?.startOffset, html.indexOf('<div b-name="second">'));
+    assertEquals(second.meta?.startLine, 4);
+});
+
+Deno.test("compileFiles - reports the same errors as compileDirectory", async () => {
+    const { errors } = await compileFiles(new Map([
+        ["page.html", `<div b-name="page"><div b-part="missing.html#nope"></div></div>`],
+    ]));
+    assertEquals(errors.length > 0, true);
+    assertStringIncludes(errors[0].message, "missing.html");
 });

@@ -494,26 +494,41 @@ function sliceLines(html: string, from: number, to: number): { slice: string, st
 /**
  * Compile all HTML template files in a directory.
  *
- * Pass 1: Build the PartialRegistry by scanning all .html files for b-export attributes.
+ * Reads every .html file under `dir` and hands the contents to `compileFiles`,
+ * which does all the work. Keys in the result are paths relative to `dir`.
+ */
+export async function compileDirectory(dir: string, options?: CompileOptions): Promise<{ directory: CompiledDirectory, errors: BackflipError[] }> {
+    const relPaths = await collectHtmlFiles(dir);
+    const fileContents = new Map<string, string>();
+    await Promise.all(relPaths.map(async (relPath) => {
+        const absPath = path.join(dir, relPath);
+        fileContents.set(relPath, await fs.readFile(absPath, 'utf-8'));
+    }));
+    return compileFiles(fileContents, options);
+}
+
+/**
+ * Compile a set of template files given as source text, keyed by relative path
+ * (e.g. "blog/general.html"). The in-memory half of `compileDirectory`: same
+ * passes, no disk access, so callers that already hold the sources (the LSP,
+ * the CSS analyzer, tests) can compile without writing them out first.
+ *
+ * Pass 1: Build the PartialRegistry by scanning all files for b-export attributes.
  * Cycle check: Build dependency graph and detect circular cross-file references.
  * Pass 2: For each file, slice each partial out by line range and compile it
  *         independently via compilePartial, passing a `locBase` for the slice's
  *         position. All coordinates in the resulting trees, errors, root.meta,
  *         and data-loc strings are file-relative.
  */
-export async function compileDirectory(dir: string, options?: CompileOptions): Promise<{ directory: CompiledDirectory, errors: BackflipError[] }> {
+export async function compileFiles(fileContents: Map<string, string>, options?: CompileOptions): Promise<{ directory: CompiledDirectory, errors: BackflipError[] }> {
     const allErrors: BackflipError[] = [];
 
-    // Pass 1: collect files and build registry
-    const relPaths = await collectHtmlFiles(dir);
-
-    const fileContents = new Map<string, string>();
+    // Pass 1: build the registry from the given sources
+    const relPaths = [...fileContents.keys()];
     const registry: PartialRegistry = new Map();
 
     await Promise.all(relPaths.map(async (relPath) => {
-        const absPath = path.join(dir, relPath);
-        const html = await fs.readFile(absPath, 'utf-8');
-        fileContents.set(relPath, html);
+        const html = fileContents.get(relPath)!;
         const { defs, errors } = await scanPartials(html, relPath);
         registry.set(relPath, defs);
         allErrors.push(...errors);

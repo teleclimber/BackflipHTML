@@ -38,6 +38,7 @@ Handles expressions used in directives and `{{ }}` interpolations. Uses `acorn` 
 Orchestrates compilation of all HTML files in a directory. Manages cross-file partial references, dependency resolution, and cycle detection.
 
 - `compileDirectory()` — compiles all `.html` files in a directory and returns a `CompiledDirectory`
+- `compileFiles()` — the same pipeline over sources held in memory (`Map<relative path, HTML>`), for callers that already have the file contents (the LSP, the CSS analyzer, tests)
 
 ### Data shape inference (`data-shape.ts`)
 

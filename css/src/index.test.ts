@@ -1,20 +1,10 @@
 import { describe, it } from 'node:test';
 import { strictEqual, ok } from 'node:assert';
-import { analyzeCss } from './index.js';
-import { buildPartialInfo } from './parse-dom.js';
-import type { CssAnalysisInput } from './types.js';
-
-function analyze(input: { cssContent: string; templateFiles: Map<string, string> }) {
-	const partialInfo = new Map<string, Map<string, any>>();
-	for (const [file, html] of input.templateFiles) {
-		partialInfo.set(file, buildPartialInfo(html));
-	}
-	return analyzeCss({ ...input, partialInfo });
-}
+import { analyzeSource as analyze } from './test-helpers.js';
 
 describe('analyzeCss', () => {
-	it('matches CSS rules to template elements', () => {
-		const result = analyze({
+	it('matches CSS rules to template elements', async () => {
+		const result = await analyze({
 			cssContent: '.card { color: red; } .title { font-size: 16px; }',
 			templateFiles: new Map([
 				['page.html', '<div b-name="page"><div class="card"><span class="title">Hello</span></div></div>'],
@@ -31,8 +21,8 @@ describe('analyzeCss', () => {
 		ok(titleMatch, 'should match .title');
 	});
 
-	it('matches descendant selectors using context spines', () => {
-		const result = analyze({
+	it('matches descendant selectors using context spines', async () => {
+		const result = await analyze({
 			cssContent: '.container .inner { color: blue; }',
 			templateFiles: new Map([
 				['page.html', '<div class="container"><div b-part="card"></div></div><div b-name="card"><span class="inner">text</span></div>'],
@@ -45,8 +35,26 @@ describe('analyzeCss', () => {
 		ok(innerMatch, 'should match .container .inner via context spine');
 	});
 
-	it('returns empty results for empty CSS', () => {
-		const result = analyze({
+	it('analyzes the body of a custom-element partial, and the call site as a tag', async () => {
+		const result = await analyze({
+			cssContent: '.ce-inner { color: red; } my-card.call { color: blue; }',
+			templateFiles: new Map([
+				['page.html', '<div b-name="page"><my-card class="call">x</my-card></div>'],
+				['card.html', '<my-card b-export><div class="ce-inner"><b-unwrap b-slot /></div></my-card>'],
+			]),
+		});
+
+		const inDefinition = result.elementMatches.get('card.html');
+		ok(inDefinition, 'the custom-element partial body is analyzed');
+		ok(inDefinition.some(m => m.matches.some(r => r.selector === '.ce-inner')));
+		const atCallSite = result.elementMatches.get('page.html');
+		ok(atCallSite, 'the call site is analyzed');
+		ok(atCallSite.some(m => m.matches.some(r => r.selector === 'my-card.call')),
+			'the call site matches by tag name and its own attrs');
+	});
+
+	it('returns empty results for empty CSS', async () => {
+		const result = await analyze({
 			cssContent: '',
 			templateFiles: new Map([
 				['page.html', '<div b-name="page"><div class="card">hi</div></div>'],
@@ -56,8 +64,8 @@ describe('analyzeCss', () => {
 		strictEqual(result.elementMatches.size, 0);
 	});
 
-	it('returns empty results for templates with no partials', () => {
-		const result = analyze({
+	it('returns empty results for templates with no partials', async () => {
+		const result = await analyze({
 			cssContent: '.card { color: red; }',
 			templateFiles: new Map([
 				['page.html', '<div class="card">hi</div>'],
@@ -67,8 +75,8 @@ describe('analyzeCss', () => {
 		strictEqual(result.elementMatches.size, 0);
 	});
 
-	it('preserves media conditions in matches', () => {
-		const result = analyze({
+	it('preserves media conditions in matches', async () => {
+		const result = await analyze({
 			cssContent: '@media print { .card { color: black; } }',
 			templateFiles: new Map([
 				['page.html', '<div b-name="page"><div class="card">hi</div></div>'],
@@ -82,8 +90,8 @@ describe('analyzeCss', () => {
 		ok(cardMatch.matches[0].mediaConditions.length > 0);
 	});
 
-	it('handles multiple template files', () => {
-		const result = analyze({
+	it('handles multiple template files', async () => {
+		const result = await analyze({
 			cssContent: '.card { color: red; } .panel { color: blue; }',
 			templateFiles: new Map([
 				['components.html', '<div b-name="card" b-export><div class="card">content</div></div>'],
@@ -97,8 +105,8 @@ describe('analyzeCss', () => {
 		ok(compMatches.some(m => m.matches.some(r => r.selector === '.card')));
 	});
 
-	it('matches slot content (b-in) against ancestors inside the partial definition', () => {
-		const result = analyze({
+	it('matches slot content (b-in) against ancestors inside the partial definition', async () => {
+		const result = await analyze({
 			cssContent: '.card-header h2 { color: red; }',
 			templateFiles: new Map([
 				['page.html', [
@@ -107,8 +115,10 @@ describe('analyzeCss', () => {
 					'    <b-unwrap b-slot="header" />',
 					'  </div>',
 					'</div>',
-					'<div b-part="#card">',
-					'  <h2 b-in="header">Title</h2>',
+					'<div b-name="page">',
+					'  <div b-part="#card">',
+					'    <h2 b-in="header">Title</h2>',
+					'  </div>',
 					'</div>',
 				].join('\n')],
 			]),
@@ -122,8 +132,8 @@ describe('analyzeCss', () => {
 		ok(h2Match, 'h2 in b-in should match .card-header h2 via slot spine');
 	});
 
-	it('matches selectors anchored on the enclosing partial root element', () => {
-		const result = analyze({
+	it('matches selectors anchored on the enclosing partial root element', async () => {
+		const result = await analyze({
 			cssContent: '.page .t { color: red; } .page .card { color: blue; }',
 			templateFiles: new Map([
 				['page.html', [
@@ -147,8 +157,8 @@ describe('analyzeCss', () => {
 		);
 	});
 
-	it('matches slot content against ancestors outside the partial (caller context)', () => {
-		const result = analyze({
+	it('matches slot content against ancestors outside the partial (caller context)', async () => {
+		const result = await analyze({
 			cssContent: '.page-wrapper .card-body p { margin: 0; }',
 			templateFiles: new Map([
 				['page.html', [
@@ -157,9 +167,11 @@ describe('analyzeCss', () => {
 					'    <b-unwrap b-slot />',
 					'  </div>',
 					'</div>',
-					'<div class="page-wrapper">',
-					'  <div b-part="#card">',
-					'    <p b-in="default">Content</p>',
+					'<div b-name="page">',
+					'  <div class="page-wrapper">',
+					'    <div b-part="#card">',
+					'      <p b-in="default">Content</p>',
+					'    </div>',
 					'  </div>',
 					'</div>',
 				].join('\n')],
@@ -174,8 +186,8 @@ describe('analyzeCss', () => {
 		ok(pMatch, 'p in b-in should match via combined caller + partial-internal spine');
 	});
 
-	it('matches slot content in cross-file partials', () => {
-		const result = analyze({
+	it('matches slot content in cross-file partials', async () => {
+		const result = await analyze({
 			cssContent: '.card-header span { font-weight: bold; }',
 			templateFiles: new Map([
 				['components.html', [
@@ -186,8 +198,10 @@ describe('analyzeCss', () => {
 					'</div>',
 				].join('\n')],
 				['page.html', [
-					'<div b-part="components.html#card">',
-					'  <span b-in="header">Title</span>',
+					'<div b-name="page">',
+					'  <div b-part="components.html#card">',
+					'    <span b-in="header">Title</span>',
+					'  </div>',
 					'</div>',
 				].join('\n')],
 			]),
@@ -201,8 +215,8 @@ describe('analyzeCss', () => {
 		ok(spanMatch, 'span in b-in should match .card-header span from cross-file partial');
 	});
 
-	it('sorts matches by specificity', () => {
-		const result = analyze({
+	it('sorts matches by specificity', async () => {
+		const result = await analyze({
 			cssContent: 'div { margin: 0; } .card { color: red; } #main { font-size: 16px; }',
 			templateFiles: new Map([
 				['page.html', '<div b-name="page"><div id="main" class="card">hi</div></div>'],

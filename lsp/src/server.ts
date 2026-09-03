@@ -224,7 +224,12 @@ async function recompile(): Promise<void> {
 					partialInfo.set(filePath, fileInfo);
 				}
 				const cssStart = performance.now();
-				cssAnalysis = analyzeCss({ cssContent, templateFiles: templateFileContents, partialInfo });
+				cssAnalysis = analyzeCss({
+					cssContent,
+					templateFiles: templateFileContents,
+					partialInfo,
+					compiled: directory.files,
+				});
 				const cssElapsed = performance.now() - cssStart;
 				const matchCount = Array.from(cssAnalysis.elementMatches.values())
 					.reduce((sum, arr) => sum + arr.length, 0);

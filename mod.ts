@@ -1,4 +1,4 @@
-export { compileDirectory } from './compiler/partials.js';
+export { compileDirectory, compileFiles } from './compiler/partials.js';
 export type { CompiledDirectory } from './compiler/partials.js';
 export { fileToJsModule } from './compiler/generate/js/nodes2js.js';
 export { fileToPhpFile } from './compiler/generate/php/nodes2php.js';
