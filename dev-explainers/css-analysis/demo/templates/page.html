@@ -1,0 +1,24 @@
+<b-unwrap b-name="article">
+  <b-unwrap b-part="layout.html#shell">
+    <p b-in="head" class="lede">Field notes</p>
+    <div b-in="default" class="stack">
+
+      <div class="featured" b-part="components.html#card">
+        <span b-in="title" class="label">Pinned</span>
+        <p class="prose">A carrying tag wraps this call, so .featured is an ancestor of the card.</p>
+      </div>
+
+      <b-unwrap b-part="components.html#card">
+        <span b-in="title" class="label">Second</span>
+        <p class="prose">This call has no carrying tag; the card root splices in directly.</p>
+      </b-unwrap>
+
+      <b-unwrap b-part="components.html#tag-list" />
+
+      <my-chip class="chip-call">new</my-chip>
+
+      <p b-if="draft" class="notice">Draft</p>
+      <p b-else class="notice">Published</p>
+    </div>
+  </b-unwrap>
+</b-unwrap>

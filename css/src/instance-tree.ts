@@ -69,6 +69,13 @@ export interface Env {
 	partialName: string;
 }
 
+/**
+ * Which expansion rule put an instance where it is, relative to the nearest
+ * enclosing element. Innermost container wins: an element written inside a
+ * `b-for` inside a `b-if` reports `'for'`, and `conditional` records the branch.
+ */
+export type InstanceOrigin = 'root' | 'element' | 'partial' | 'slot' | 'for' | 'if';
+
 export interface InstanceNode {
 	/** The compiler node that renders as this element. */
 	tnode: ElementLikeTNode;
@@ -85,6 +92,8 @@ export interface InstanceNode {
 	depth: number;
 	/** This instance renders only when some `b-if` branch is taken. */
 	conditional: boolean;
+	/** How this instance came to sit under its parent. */
+	via: InstanceOrigin;
 	/** Attribute index when it is not the tnode's own (a merged custom-element call). */
 	attrs: AttrIndex | null;
 	/** Memoized children. The array identity is load-bearing — see above. */
@@ -105,39 +114,49 @@ export interface ExpandCtx {
 	truncated: boolean;
 }
 
+/** A partial expansion started from, and why it was chosen. */
+export interface RootSelection {
+	root: RootTNode;
+	file: string;
+	name: string;
+	/** `entry`: nothing calls it. `unreached`: only reachable through a cycle. */
+	reason: 'entry' | 'unreached';
+}
+
 export interface InstanceForest {
 	/** Instances with no parent, in root order. */
 	tops: InstanceNode[];
 	/** Every instance, document order within each root. */
 	all: InstanceNode[];
 	ctx: ExpandCtx;
+	/** The partials expansion started from, in the order they were grown. */
+	roots: RootSelection[];
 	/** The instance budget ran out; some of the forest is missing. */
 	truncated: boolean;
 }
 
 // --- Expansion ---
 
-function makeNode(
-	tnode: ElementLikeTNode,
-	body: TNode[],
-	env: Env,
-	file: string,
-	partialName: string,
-	parent: InstanceNode | null,
-	depth: number,
-	conditional: boolean,
-	attrs: AttrIndex | null,
-	ctx: ExpandCtx,
-): InstanceNode | null {
+/** Where the next instances go, and how they got there. Threaded through `expandList`. */
+interface Site {
+	env: Env;
+	parent: InstanceNode | null;
+	depth: number;
+	/** Container splices since the last element, against `MAX_SPLICE`. */
+	splice: number;
+	conditional: boolean;
+	via: InstanceOrigin;
+}
+
+type NewNode = Omit<InstanceNode, '_children' | '_roots'>;
+
+function makeNode(ctx: ExpandCtx, fields: NewNode): InstanceNode | null {
 	if (ctx.count >= MAX_INSTANCES) {
 		ctx.truncated = true;
 		return null;
 	}
 	ctx.count++;
-	return {
-		tnode, body, env, file, partialName, parent, depth, conditional, attrs,
-		_children: null, _roots: null,
-	};
+	return { ...fields, _children: null, _roots: null };
 }
 
 /**
@@ -154,40 +173,42 @@ function makeNode(
  * | `if` | every branch spliced in, each marked conditional |
  * | `raw` / `comment` / `print` / `attr-bind` | none |
  */
-function expandList(
-	tnodes: TNode[],
-	env: Env,
-	parent: InstanceNode | null,
-	depth: number,
-	splice: number,
-	conditional: boolean,
-	out: InstanceNode[],
-	ctx: ExpandCtx,
-): void {
-	if (splice > MAX_SPLICE || ctx.truncated) return;
+function expandList(tnodes: TNode[], site: Site, out: InstanceNode[], ctx: ExpandCtx): void {
+	if (site.splice > MAX_SPLICE || ctx.truncated) return;
 	for (const n of tnodes) {
 		if (ctx.truncated) return;
 		switch (n.type) {
 			case 'element': {
-				const node = makeNode(
-					n, n.tnodes, env, env.file, env.partialName, parent, depth, conditional, null, ctx,
-				);
+				const node = makeNode(ctx, {
+					tnode: n,
+					body: n.tnodes,
+					env: site.env,
+					file: site.env.file,
+					partialName: site.env.partialName,
+					parent: site.parent,
+					depth: site.depth,
+					conditional: site.conditional,
+					via: site.via,
+					attrs: null,
+				});
 				if (node) out.push(node);
 				break;
 			}
 			case 'partial-ref':
-				expandRef(n, env, parent, depth, splice, conditional, out, ctx);
+				expandRef(n, site, out, ctx);
 				break;
 			case 'slot': {
-				const entry = env.slots[n.name ?? 'default'];
+				const entry = site.env.slots[n.name ?? 'default'];
 				if (entry) {
-					expandList(entry.tnodes, entry.env, parent, depth, splice + 1, conditional, out, ctx);
+					expandList(entry.tnodes, {
+						...site, env: entry.env, splice: site.splice + 1, via: 'slot',
+					}, out, ctx);
 				}
 				break;
 			}
 			case 'for':
 				for (let i = 0; i < FOR_REPS; i++) {
-					expandList(n.tnodes, env, parent, depth, splice + 1, conditional, out, ctx);
+					expandList(n.tnodes, { ...site, splice: site.splice + 1, via: 'for' }, out, ctx);
 				}
 				break;
 			case 'if':
@@ -195,7 +216,9 @@ function expandList(
 				// exclusive branches therefore look like siblings; marking them
 				// conditional keeps that from ever being reported as definite.
 				for (const branch of n.branches) {
-					expandList(branch.tnodes, env, parent, depth, splice + 1, true, out, ctx);
+					expandList(branch.tnodes, {
+						...site, splice: site.splice + 1, conditional: true, via: 'if',
+					}, out, ctx);
 				}
 				break;
 			// raw / comment / print / attr-bind render no element
@@ -203,46 +226,50 @@ function expandList(
 	}
 }
 
-function expandRef(
-	ref: PartialRefTNode,
-	env: Env,
-	parent: InstanceNode | null,
-	depth: number,
-	splice: number,
-	conditional: boolean,
-	out: InstanceNode[],
-	ctx: ExpandCtx,
-): void {
-	const own = ctx.files.get(env.file);
+function expandRef(ref: PartialRefTNode, site: Site, out: InstanceNode[], ctx: ExpandCtx): void {
+	const own = ctx.files.get(site.env.file);
 	const target = own ? resolvePartial(ref, own, ctx.files) : null;
 
 	if (ref.kind === 'b-part') {
 		// An unresolvable b-part renders nothing (it is a compile error anyway).
 		if (!target) return;
 		ctx.visited.add(target);
-		expandList(
-			target.tnodes, calleeEnv(ref, target, env, ctx), parent,
-			depth, splice + 1, conditional, out, ctx,
-		);
+		expandList(target.tnodes, {
+			...site,
+			env: calleeEnv(ref, target, site.env, ctx),
+			splice: site.splice + 1,
+			via: 'partial',
+		}, out, ctx);
 		return;
 	}
+
+	const common = {
+		tnode: ref,
+		file: site.env.file,
+		partialName: site.env.partialName,
+		parent: site.parent,
+		depth: site.depth,
+		conditional: site.conditional,
+		via: site.via,
+	};
 
 	if (!target) {
 		// Unknown custom element: rendered as a raw tag with the call-site attrs,
 		// its default slot in the caller's environment (render.ts `node.unresolved`).
-		const node = makeNode(
-			ref, ref.slots['default'] ?? [], env, env.file, env.partialName,
-			parent, depth, conditional, null, ctx,
-		);
+		const node = makeNode(ctx, {
+			...common, body: ref.slots['default'] ?? [], env: site.env, attrs: null,
+		});
 		if (node) out.push(node);
 		return;
 	}
 
 	ctx.visited.add(target);
-	const node = makeNode(
-		ref, target.tnodes, calleeEnv(ref, target, env, ctx), env.file, env.partialName,
-		parent, depth, conditional, mergedAttrs(ref, target, ctx), ctx,
-	);
+	const node = makeNode(ctx, {
+		...common,
+		body: target.tnodes,
+		env: calleeEnv(ref, target, site.env, ctx),
+		attrs: mergedAttrs(ref, target, ctx),
+	});
 	if (node) out.push(node);
 }
 
@@ -281,7 +308,12 @@ export function childrenOf(n: InstanceNode, ctx: ExpandCtx): InstanceNode[] {
 	const out: InstanceNode[] = [];
 	// An element boundary resets conditionality: only the tag carrying the b-if
 	// is conditional, not everything below it.
-	if (n.depth < MAX_DEPTH) expandList(n.body, n.env, n, n.depth + 1, 0, false, out, ctx);
+	if (n.depth < MAX_DEPTH) {
+		expandList(n.body, {
+			env: n.env, parent: n, depth: n.depth + 1,
+			splice: 0, conditional: false, via: 'element',
+		}, out, ctx);
+	}
 	n._children = out;
 	return out;
 }
@@ -321,10 +353,15 @@ function expandRoot(root: RootTNode, file: string, name: string, ctx: ExpandCtx)
 			loc: root.loc,
 			openTagLoc: root.loc,
 		};
-		const node = makeNode(tag, root.tnodes, env, file, name, null, 0, false, null, ctx);
+		const node = makeNode(ctx, {
+			tnode: tag, body: root.tnodes, env, file, partialName: name,
+			parent: null, depth: 0, conditional: false, via: 'root', attrs: null,
+		});
 		if (node) out.push(node);
 	} else {
-		expandList(root.tnodes, env, null, 0, 0, false, out, ctx);
+		expandList(root.tnodes, {
+			env, parent: null, depth: 0, splice: 0, conditional: false, via: 'root',
+		}, out, ctx);
 	}
 	for (const node of out) node._roots = out;
 	return out;
@@ -377,25 +414,27 @@ export function buildInstanceForest(files: Map<string, CompiledFile>): InstanceF
 	const referenced = collectReferenced(files);
 	const tops: InstanceNode[] = [];
 	const all: InstanceNode[] = [];
+	const roots: RootSelection[] = [];
 
-	const grow = (root: RootTNode, file: string, name: string): void => {
-		const roots = expandRoot(root, file, name, ctx);
-		tops.push(...roots);
-		materialize(roots, all, ctx);
+	const grow = (root: RootTNode, file: string, name: string, reason: RootSelection['reason']): void => {
+		roots.push({ root, file, name, reason });
+		const grown = expandRoot(root, file, name, ctx);
+		tops.push(...grown);
+		materialize(grown, all, ctx);
 	};
 
 	for (const [file, compiled] of files) {
 		for (const [name, root] of compiled.partials) {
-			if (!referenced.has(root)) grow(root, file, name);
+			if (!referenced.has(root)) grow(root, file, name, 'entry');
 		}
 	}
 	// Anything still unvisited is reachable only through a cycle. Growing them
 	// one at a time keeps a partial from being expanded twice.
 	for (const [file, compiled] of files) {
 		for (const [name, root] of compiled.partials) {
-			if (!ctx.visited.has(root)) grow(root, file, name);
+			if (!ctx.visited.has(root)) grow(root, file, name, 'unreached');
 		}
 	}
 
-	return { tops, all, ctx, truncated: ctx.truncated };
+	return { tops, all, ctx, roots, truncated: ctx.truncated };
 }

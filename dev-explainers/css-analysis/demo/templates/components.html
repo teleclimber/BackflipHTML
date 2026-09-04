@@ -1,0 +1,10 @@
+<div b-name="card" b-export class="card">
+  <h2 class="card-title"><b-unwrap b-slot="title" /></h2>
+  <div class="card-body"><b-unwrap b-slot /></div>
+</div>
+
+<ul b-name="tag-list" b-export class="tags">
+  <li b-for="tag in tags" class="tag">{{ tag }}</li>
+</ul>
+
+<my-chip b-export data-role="chip"><b-unwrap b-slot /></my-chip>

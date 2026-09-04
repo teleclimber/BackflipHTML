@@ -67,6 +67,10 @@ Local dev server that renders partials with auto-generated mock data and live re
 
 VSCode extension providing syntax highlighting, language server integration, and a preview panel for templates.
 
+### [`dev-explainers/`](dev-explainers/README.md)
+
+Tools that show how a subsystem reaches its results, for people working on that subsystem. Not shipped.
+
 ## Documentation
 
 - [Directives reference](docs/directives.md) — all `b-*` directives and the expression language
@@ -97,8 +101,8 @@ End-to-end integration tests for the full compile → generate → render pipeli
 
 PHP integration tests require `php` in PATH. CLI tests spawn `deno` subprocesses.
 
-### LSP and CSS
+### LSP, CSS, and dev explainers
 
-The LSP and CSS packages have their own test suites — see their READMEs for details.
+The LSP, CSS, and `dev-explainers` packages have their own test suites — see their READMEs for details.
 
 

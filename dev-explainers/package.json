@@ -1,0 +1,16 @@
+{
+  "name": "@backflip/dev-explainers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Developer tools that show how a subsystem reaches its results. Not shipped.",
+  "scripts": {
+    "explain:css": "node --import tsx css-analysis/cli.ts",
+    "test": "node --import tsx --test 'css-analysis/*.test.ts'"
+  },
+  "dependencies": {
+    "@backflip/html": "file:..",
+    "css-what": "^6.1.0",
+    "specificity": "^1.0.0"
+  }
+}

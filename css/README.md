@@ -79,6 +79,11 @@ What the model does not capture:
 | `src/types.ts` | Type definitions |
 | `src/test-helpers.ts` | Test-only: compiles template sources and runs `analyzeCss` over them |
 
+To see the pipeline run on a real project — the parsed rules, which partials
+became roots and why, the authoring tree expanding into the render forest, and a
+per-instance trace for any selector — use
+[`dev-explainers/css-analysis`](../dev-explainers/css-analysis/README.md).
+
 ## Dependencies
 
 - **css-tree** — CSS parsing and AST

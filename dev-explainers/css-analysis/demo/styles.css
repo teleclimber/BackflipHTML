@@ -1,0 +1,28 @@
+/* Definite: every instance of the element matches. */
+.card { border: 1px solid #ddd; }
+.card-title { font-size: 1.25rem; }
+.masthead + .main { padding-top: 1rem; }
+.main .prose { line-height: 1.6; }
+.shell .lede { color: #666; }
+
+/* Reaches into a partial from outside it. */
+.card:has(.label) { border-color: #333; }
+
+/* Only one of the two card call sites sits under .featured. */
+.featured .card-title { letter-spacing: -0.01em; }
+
+/* Positional selectors over a b-for body. */
+.tag:first-child { margin-left: 0; }
+.tag + .tag { margin-left: 0.5rem; }
+.tags > :nth-child(2) { opacity: 0.9; }
+
+/* Structural pseudos across a partial boundary. */
+.stack > :first-child { margin-top: 0; }
+.stack > :nth-child(2) { margin-top: 1rem; }
+
+/* Both b-if branches are modelled as present. */
+.notice { font-style: italic; }
+
+/* A custom element call: caller attrs and definition attrs on one tag. */
+my-chip.chip-call { display: inline-block; }
+my-chip[data-role="chip"] { border-radius: 999px; }

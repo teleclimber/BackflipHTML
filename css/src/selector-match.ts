@@ -89,6 +89,28 @@ function makeAdapter(ctx: ExpandCtx) {
 	return adapter;
 }
 
+/**
+ * Compile one selector against a forest, returning a predicate over its
+ * instances — or null if the selector is invalid.
+ *
+ * `matchSelectors` uses this for every selector it runs. It is exported from
+ * this module — not from the package's index — so in-repo dev tooling can ask
+ * the *real* matcher about a single instance instead of reimplementing the
+ * traversal.
+ */
+export function compileSelector(
+	forest: InstanceForest,
+	selector: string,
+): ((node: InstanceNode) => boolean) | null {
+	try {
+		return cssCompile<InstanceNode, InstanceNode>(selector, {
+			adapter: makeAdapter(forest.ctx) as any,
+		});
+	} catch {
+		return null;  // invalid selector: skip it, don't fail the run
+	}
+}
+
 // --- Specificity ---
 
 const specificityCache = new Map<string, [number, number, number]>();
@@ -169,7 +191,6 @@ export function matchSelectors(
 	// ancestor did not match" cache is sound here because instances are
 	// immutable for the life of the run — but only because the compiled
 	// selectors die with it too, so nothing outlives the forest it cached.
-	const adapterOpts = { adapter: makeAdapter(forest.ctx) as any };
 	const compiled = new Map<string, ((node: InstanceNode) => boolean) | null>();
 	const occurrences: Occurrence[] = [];
 	const seen = new Set<string>();
@@ -180,11 +201,7 @@ export function matchSelectors(
 			seen.add(key);
 			let test = compiled.get(selector);
 			if (test === undefined) {
-				try {
-					test = cssCompile<InstanceNode, InstanceNode>(selector, adapterOpts);
-				} catch {
-					test = null;  // invalid selector: skip it, don't fail the run
-				}
+				test = compileSelector(forest, selector);
 				compiled.set(selector, test);
 			}
 			if (test) occurrences.push({ rule, selector, test });
