@@ -119,8 +119,9 @@ describe('matchSelectors', () => {
 
 	it('matches :has() with a leading sibling combinator across a slot boundary', async () => {
 		// This is the one css-select path that locates an element among its
-		// siblings with a raw `indexOf` (`getNextSiblings` in subselects.js), so
-		// it only works while instance identity is stable.
+		// siblings with a raw `indexOf` (`getNextSiblings` in
+		// helpers/querying.js), so it only works while instance identity is
+		// stable.
 		const result = await match({
 			't.html': [
 				'<div b-name="card"><span class="hd">h</span><b-unwrap b-slot /></div>',
@@ -128,6 +129,20 @@ describe('matchSelectors', () => {
 			].join('\n'),
 		}, '.hd:has(+ .body)');
 		deepStrictEqual(on(result, 'hd'), ['.hd:has(+ .body)=definite']);
+	});
+
+	it('does not descend into a <template> for :has(), the way the DOM does not', async () => {
+		// css-select skips the children of a `template` tag whenever it walks
+		// down (`findAll` / `findOne` in helpers/querying.js), which is what a
+		// browser does — template content sits in a separate fragment. Descendant
+		// matching runs upwards from the element instead, so it still reports
+		// `.wrap .t`, which a browser would not. Nothing here models the fragment.
+		const result = await matchBody(
+			'<div class="wrap"><template><span class="t">x</span></template></div>',
+			'.wrap:has(.t)', '.wrap .t',
+		);
+		deepStrictEqual(on(result, 'wrap'), []);
+		deepStrictEqual(on(result, 't'), ['.wrap .t=definite']);
 	});
 
 	it('counts children across a partial boundary for structural pseudos', async () => {

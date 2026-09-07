@@ -17,7 +17,7 @@ import {
  * css-select needs for its identity scans.
  */
 function makeAdapter(ctx: ExpandCtx) {
-	const adapter = {
+	return {
 		isTag(node: InstanceNode): node is InstanceNode {
 			return node != null;
 		},
@@ -51,42 +51,12 @@ function makeAdapter(ctx: ExpandCtx) {
 			return '';
 		},
 
-		existsOne(test: (node: InstanceNode) => boolean, elems: InstanceNode[]): boolean {
-			for (const el of elems) {
-				if (test(el)) return true;
-				if (adapter.existsOne(test, childrenOf(el, ctx))) return true;
-			}
-			return false;
-		},
-
-		findAll(test: (node: InstanceNode) => boolean, nodes: InstanceNode[]): InstanceNode[] {
-			const result: InstanceNode[] = [];
-			const walk = (list: InstanceNode[]): void => {
-				for (const node of list) {
-					if (test(node)) result.push(node);
-					walk(childrenOf(node, ctx));
-				}
-			};
-			walk(nodes);
-			return result;
-		},
-
-		findOne(test: (node: InstanceNode) => boolean, elems: InstanceNode[]): InstanceNode | null {
-			for (const el of elems) {
-				if (test(el)) return el;
-				const found = adapter.findOne(test, childrenOf(el, ctx));
-				if (found) return found;
-			}
-			return null;
-		},
-
 		// Nothing calls `select()`: matching is `compile()` plus a per-instance
 		// predicate, so subset removal never runs on a result set.
 		removeSubsets(nodes: InstanceNode[]): InstanceNode[] {
 			return nodes;
 		},
 	};
-	return adapter;
 }
 
 /**
@@ -104,7 +74,7 @@ export function compileSelector(
 ): ((node: InstanceNode) => boolean) | null {
 	try {
 		return cssCompile<InstanceNode, InstanceNode>(selector, {
-			adapter: makeAdapter(forest.ctx) as any,
+			adapter: makeAdapter(forest.ctx),
 		});
 	} catch {
 		return null;  // invalid selector: skip it, don't fail the run

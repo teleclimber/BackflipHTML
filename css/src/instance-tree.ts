@@ -25,11 +25,11 @@ import { attrIndexOf, buildAttrIndex, type AttrIndex, type ElementLikeTNode } fr
  * ## Identity is load-bearing
  *
  * `css-select` locates an element among its siblings by identity — `equals` in
- * `general.js` for `+` / `~` and the `nth-*` filters, and a raw `indexOf` in
- * `subselects.js` for `:has()` with a leading sibling combinator. So a logical
- * instance must always be the *same object*, and `getChildren` / `getSiblings`
- * must hand back the *same array*. That is what `_children` memoizes. Never
- * build instance nodes inside an adapter call.
+ * `general.js` for `+` / `~` and the `nth-*` filters, and a raw `indexOf`
+ * (`getNextSiblings` in `helpers/querying.js`) for `:has()` with a leading
+ * sibling combinator. So a logical instance must always be the *same object*,
+ * and `getChildren` / `getSiblings` must hand back the *same array*. That is
+ * what `_children` memoizes. Never build instance nodes inside an adapter call.
  */
 
 /** How many iterations of a `b-for` body are modelled. */

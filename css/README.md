@@ -64,6 +64,7 @@ What the model does not capture:
 - **`b-for` past three iterations.** A loop body is modelled as `FOR_REPS = 3` instances, enough for `:first-child`, `:last-child`, `+`, `~` and a middle `:nth-child(2)`. `:nth-child(9)` is not modelled — any fixed count would lie about some selector.
 - **Mutually exclusive `b-if` branches.** Every branch is modelled as present, so two elements in different branches look like siblings. `.a + .b` across them is a false positive — always reported `conditional`, never `definite`.
 - **`:contains()`.** Template text is not modelled (`getText` returns `''`), so it never matches.
+- **`<template>` content.** A browser keeps a template's children out of the DOM tree; here they are ordinary instances. `:has()` does not look inside one — css-select skips a `template` tag's children whenever it walks down — but a descendant selector, which matches upwards from the element, still reaches in: `.wrap .t` is reported where a browser reports nothing.
 - **Dynamic class and id values.** A `:class="expr"` is known by name only; `.btn-primary` is not predicted from the expression. The element is reported `dynamic` for any class/id selector instead.
 - **Runtime data.** Which `b-if` branch is taken, how many times a `b-for` runs, and what a binding evaluates to are all unknown at analysis time. That is what `conditional` and `dynamic` exist to say.
 
