@@ -11,9 +11,9 @@
     "imports": {
         "acorn": "npm:acorn",
         "parse5-html-rewriting-stream": "npm:parse5-html-rewriting-stream",
-        "css-tree": "npm:css-tree@^3.1.0",
-        "css-select": "npm:css-select@^5.1.0",
-        "css-what": "npm:css-what@^6.1.0",
+        "css-tree": "npm:css-tree@^3.2.1",
+        "css-select": "npm:css-select@^7.0.0",
+        "css-what": "npm:css-what@^8.0.0",
         "parse5": "npm:parse5@^7.2.1",
         "specificity": "npm:specificity@^1.0.0",
         "@backflip/assets": "./assets/src/index.ts",

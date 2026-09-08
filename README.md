@@ -134,4 +134,38 @@ PHP integration tests require `php` in PATH. CLI tests spawn `deno` subprocesses
 
 The LSP, CSS, and `dev-explainers` packages have their own test suites — see their READMEs for details.
 
+### Keeping npm dependencies in sync with `deno.json`
+
+The subprojects are npm packages with their own `package.json` and
+`node_modules`, but Deno type-checks any of them its module graph reaches — and
+the two toolchains resolve npm dependencies differently:
+
+| | resolves an npm import via |
+|---|---|
+| `tsc`, `node`, the per-package tests | the nearest `node_modules/`, i.e. the subproject's own |
+| `deno task test` | the `imports` map in `deno.json` |
+
+So for any subproject in Deno's graph, every npm dependency it shares with
+`deno.json` has to be bumped in both places. When they drift, `npm test` and
+`npm run build` keep passing while `deno task test` fails to type-check against
+whichever version Deno picked — a confusing way to find out, because the code is
+correct for the version it actually runs against.
+
+Which subprojects are in the graph is a property of the imports, not of the
+config. Today `preview/server.ts` reaches into `assets/` and `css/`, so those
+two are checked; `lsp/`, `dev-explainers/` and `vscode-backflip/` are not
+reachable from any Deno entry point and are checked only by their own
+toolchains. Adding one import can change that.
+
+Note that the `exclude` list in `deno.json` does **not** prevent this. It
+governs which files Deno lints and tests directly, not what a transitive import
+drags into the graph — `css/` is in that list and was still being type-checked
+against the wrong `css-select`.
+
+To see what Deno actually pulls in:
+
+```bash
+deno info preview/server.ts
+```
+
 
