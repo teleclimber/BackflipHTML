@@ -19,10 +19,22 @@ export async function compileTemplates(
 	return directory.files;
 }
 
-/** Compile the given templates and analyze `cssContent` against them. */
+/**
+ * Compile the given templates and analyze `cssContent` against them.
+ *
+ * `analyzeCss` works per stylesheet, so the content is given a path. Tests that
+ * do not care about provenance can leave `cssPath` alone.
+ */
 export async function analyzeSource(input: {
 	cssContent: string;
+	cssPath?: string;
 	templateFiles: Map<string, string>;
 }): Promise<CssAnalysisResult> {
-	return analyzeCss({ cssContent: input.cssContent, compiled: await compileTemplates(input.templateFiles) });
+	return analyzeCss({
+		files: [{ path: input.cssPath ?? VIRTUAL_CSS_PATH, content: input.cssContent }],
+		compiled: await compileTemplates(input.templateFiles),
+	});
 }
+
+/** Stand-in path for tests that analyze a CSS string with no file behind it. */
+export const VIRTUAL_CSS_PATH = '/virtual/styles.css';

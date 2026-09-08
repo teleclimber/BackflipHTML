@@ -1,11 +1,73 @@
 import * as csstree from 'css-tree';
-import type { CssRule, CssProperty } from './types.js';
+import type { AnalysisFailure, CssRule, CssProperty } from './types.js';
 
-export function parseCssFile(cssContent: string): CssRule[] {
-	const ast = csstree.parse(cssContent, { positions: true });
+export interface CssParseResult {
+	rules: CssRule[];
+	/** Regions css-tree could not parse. See `AnalysisFailure`. */
+	failures: AnalysisFailure[];
+}
+
+/**
+ * Parse one stylesheet into rules, reporting what could not be parsed.
+ *
+ * css-tree never throws on malformed CSS — it skips to a recovery point and
+ * carries on with fewer rules. `onParseError` is the only way to learn that
+ * happened, and its second argument is the node css-tree fell back to, whose
+ * location is the extent of the discarded text.
+ */
+export function parseCssFile(cssContent: string, sourceFile = ''): CssParseResult {
 	const rules: CssRule[] = [];
-	const mediaStack: string[] = [];
+	const failures: AnalysisFailure[] = [];
 
+	// One malformed construct can raise several errors covering the same text:
+	// a missing brace reports both the unexpected token and the brace it never
+	// found, and css-tree widens the region it discards as it recovers. Those
+	// are one failure, not several, so overlapping regions merge into the first
+	// — which keeps the message naming the actual cause, while the region grows
+	// to the full extent of what was dropped.
+	const spans: { start: number; end: number; failure: AnalysisFailure }[] = [];
+
+	const ast = csstree.parse(cssContent, {
+		positions: true,
+		onParseError(error: csstree.SyntaxParseError, fallbackNode: csstree.CssNode) {
+			const lost = fallbackNode.loc;
+			if (!lost) return;
+
+			const start = lost.start.offset;
+			const end = lost.end.offset;
+
+			const overlapping = spans.find(s => start < s.end && end > s.start);
+			if (overlapping) {
+				if (start < overlapping.start) {
+					overlapping.start = start;
+					overlapping.failure.lostStartLine = lost.start.line;
+					overlapping.failure.lostStartCol = lost.start.column;
+				}
+				if (end > overlapping.end) {
+					overlapping.end = end;
+					overlapping.failure.lostEndLine = lost.end.line;
+					overlapping.failure.lostEndCol = lost.end.column;
+				}
+				return;
+			}
+
+			const failure: AnalysisFailure = {
+				reason: 'stylesheet-parse',
+				sourceFile,
+				message: error.message,
+				sourceLine: error.line,
+				sourceCol: error.column,
+				lostStartLine: lost.start.line,
+				lostStartCol: lost.start.column,
+				lostEndLine: lost.end.line,
+				lostEndCol: lost.end.column,
+			};
+			spans.push({ start, end, failure });
+			failures.push(failure);
+		},
+	});
+
+	const mediaStack: string[] = [];
 	const skipAtrules = new Set(['keyframes', 'font-face', 'import', 'charset', 'namespace']);
 
 	csstree.walk(ast, {
@@ -51,6 +113,7 @@ export function parseCssFile(cssContent: string): CssRule[] {
 					selectors,
 					properties,
 					mediaConditions: [...mediaStack],
+					sourceFile,
 					sourceLine: loc?.start.line ?? 0,
 					sourceCol: loc?.start.column ?? 0,
 				});
@@ -63,5 +126,5 @@ export function parseCssFile(cssContent: string): CssRule[] {
 		},
 	});
 
-	return rules;
+	return { rules, failures };
 }

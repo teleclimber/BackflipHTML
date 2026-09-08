@@ -16,10 +16,10 @@ import {
 } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { compileDirectory, loadConfig, resolveConfigRoot, resolveAssetDirs, resolveDomPatchOutputDirs, CONFIG_FILENAME, previewPartial, parseBPartValue, type BackflipError, type CompiledFile, type CompileOptions, type LoadConfigResult } from '@backflip/html';
-import { analyzeCss, discoverCssFiles, type CssAnalysisResult } from '@backflip/css';
+import { analyzeCss, discoverCssFiles, type CssAnalysisResult, type CssSourceFile } from '@backflip/css';
 import { discoverAssetFileInfos, collectAllAssetReferences, validateAssetFiles, buildAssetUsageReport, filterReport, renderAssetReportHtml } from '@backflip/assets';
 import { buildIndex, type ProjectIndex } from './index.js';
-import { errorsToDiagnostics } from './diagnostics.js';
+import { errorsToDiagnostics, cssFailuresToDiagnostics } from './diagnostics.js';
 import { findDefinition, findAssetDefinition, findCustomElementDefinition } from './definition.js';
 import { findReferences, parseAssetRefAtCursor, findAssetReferences } from './references.js';
 import { getDocumentSymbols } from './symbols.js';
@@ -41,6 +41,8 @@ let compiledFiles: Map<string, CompiledFile> = new Map();
 let cssAnalysis: CssAnalysisResult | null = null;
 let recompileTimer: ReturnType<typeof setTimeout> | null = null;
 let knownFiles: Set<string> = new Set();
+/** Stylesheets we published diagnostics for, so they can be cleared. */
+let knownCssFiles: Set<string> = new Set();
 let assetMap: Map<string, string> | undefined;
 let assetDirs: Map<string, string> | undefined;
 let templateFileContents: Map<string, string> = new Map();
@@ -168,6 +170,11 @@ function clearAllDiagnostics(): void {
 		connection.sendDiagnostics({ uri, diagnostics: [] });
 	}
 	knownFiles = new Set();
+
+	for (const cssPath of knownCssFiles) {
+		connection.sendDiagnostics({ uri: `file://${cssPath}`, diagnostics: [] });
+	}
+	knownCssFiles = new Set();
 }
 
 async function recompile(): Promise<void> {
@@ -210,17 +217,17 @@ async function recompile(): Promise<void> {
 		cssAnalysis = null;
 		if (cssPaths.length > 0 && templateRoot) {
 			try {
-				const cssChunks: string[] = [];
+				const cssFiles: CssSourceFile[] = [];
 				for (const cssPath of cssPaths) {
-					cssChunks.push(await fs.readFile(cssPath, 'utf-8'));
+					cssFiles.push({ path: cssPath, content: await fs.readFile(cssPath, 'utf-8') });
 				}
-				const cssContent = cssChunks.join('\n');
 				const cssStart = performance.now();
-				cssAnalysis = analyzeCss({ cssContent, compiled: directory.files });
+				cssAnalysis = analyzeCss({ files: cssFiles, compiled: directory.files });
 				const cssElapsed = performance.now() - cssStart;
 				const matchCount = Array.from(cssAnalysis.elementMatches.values())
 					.reduce((sum, arr) => sum + arr.length, 0);
-				connection.console.log(`[backflip] css analysis: ${cssPaths.length} file(s), ${cssAnalysis.rules.length} rules, ${matchCount} element matches (${cssElapsed.toFixed(0)}ms)`);
+				const failureNote = cssAnalysis.failures.length > 0 ? `, ${cssAnalysis.failures.length} unparsed region(s)` : '';
+				connection.console.log(`[backflip] css analysis: ${cssPaths.length} file(s), ${cssAnalysis.rules.length} rules, ${matchCount} element matches${failureNote} (${cssElapsed.toFixed(0)}ms)`);
 			} catch (err) {
 				connection.console.error(`[backflip] css analysis failed: ${err instanceof Error ? err.message : err}`);
 			}
@@ -245,6 +252,24 @@ async function recompile(): Promise<void> {
 			connection.sendDiagnostics({
 				uri,
 				diagnostics: diagsByFile.get(filePath) ?? [],
+			});
+		}
+
+		// CSS parse warnings, published against the stylesheets themselves. These
+		// live outside templateRoot (asset dirs), so their absolute path is the
+		// URI directly. Every discovered stylesheet is published every pass,
+		// empty included, so a fixed warning clears.
+		const cssDiags = cssFailuresToDiagnostics(cssAnalysis?.failures ?? []);
+		for (const cssPath of knownCssFiles) {
+			if (!cssPaths.includes(cssPath)) {
+				connection.sendDiagnostics({ uri: `file://${cssPath}`, diagnostics: [] });
+			}
+		}
+		knownCssFiles = new Set(cssPaths);
+		for (const cssPath of cssPaths) {
+			connection.sendDiagnostics({
+				uri: `file://${cssPath}`,
+				diagnostics: cssDiags.get(cssPath) ?? [],
 			});
 		}
 

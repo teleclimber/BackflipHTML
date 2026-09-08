@@ -6,9 +6,9 @@ This is a separate Node.js package used by the [LSP server](../lsp/README.md) to
 
 ## How it works
 
-`analyzeCss()` takes CSS content plus the **compiled trees** for a template directory (`Map<relative path, CompiledFile>`, straight from the compiler's `compileDirectory` / `compileFiles`) and runs four steps:
+`analyzeCss()` takes a list of stylesheets — `{ path, content }` each — plus the **compiled trees** for a template directory (`Map<relative path, CompiledFile>`, straight from the compiler's `compileDirectory` / `compileFiles`) and runs four steps:
 
-1. **Parse CSS** — parses rules and media conditions using css-tree
+1. **Parse CSS** — parses rules and media conditions using css-tree, one stylesheet at a time
 2. **Build the instance forest** — expands the compiled trees into the tree the runtime would render
 3. **Match** — runs every selector against every instance with css-select and a custom adapter
 4. **Aggregate** — folds the instances of each source element back into one result, with specificity and a match type
@@ -19,6 +19,36 @@ Two consequences worth knowing:
 
 - **Pass unflattened trees.** `flattenStatics` collapses a fully static element into a raw HTML string; a selector cannot match a string. The codegen path flattens, the CSS path must not.
 - **Only compiled markup is analysed.** Content the compiler rejects or ignores — most commonly a top-level element with no `b-name` — has no tree, so it has no matches either, and it is not an ancestor of anything.
+- **One stylesheet at a time.** Each file is parsed on its own, so `CssRule.sourceFile` and `sourceLine` address a real position in a real file, and a syntax error in one stylesheet cannot swallow the start of the next. Do not concatenate before calling.
+
+### Unparseable CSS
+
+css-tree never throws on malformed CSS: it skips to a recovery point and returns
+fewer rules. A single stray bracket can therefore discard every rule after it,
+silently.
+
+`CssAnalysisResult.failures` reports that. Each `AnalysisFailure` carries the
+file, the position where parsing broke, the parser's own message, and the extent
+of the text that was dropped — enough for the LSP to underline *what was lost*,
+not just point at where the parse broke.
+
+One malformed construct can raise several css-tree errors covering overlapping
+text. Those are merged into one failure, keeping the first message (which names
+the cause) and widening the region to everything dropped.
+
+Failures are never fatal. Rules that parsed before the failure still match, other
+stylesheets are unaffected, and a stylesheet that fails on line 1 still returns
+its failure alongside an empty rule list.
+
+Two shapes come through this channel today, both from css-tree:
+
+- a **syntax error at the top level**, whose lost region runs to the end of the file
+- a **nested rule that does not start with `&`** — css-tree only recognizes
+  `&`-prefixed nesting, so a bare nested selector is dropped along with the rest
+  of its block. `.card { .direct { … } }` loses `.direct`; `.card { &.direct { … } }` does not.
+
+Selectors that parse but that css-select refuses to compile are *not* reported
+here yet; they are still dropped silently in `compileSelector`.
 
 ### The instance model
 
@@ -73,7 +103,7 @@ What the model does not capture:
 | File | Purpose |
 |------|---------|
 | `src/index.ts` | Main `analyzeCss()` entry point and pipeline orchestrator |
-| `src/parse-css.ts` | CSS parsing, handles `@media` rules |
+| `src/parse-css.ts` | CSS parsing, handles `@media` rules, reports parse failures |
 | `src/instance-tree.ts` | The render tree: expansion rules, environments, roots, budgets |
 | `src/selector-match.ts` | The css-select adapter over instances, and match aggregation |
 | `src/tnode-view.ts` | Tag name and attribute lookup over the compiler's TNodes |

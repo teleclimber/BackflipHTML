@@ -1,13 +1,16 @@
 import { describe, it } from 'node:test';
-import { strictEqual, ok, match } from 'node:assert';
+import { strictEqual, ok, match, deepStrictEqual } from 'node:assert';
 import { getHover, findRulesForElement, findElementsForSelector } from './hover.js';
 import { makeIndex, makeLoc } from './test-helpers.js';
 import { analyzeCss } from '@backflip/css';
 import { compileFiles } from '@backflip/html';
 
-async function analyze(input: { cssContent: string; templateFiles: Map<string, string> }) {
+async function analyze(input: { cssContent: string; cssPath?: string; templateFiles: Map<string, string> }) {
 	const { directory } = await compileFiles(input.templateFiles);
-	return analyzeCss({ cssContent: input.cssContent, compiled: directory.files });
+	return analyzeCss({
+		files: [{ path: input.cssPath ?? '/workspace/styles.css', content: input.cssContent }],
+		compiled: directory.files,
+	});
 }
 
 import type { TextDocument } from 'vscode-languageserver-textdocument';
@@ -694,6 +697,7 @@ describe('getHover', () => {
 						selectors: [r.selector],
 						properties: r.properties ?? [],
 						mediaConditions: r.media ?? [],
+						sourceFile: '/workspace/styles.css',
 						sourceLine: r.sourceLine ?? 1,
 						sourceCol: r.sourceCol ?? 1,
 					},
@@ -857,6 +861,7 @@ describe('CSS selector hover (hover in CSS file)', () => {
 					selectors: [e.selector],
 					properties: [],
 					mediaConditions: [],
+					sourceFile: '/workspace/styles.css',
 					sourceLine: e.ruleLine,
 					sourceCol: 1,
 				},
@@ -1155,6 +1160,7 @@ describe('findRulesForElement', () => {
 					selectors: [r.selector],
 					properties: r.properties ?? [],
 					mediaConditions: r.media ?? [],
+					sourceFile: '/workspace/styles.css',
 					sourceLine: r.sourceLine ?? 1,
 					sourceCol: r.sourceCol ?? 1,
 				},
@@ -1211,6 +1217,8 @@ describe('findElementsForSelector', () => {
 		selector: string;
 		ruleLine: number;
 		matchType?: string;
+		/** Stylesheet the rule was parsed from; defaults to the single-file case. */
+		cssFile?: string;
 	}>) {
 		const elementMatches = new Map<string, any[]>();
 		for (const e of entries) {
@@ -1234,6 +1242,7 @@ describe('findElementsForSelector', () => {
 					selectors: [e.selector],
 					properties: [],
 					mediaConditions: [],
+					sourceFile: e.cssFile ?? '/workspace/styles.css',
 					sourceLine: e.ruleLine,
 					sourceCol: 1,
 				},
@@ -1261,6 +1270,22 @@ describe('findElementsForSelector', () => {
 		strictEqual(result!.length, 2);
 		strictEqual(result![0].partialName, 'card');
 		strictEqual(result![1].partialName, 'header');
+	});
+
+	it('does not report rules from a different stylesheet on the same line', async () => {
+		// Stylesheets are parsed separately, so line 1 exists in both. Matching on
+		// the line alone would credit b.css's hover with a.css's rule.
+		const cssAnalysis = makeCssAnalysisWithElements([
+			{ file: 'page.html', partialName: 'fromA', startLine: 5, startCol: 3, selector: '.a', ruleLine: 1, cssFile: '/workspace/a.css' },
+			{ file: 'page.html', partialName: 'fromB', startLine: 9, startCol: 3, selector: '.b', ruleLine: 1, cssFile: '/workspace/b.css' },
+		]);
+		const paths = ['/workspace/a.css', '/workspace/b.css'];
+
+		const inA = findElementsForSelector('../a.css', 0, cssAnalysis as any, paths, tplRoot);
+		deepStrictEqual(inA!.map(e => e.partialName), ['fromA']);
+
+		const inB = findElementsForSelector('../b.css', 0, cssAnalysis as any, paths, tplRoot);
+		deepStrictEqual(inB!.map(e => e.partialName), ['fromB']);
 	});
 
 	it('deduplicates by file + partialName + startLine', async () => {
@@ -1357,7 +1382,7 @@ describe('asset ref hover', () => {
 				element: null, file: 'page.html', partialName: 'test',
 				startLine: 1, startCol: 1, startOffset: 0,
 				matches: [{
-					rule: { selectorText: '.hero', selectors: ['.hero'], properties: [], mediaConditions: [], sourceLine: 1, sourceCol: 1 },
+					rule: { selectorText: '.hero', selectors: ['.hero'], properties: [], mediaConditions: [], sourceFile: '/workspace/styles.css', sourceLine: 1, sourceCol: 1 },
 					selector: '.hero', specificity: [0, 1, 0] as [number, number, number], mediaConditions: [], matchType: 'definite',
 				}],
 			}]]]),
@@ -1384,7 +1409,7 @@ describe('asset ref hover', () => {
 				element: null, file: 'page.html', partialName: 'test',
 				startLine: 1, startCol: 1, startOffset: 0,
 				matches: [{
-					rule: { selectorText: '.hero', selectors: ['.hero'], properties: [], mediaConditions: [], sourceLine: 1, sourceCol: 1 },
+					rule: { selectorText: '.hero', selectors: ['.hero'], properties: [], mediaConditions: [], sourceFile: '/workspace/styles.css', sourceLine: 1, sourceCol: 1 },
 					selector: '.hero', specificity: [0, 1, 0] as [number, number, number], mediaConditions: [], matchType: 'definite',
 				}],
 			}]]]),
@@ -1411,7 +1436,7 @@ describe('asset ref hover', () => {
 				element: null, file: 'page.html', partialName: 'test',
 				startLine: 1, startCol: 1, startOffset: 0,
 				matches: [{
-					rule: { selectorText: '.hero', selectors: ['.hero'], properties: [], mediaConditions: [], sourceLine: 1, sourceCol: 1 },
+					rule: { selectorText: '.hero', selectors: ['.hero'], properties: [], mediaConditions: [], sourceFile: '/workspace/styles.css', sourceLine: 1, sourceCol: 1 },
 					selector: '.hero', specificity: [0, 1, 0] as [number, number, number], mediaConditions: [], matchType: 'definite',
 				}],
 			}]]]),
@@ -1432,7 +1457,7 @@ describe('asset ref hover', () => {
 				element: null, file: 'page.html', partialName: 'test',
 				startLine: 1, startCol: 1, startOffset: 0,
 				matches: [{
-					rule: { selectorText: '.hero', selectors: ['.hero'], properties: [], mediaConditions: [], sourceLine: 1, sourceCol: 1 },
+					rule: { selectorText: '.hero', selectors: ['.hero'], properties: [], mediaConditions: [], sourceFile: '/workspace/styles.css', sourceLine: 1, sourceCol: 1 },
 					selector: '.hero', specificity: [0, 1, 0] as [number, number, number], mediaConditions: [], matchType: 'definite',
 				}],
 			}]]]),
@@ -1457,7 +1482,7 @@ describe('asset ref hover', () => {
 				element: null, file: 'page.html', partialName: 'test',
 				startLine: 1, startCol: 1, startOffset: 0,
 				matches: [{
-					rule: { selectorText: '.hero', selectors: ['.hero'], properties: [], mediaConditions: [], sourceLine: 1, sourceCol: 1 },
+					rule: { selectorText: '.hero', selectors: ['.hero'], properties: [], mediaConditions: [], sourceFile: '/workspace/styles.css', sourceLine: 1, sourceCol: 1 },
 					selector: '.hero', specificity: [0, 1, 0] as [number, number, number], mediaConditions: [], matchType: 'definite',
 				}],
 			}]]]),
@@ -1481,7 +1506,7 @@ describe('asset ref hover', () => {
 				element: null, file: 'page.html', partialName: 'test',
 				startLine: 1, startCol: 1, startOffset: 0,
 				matches: [{
-					rule: { selectorText: '.hero', selectors: ['.hero'], properties: [], mediaConditions: [], sourceLine: 1, sourceCol: 1 },
+					rule: { selectorText: '.hero', selectors: ['.hero'], properties: [], mediaConditions: [], sourceFile: '/workspace/styles.css', sourceLine: 1, sourceCol: 1 },
 					selector: '.hero', specificity: [0, 1, 0] as [number, number, number], mediaConditions: [], matchType: 'definite',
 				}],
 			}]]]),

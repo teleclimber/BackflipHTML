@@ -648,11 +648,14 @@ export function findElementsForSelector(
 	cssPaths: string[],
 	templateRoot: string,
 ): ElementMatchInfo[] | null {
-	const isCssFile = cssPaths.some(p => {
+	// Which stylesheet is this? Rules carry the absolute path they were parsed
+	// from, so the line alone is not enough to identify a rule — two stylesheets
+	// both have a line 12.
+	const cssPath = cssPaths.find(p => {
 		const rel = path.relative(templateRoot, p);
 		return filePath === rel || filePath === p;
 	});
-	if (!isCssFile) return null;
+	if (!cssPath) return null;
 
 	const lspLine = lspLine0 + 1; // convert to 1-based
 
@@ -661,7 +664,7 @@ export function findElementsForSelector(
 	for (const [_file, elements] of cssAnalysis.elementMatches) {
 		for (const el of elements) {
 			for (const m of el.matches) {
-				if (m.rule.sourceLine === lspLine) {
+				if (m.rule.sourceFile === cssPath && m.rule.sourceLine === lspLine) {
 					matchingElements.push({
 						file: el.file,
 						partialName: el.partialName,

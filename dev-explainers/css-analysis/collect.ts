@@ -483,7 +483,9 @@ export function collectExplain(input: ExplainInput): ExplainPayload {
 	};
 
 	// Step 1 — parse CSS.
-	const rules = timed('parse CSS', () => parseCssFile(input.cssContent));
+	// The explainer still analyses the concatenated stylesheets as one buffer;
+	// its `line` fields are offsets into that join, not into any single file.
+	const { rules } = timed('parse CSS', () => parseCssFile(input.cssContent));
 
 	// Step 2 — expand the render forest.
 	const forest = timed('expand forest', () => buildInstanceForest(input.compiled));

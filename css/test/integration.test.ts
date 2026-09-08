@@ -21,7 +21,8 @@ const TMPDIR = path.join(process.env.TMPDIR || '/tmp/claude-1000/', 'css-render-
 
 async function analyzeFixture(name: string): Promise<CssAnalysisResult> {
 	const dir = path.join(FIXTURES, name);
-	const cssContent = fs.readFileSync(path.join(dir, 'styles.css'), 'utf-8');
+	const cssPath = path.join(dir, 'styles.css');
+	const cssContent = fs.readFileSync(cssPath, 'utf-8');
 	const templatesDir = path.join(dir, 'templates');
 	const templateFiles = new Map<string, string>();
 	for (const file of fs.readdirSync(templatesDir)) {
@@ -29,7 +30,10 @@ async function analyzeFixture(name: string): Promise<CssAnalysisResult> {
 			templateFiles.set(file, fs.readFileSync(path.join(templatesDir, file), 'utf-8'));
 		}
 	}
-	return analyzeCss({ cssContent, compiled: await compileTemplates(templateFiles) });
+	return analyzeCss({
+		files: [{ path: cssPath, content: cssContent }],
+		compiled: await compileTemplates(templateFiles),
+	});
 }
 
 function findMatchedRule(result: CssAnalysisResult, file: string, selector: string) {

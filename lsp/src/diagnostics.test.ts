@@ -1,7 +1,9 @@
 import { describe, it } from 'node:test';
-import { deepStrictEqual, strictEqual } from 'node:assert';
-import { errorsToDiagnostics } from './diagnostics.js';
+import { deepStrictEqual, ok, strictEqual } from 'node:assert';
+import { DiagnosticSeverity } from 'vscode-languageserver';
+import { errorsToDiagnostics, cssFailuresToDiagnostics } from './diagnostics.js';
 import { BackflipError } from '@backflip/html';
+import type { AnalysisFailure } from '@backflip/css';
 
 describe('errorsToDiagnostics', () => {
 	it('converts error with location to diagnostic', () => {
@@ -96,5 +98,78 @@ describe('errorsToDiagnostics', () => {
 			start: { line: 2, character: 4 },
 			end: { line: 3, character: 9 },
 		});
+	});
+});
+
+describe('cssFailuresToDiagnostics', () => {
+	const failure = (over: Partial<AnalysisFailure> = {}): AnalysisFailure => ({
+		reason: 'stylesheet-parse',
+		sourceFile: '/w/styles.css',
+		message: 'Identifier is expected',
+		sourceLine: 2,
+		sourceCol: 5,
+		lostStartLine: 2,
+		lostStartCol: 1,
+		lostEndLine: 3,
+		lostEndCol: 21,
+		...over,
+	});
+
+	it('returns an empty map for no failures', () => {
+		strictEqual(cssFailuresToDiagnostics([]).size, 0);
+	});
+
+	it('keys diagnostics by the stylesheet they came from', () => {
+		const byFile = cssFailuresToDiagnostics([
+			failure(),
+			failure({ sourceFile: '/w/other.css' }),
+		]);
+		deepStrictEqual([...byFile.keys()].sort(), ['/w/other.css', '/w/styles.css']);
+	});
+
+	it('warns rather than errors — the CSS itself still works', () => {
+		const [diag] = cssFailuresToDiagnostics([failure()]).get('/w/styles.css')!;
+		strictEqual(diag.severity, DiagnosticSeverity.Warning);
+		strictEqual(diag.source, 'backflip');
+	});
+
+	it('spans the whole discarded region, converted to 0-based', () => {
+		// The underline is the point: it shows exactly which CSS stopped being
+		// analyzed, rather than pointing at the character that broke the parse.
+		const [diag] = cssFailuresToDiagnostics([failure()]).get('/w/styles.css')!;
+		deepStrictEqual(diag.range, {
+			start: { line: 1, character: 0 },   // lost 2:1
+			end: { line: 2, character: 20 },    // lost 3:21
+		});
+	});
+
+	it('spans a region that runs to the end of the file', () => {
+		const [diag] = cssFailuresToDiagnostics([failure({ lostEndLine: 400, lostEndCol: 1 })]).get('/w/styles.css')!;
+		strictEqual(diag.range.start.line, 1);
+		strictEqual(diag.range.end.line, 399);
+	});
+
+	it('spans a single-line region', () => {
+		const one = failure({ lostStartLine: 1, lostStartCol: 3, lostEndLine: 1, lostEndCol: 10 });
+		const [diag] = cssFailuresToDiagnostics([one]).get('/w/styles.css')!;
+		deepStrictEqual(diag.range, {
+			start: { line: 0, character: 2 },
+			end: { line: 0, character: 9 },
+		});
+		ok(diag.message.includes('(1 line)'), diag.message);
+	});
+
+	it('never emits a zero-width range, which would render as no underline', () => {
+		const empty = failure({ lostStartLine: 2, lostStartCol: 5, lostEndLine: 2, lostEndCol: 5 });
+		const [diag] = cssFailuresToDiagnostics([empty]).get('/w/styles.css')!;
+		strictEqual(diag.range.start.character, 4);
+		strictEqual(diag.range.end.character, 5);
+	});
+
+	it('states the consequence, not just the parser complaint', () => {
+		const [diag] = cssFailuresToDiagnostics([failure()]).get('/w/styles.css')!;
+		ok(diag.message.startsWith('Identifier is expected'), 'leads with the cause');
+		ok(diag.message.includes('2 lines'), `should say how much was lost: ${diag.message}`);
+		ok(diag.message.includes('will not report matches'), 'should say what that means');
 	});
 });

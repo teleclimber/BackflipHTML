@@ -17,10 +17,46 @@ export interface CssRule {
 	properties: CssProperty[];
 	/** Stack of enclosing @media conditions, e.g. ["(min-width: 768px)"] */
 	mediaConditions: string[];
-	/** 1-based line number in the CSS file */
+	/** Absolute path of the stylesheet this rule came from. */
+	sourceFile: string;
+	/** 1-based line number within `sourceFile` */
 	sourceLine: number;
-	/** 1-based column in the CSS file */
+	/** 1-based column within `sourceFile` */
 	sourceCol: number;
+}
+
+// --- Analysis failures ---
+
+/**
+ * Why a piece of CSS could not be analyzed.
+ *
+ * Only `stylesheet-parse` is produced today.
+ */
+export type AnalysisFailureReason =
+	| 'stylesheet-parse';
+
+/**
+ * One region of CSS that was dropped before matching ran.
+ *
+ * css-tree recovers from a syntax error by skipping to a safe point, so a
+ * single bad character can silently discard everything after it. This records
+ * both where parsing broke and how much was lost, so the LSP can say what the
+ * consequence was rather than only quoting the parser.
+ */
+export interface AnalysisFailure {
+	reason: AnalysisFailureReason;
+	/** Absolute path of the stylesheet. */
+	sourceFile: string;
+	/** Message from css-tree, verbatim. */
+	message: string;
+	/** 1-based position where parsing failed. */
+	sourceLine: number;
+	sourceCol: number;
+	/** 1-based extent of the text css-tree discarded as a result. */
+	lostStartLine: number;
+	lostStartCol: number;
+	lostEndLine: number;
+	lostEndCol: number;
 }
 
 // --- Match Result types ---
@@ -63,8 +99,20 @@ export interface CssUrlReference {
 	column: number;
 }
 
+/** One stylesheet to analyze. */
+export interface CssSourceFile {
+	/** Absolute path on disk. Identifies the file in rules and failures. */
+	path: string;
+	content: string;
+}
+
 export interface CssAnalysisInput {
-	cssContent: string;
+	/**
+	 * Stylesheets to match, each parsed on its own. Parsing per file
+	 * keeps positions reportable and stops an unclosed
+	 * brace in one stylesheet from swallowing the start of the next.
+	 */
+	files: CssSourceFile[];
 	/**
 	 * Compiled trees for the templates to match against, keyed by relative path,
 	 * straight from `compileDirectory` / `compileFiles`. Note these must NOT have
@@ -77,6 +125,8 @@ export interface CssAnalysisInput {
 export interface CssAnalysisResult {
 	/** Per-file element CSS match results. Key is filePath. */
 	elementMatches: Map<string, ElementMatches[]>;
-	/** All parsed CSS rules */
+	/** All parsed CSS rules, in file order then source order. */
 	rules: CssRule[];
+	/** CSS that could not be parsed. Empty when every stylesheet parsed cleanly. */
+	failures: AnalysisFailure[];
 }

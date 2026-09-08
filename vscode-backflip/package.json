@@ -102,6 +102,7 @@
   },
   "scripts": {
     "build": "npm run build:server && rollup -c rollup.config.mjs",
+    "package": "vsce package --no-dependencies",
     "build:server": "cd ../lsp && npm run build && mkdir -p ../vscode-backflip/server && cp dist/server.cjs ../vscode-backflip/server/server.cjs",
     "watch": "npx tsc --watch"
   },
@@ -110,10 +111,11 @@
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {
-    "@types/vscode": "^1.85.0",
     "@rollup/plugin-commonjs": "^28.0.0",
     "@rollup/plugin-node-resolve": "^16.0.0",
     "@swc/core": "^1.15.21",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.9.2",
     "rollup": "^4.40.0",
     "rollup-plugin-swc3": "^0.12.1",
     "typescript": "^5.9.3"

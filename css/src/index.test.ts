@@ -351,3 +351,70 @@ describe('render-tree matching across partial, slot and loop boundaries', () => 
 		strictEqual(matchType(negative, 'page.html', 'leaf', '.nope .leaf'), undefined);
 	});
 });
+
+describe('analyzeCss failure reporting', () => {
+	const page = new Map([
+		['page.html', '<div b-name="page"><div class="card"><span class="title">Hi</span></div></div>'],
+	]);
+
+	it('reports no failures for clean CSS', async () => {
+		const result = await analyze({ cssContent: '.card { color: red; }', templateFiles: page });
+		strictEqual(result.failures.length, 0);
+	});
+
+	it('keeps matching the rules it could parse', async () => {
+		// The bad rule kills everything after it, but .card came first and still
+		// matches — a broken stylesheet degrades, it does not abort.
+		const result = await analyze({
+			cssContent: '.card { color: red }\n.a[ { color: red }\n.title { color: blue }',
+			templateFiles: page,
+		});
+
+		strictEqual(result.failures.length, 1);
+		strictEqual(result.failures[0].reason, 'stylesheet-parse');
+
+		const matches = result.elementMatches.get('page.html');
+		ok(matches, 'analysis still ran');
+		ok(matches.some(m => m.matches.some(r => r.selector === '.card')), '.card still matched');
+	});
+
+	it('reports failures even when nothing parsed at all', async () => {
+		// The early return for "no rules" must still carry the reason why.
+		const result = await analyze({ cssContent: '.a[ { color: red }', templateFiles: page });
+		strictEqual(result.rules.length, 0);
+		strictEqual(result.failures.length, 1);
+	});
+
+	it('analyzes each stylesheet separately, so one broken file cannot eat the next', async () => {
+		const { compileTemplates } = await import('./test-helpers.js');
+		const { analyzeCss } = await import('./index.js');
+		const result = analyzeCss({
+			files: [
+				{ path: '/w/broken.css', content: '.card { color: red' },
+				{ path: '/w/good.css', content: '.title { color: blue }' },
+			],
+			compiled: await compileTemplates(page),
+		});
+
+		// Concatenating these would have let the unclosed brace swallow .title.
+		ok(result.rules.some(r => r.selectorText === '.title'), '.title survived the broken file');
+		strictEqual(result.rules.find(r => r.selectorText === '.title')!.sourceFile, '/w/good.css');
+		ok(result.failures.every(f => f.sourceFile === '/w/broken.css'), 'failure blamed on the right file');
+	});
+
+	it('reports line numbers relative to each file, not a concatenation', async () => {
+		const { compileTemplates } = await import('./test-helpers.js');
+		const { analyzeCss } = await import('./index.js');
+		const result = analyzeCss({
+			files: [
+				{ path: '/w/a.css', content: '.one { color: red }\n.two { color: red }' },
+				{ path: '/w/b.css', content: '.title { color: blue }' },
+			],
+			compiled: await compileTemplates(page),
+		});
+
+		const title = result.rules.find(r => r.selectorText === '.title')!;
+		strictEqual(title.sourceFile, '/w/b.css');
+		strictEqual(title.sourceLine, 1, 'line 1 of its own file, not line 3 of a join');
+	});
+});

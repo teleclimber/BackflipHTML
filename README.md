@@ -87,6 +87,35 @@ Tools that show how a subsystem reaches its results, for people working on that 
 - [Preview](docs/preview.md) — preview system, programmatic API, VSCode integration
 
 
+## Building
+
+```bash
+npm run build            # compiler + runtime + preview -> dist/
+npm run build:extension  # the above, plus the LSP server and the VS Code .vsix
+```
+
+`build:extension` is the full build. It runs the root `tsc`, then
+`vscode-backflip`'s build (which builds the LSP server via `lsp/build.mjs` and
+copies `server.cjs` into the extension), then packages
+`vscode-backflip/vscode-backflip-0.1.0.vsix`.
+
+Install the result with:
+
+```bash
+code --install-extension vscode-backflip/vscode-backflip-0.1.0.vsix --force
+```
+
+then reload the VS Code window. **The extension loads its own bundled copy of
+the server**, so editing `lsp/src/` changes nothing in the editor until you
+rebuild *and* reinstall — a rebuilt `vscode-backflip/server/server.cjs` on its
+own is not what VS Code runs.
+
+Packaging needs `@vscode/vsce`, a devDependency of `vscode-backflip`. If
+`npm run build:extension` ends in `vsce: not found`, run `npm install` in
+`vscode-backflip/`. Note that failure comes *last*, after every compile step has
+already succeeded — so the artifacts all look freshly built while the `.vsix`
+silently stays stale.
+
 ## Testing
 
 From the repo root, run compiler, runtime, preview, and integration tests via Deno:

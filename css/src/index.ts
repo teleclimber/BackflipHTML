@@ -5,18 +5,21 @@ export type {
 	ElementMatches,
 	CssAnalysisInput,
 	CssAnalysisResult,
+	CssSourceFile,
 	CssUrlReference,
+	AnalysisFailure,
+	AnalysisFailureReason,
 } from './types.js';
 
 export { discoverCssFiles, type CssFileRef } from './discover.js';
 export { extractAssetUrlsFromCss } from './urls.js';
 
-import type { CssAnalysisInput, CssAnalysisResult } from './types.js';
+import type { AnalysisFailure, CssAnalysisInput, CssAnalysisResult, CssRule } from './types.js';
 import { parseCssFile } from './parse-css.js';
 import { buildInstanceForest, MAX_INSTANCES } from './instance-tree.js';
 import { matchSelectors } from './selector-match.js';
 
-export { parseCssFile } from './parse-css.js';
+export { parseCssFile, type CssParseResult } from './parse-css.js';
 export {
 	attrIndexOf, buildAttrIndex, tagNameOf, isElementLike,
 	type ElementLikeTNode, type AttrIndex,
@@ -30,19 +33,30 @@ export {
 /**
  * Match a stylesheet against a compiled template directory.
  *
- * Four steps: parse the CSS, expand the compiled trees into the render forest,
- * match every selector against every instance, and report one entry per source
- * element. See `css/README.md` for what the model does and does not capture.
+ * Four steps: parse each stylesheet, expand the compiled trees into the render
+ * forest, match every selector against every instance, and report one entry per
+ * source element. See `css/README.md` for what the model does and does not
+ * capture.
+ *
+ * Stylesheets are parsed one at a time so every rule carries the file it came
+ * from. `failures` reports CSS that could not be parsed; it is never fatal, and
+ * a stylesheet that fails outright still leaves the others analyzed.
  */
 export function analyzeCss(input: CssAnalysisInput): CssAnalysisResult {
-	const { cssContent, compiled } = input;
+	const { files, compiled } = input;
 	const timings: string[] = [];
 	let t = performance.now();
 
-	const rules = parseCssFile(cssContent);
-	timings.push(`parse-css: ${(performance.now() - t).toFixed(0)}ms`);
+	const rules: CssRule[] = [];
+	const failures: AnalysisFailure[] = [];
+	for (const file of files) {
+		const parsed = parseCssFile(file.content, file.path);
+		rules.push(...parsed.rules);
+		failures.push(...parsed.failures);
+	}
+	timings.push(`parse-css: ${(performance.now() - t).toFixed(0)}ms (${files.length} file(s))`);
 	if (rules.length === 0) {
-		return { elementMatches: new Map(), rules };
+		return { elementMatches: new Map(), rules, failures };
 	}
 
 	t = performance.now();
@@ -58,5 +72,5 @@ export function analyzeCss(input: CssAnalysisInput): CssAnalysisResult {
 
 	console.log(`[backflip] css analysis breakdown: ${timings.join(', ')}`);
 
-	return { elementMatches, rules };
+	return { elementMatches, rules, failures };
 }

@@ -4,7 +4,7 @@ import { parseCssFile } from './parse-css.js';
 
 describe('parseCssFile', () => {
 	it('parses a simple rule', () => {
-		const rules = parseCssFile('.card { color: red; }');
+		const { rules } = parseCssFile('.card { color: red; }');
 		strictEqual(rules.length, 1);
 		strictEqual(rules[0].selectorText, '.card');
 		deepStrictEqual(rules[0].selectors, ['.card']);
@@ -13,20 +13,20 @@ describe('parseCssFile', () => {
 	});
 
 	it('parses multiple selectors (comma-separated)', () => {
-		const rules = parseCssFile('.card, .panel { color: red; }');
+		const { rules } = parseCssFile('.card, .panel { color: red; }');
 		strictEqual(rules.length, 1);
 		deepStrictEqual(rules[0].selectors, ['.card', '.panel']);
 	});
 
 	it('parses multiple rules', () => {
-		const rules = parseCssFile('.card { color: red; } .panel { color: blue; }');
+		const { rules } = parseCssFile('.card { color: red; } .panel { color: blue; }');
 		strictEqual(rules.length, 2);
 		strictEqual(rules[0].selectors[0], '.card');
 		strictEqual(rules[1].selectors[0], '.panel');
 	});
 
 	it('parses @media wrapping', () => {
-		const rules = parseCssFile('@media (min-width:768px) { .card { color: red; } }');
+		const { rules } = parseCssFile('@media (min-width:768px) { .card { color: red; } }');
 		strictEqual(rules.length, 1);
 		deepStrictEqual(rules[0].mediaConditions, ['(min-width:768px)']);
 		strictEqual(rules[0].selectors[0], '.card');
@@ -34,14 +34,14 @@ describe('parseCssFile', () => {
 
 	it('parses nested @media', () => {
 		const css = '@media screen { @media (min-width:768px) { .card { color: red; } } }';
-		const rules = parseCssFile(css);
+		const { rules } = parseCssFile(css);
 		strictEqual(rules.length, 1);
 		deepStrictEqual(rules[0].mediaConditions, ['screen', '(min-width:768px)']);
 	});
 
 	it('tracks source locations', () => {
 		const css = '.card { color: red; }\n.panel { color: blue; }';
-		const rules = parseCssFile(css);
+		const { rules } = parseCssFile(css);
 		strictEqual(rules[0].sourceLine, 1);
 		strictEqual(rules[0].sourceCol, 1);
 		strictEqual(rules[1].sourceLine, 2);
@@ -49,11 +49,11 @@ describe('parseCssFile', () => {
 	});
 
 	it('returns empty array for empty file', () => {
-		deepStrictEqual(parseCssFile(''), []);
+		deepStrictEqual(parseCssFile('').rules, []);
 	});
 
 	it('returns empty array for comments only', () => {
-		deepStrictEqual(parseCssFile('/* just a comment */'), []);
+		deepStrictEqual(parseCssFile('/* just a comment */').rules, []);
 	});
 
 	it('skips @keyframes and @font-face', () => {
@@ -62,13 +62,13 @@ describe('parseCssFile', () => {
 			@font-face { font-family: MyFont; src: url(font.woff2); }
 			.card { color: red; }
 		`;
-		const rules = parseCssFile(css);
+		const { rules } = parseCssFile(css);
 		strictEqual(rules.length, 1);
 		strictEqual(rules[0].selectors[0], '.card');
 	});
 
 	it('extracts multiple properties', () => {
-		const rules = parseCssFile('.card { color: red; font-size: 14px; margin: 0 auto; }');
+		const { rules } = parseCssFile('.card { color: red; font-size: 14px; margin: 0 auto; }');
 		strictEqual(rules[0].properties.length, 3);
 		strictEqual(rules[0].properties[0].name, 'color');
 		strictEqual(rules[0].properties[1].name, 'font-size');
@@ -77,10 +77,109 @@ describe('parseCssFile', () => {
 
 	it('rules outside @media have empty mediaConditions', () => {
 		const css = '.a { color: red; } @media print { .b { color: blue; } } .c { color: green; }';
-		const rules = parseCssFile(css);
+		const { rules } = parseCssFile(css);
 		strictEqual(rules.length, 3);
 		deepStrictEqual(rules[0].mediaConditions, []);
 		deepStrictEqual(rules[1].mediaConditions, ['print']);
 		deepStrictEqual(rules[2].mediaConditions, []);
+	});
+});
+
+describe('parseCssFile failures', () => {
+	it('reports nothing for a clean stylesheet', () => {
+		const { failures } = parseCssFile('.card { color: red; }\n.panel { color: blue; }');
+		deepStrictEqual(failures, []);
+	});
+
+	it('reports a malformed selector, and says what it swallowed', () => {
+		const css = '.first { color: red }\n.a[ { color: red }\n.last { color: blue }';
+		const { rules, failures } = parseCssFile(css, '/w/styles.css');
+
+		// The damage: css-tree stops at the bad bracket, so .last never parses.
+		deepStrictEqual(rules.map(r => r.selectorText), ['.first']);
+
+		strictEqual(failures.length, 1);
+		strictEqual(failures[0].reason, 'stylesheet-parse');
+		strictEqual(failures[0].sourceFile, '/w/styles.css');
+		strictEqual(failures[0].message, 'Identifier is expected');
+		strictEqual(failures[0].sourceLine, 2);
+		strictEqual(failures[0].sourceCol, 5);
+		// The lost region reaches the end of the file — that is why .last is gone.
+		strictEqual(failures[0].lostStartLine, 2);
+		strictEqual(failures[0].lostEndLine, 3);
+	});
+
+	it('collapses the several errors one bad construct raises into one region', () => {
+		// A missing brace reports both the unexpected token and the '{' never
+		// found; both resolve to the same discarded text.
+		const css = '.first { color: red }\n.mid { color: green \n.last { color: blue }';
+		const { failures } = parseCssFile(css, '/w/styles.css');
+		strictEqual(failures.length, 1);
+		strictEqual(failures[0].message, 'Unexpected input');
+	});
+
+	it('merges overlapping regions, keeping the cause and the widest extent', () => {
+		// With a trailing newline this raises two errors whose regions overlap:
+		// 2:1-3:23 then 2:1-4:1. They are one piece of damage, and reporting both
+		// would underline the same CSS twice.
+		const css = '.card { color: red }\n.a[ { color: red }\n.title { color: blue }\n';
+		const { failures } = parseCssFile(css, '/w/styles.css');
+
+		strictEqual(failures.length, 1);
+		// The first message names the actual cause, not the knock-on complaint.
+		strictEqual(failures[0].message, 'Identifier is expected');
+		// The region grows to everything that was dropped.
+		strictEqual(failures[0].lostStartLine, 2);
+		strictEqual(failures[0].lostStartCol, 1);
+		strictEqual(failures[0].lostEndLine, 4);
+	});
+
+	it('keeps disjoint regions apart', () => {
+		// Two independent breakages in separate blocks are two real failures.
+		const css = [
+			'.one {',
+			'  .bare { color: red }',
+			'}',
+			'.two { color: blue }',
+			'.three {',
+			'  .alsoBare { color: teal }',
+			'}',
+		].join('\n');
+		const { failures } = parseCssFile(css, '/w/styles.css');
+		strictEqual(failures.length, 2);
+		strictEqual(failures[0].lostStartLine, 2);
+		strictEqual(failures[1].lostStartLine, 6);
+	});
+
+	it('reports an unparseable selector prelude', () => {
+		const { failures } = parseCssFile('.a:: { color: red }', '/w/styles.css');
+		strictEqual(failures.length, 1);
+		strictEqual(failures[0].reason, 'stylesheet-parse');
+		strictEqual(failures[0].sourceLine, 1);
+	});
+
+	it('reports a nested rule that does not start with &', () => {
+		// css-tree only recognizes &-prefixed nesting; a bare nested selector is
+		// discarded along with everything after it in the block.
+		const css = '.card {\n  color: red;\n  .direct { color: teal }\n  & .ok { color: blue }\n}\n.after { color: green }';
+		const { rules, failures } = parseCssFile(css, '/w/styles.css');
+
+		deepStrictEqual(rules.map(r => r.selectorText), ['.card', '.after']);
+		strictEqual(failures.length, 1);
+		strictEqual(failures[0].sourceLine, 3);
+		// Contained to the block: `.after` still parsed.
+		strictEqual(failures[0].lostStartLine, 3);
+		strictEqual(failures[0].lostEndLine, 4);
+	});
+
+	it('reports failures per file, with no position when the file is unnamed', () => {
+		const { failures } = parseCssFile('.a[ { color: red }');
+		strictEqual(failures.length, 1);
+		strictEqual(failures[0].sourceFile, '');
+	});
+
+	it('tags every rule with the file it was parsed from', () => {
+		const { rules } = parseCssFile('.a { color: red }', '/w/site.css');
+		strictEqual(rules[0].sourceFile, '/w/site.css');
 	});
 });
