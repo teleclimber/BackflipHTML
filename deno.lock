@@ -5,11 +5,11 @@
     "jsr:@std/cli@^1.0.28": "1.0.28",
     "jsr:@std/fmt@^1.0.9": "1.0.9",
     "jsr:@std/internal@^1.0.12": "1.0.12",
+    "npm:@eslint/css-tree@^4.1.0": "4.1.0",
     "npm:@types/jsdom@^28.0.1": "28.0.1",
     "npm:acorn@*": "8.16.0",
     "npm:acorn@^8.16.0": "8.16.0",
     "npm:css-select@7": "7.0.0",
-    "npm:css-tree@^3.2.1": "3.2.1",
     "npm:css-what@8": "8.0.0",
     "npm:jsdom@*": "29.0.1",
     "npm:jsdom@^29.0.1": "29.0.1",
@@ -239,6 +239,13 @@
       "os": ["win32"],
       "cpu": ["x64"]
     },
+    "@eslint/css-tree@4.1.0": {
+      "integrity": "sha512-cg0ohyrAG3swyGqt8t1K/OK97DqBw/ftDvlvyY1fmEst5B40UOmsimwLENq74z2dyw5CDM+3zJIW+CV2nFNDdA==",
+      "dependencies": [
+        "mdn-data@2.34.0",
+        "source-map-js"
+      ]
+    },
     "@exodus/bytes@1.15.0": {
       "integrity": "sha512-UY0nlA+feH81UGSHv92sLEPLCeZFjXOuHhrIo0HQydScuQc8s0A7kL/UdgwgDq8g8ilksmuoF35YVTNphV2aBQ=="
     },
@@ -429,6 +436,9 @@
     "mdn-data@2.27.1": {
       "integrity": "sha512-9Yubnt3e8A0OKwxYSXyhLymGW4sCufcLG6VdiDdUGVkPhpqLxlvP5vl1983gQjJl3tqbrM731mjaZaP68AgosQ=="
     },
+    "mdn-data@2.34.0": {
+      "integrity": "sha512-OgIlLv0NxJKVW4GTSAoEgpRGd4F2XCqGinK0MsMlBCCS/Zcm2/LsbercNWNA7PeMMcjl75NnI97eqyo7zkdxWA=="
+    },
     "nth-check@3.0.1": {
       "integrity": "sha512-GX0gsdbGVCgnRgbeGaubfjpBXyYRWOOCVeYh08bSQvDZqxz5ndXs1OTfAt/h36G1xvI94YIspsI0sVFqAV9+RQ==",
       "dependencies": [
@@ -565,9 +575,9 @@
     "dependencies": [
       "jsr:@std/assert@*",
       "jsr:@std/cli@^1.0.28",
+      "npm:@eslint/css-tree@^4.1.0",
       "npm:acorn@*",
       "npm:css-select@7",
-      "npm:css-tree@^3.2.1",
       "npm:css-what@8",
       "npm:parse5-html-rewriting-stream@*",
       "npm:parse5@^7.2.1",

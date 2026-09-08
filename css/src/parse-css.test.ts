@@ -75,6 +75,17 @@ describe('parseCssFile', () => {
 		strictEqual(rules[0].properties[2].name, 'margin');
 	});
 
+	it('parses nested rules, with or without a leading &', () => {
+		const css = '.card {\n  color: red;\n  .direct { color: teal }\n  & .ok { color: blue }\n}\n.after { color: green }';
+		const { rules, failures } = parseCssFile(css, '/w/styles.css');
+
+		deepStrictEqual(failures, []);
+		// Nested selectors are reported as written — relative to their parent,
+		// not resolved against it. Matching compiles each selector on its own,
+		// so a relative one simply matches nothing.
+		deepStrictEqual(rules.map(r => r.selectorText), ['.card', '.direct', '& .ok', '.after']);
+	});
+
 	it('rules outside @media have empty mediaConditions', () => {
 		const css = '.a { color: red; } @media print { .b { color: blue; } } .c { color: green; }';
 		const { rules } = parseCssFile(css);
@@ -110,12 +121,21 @@ describe('parseCssFile failures', () => {
 	});
 
 	it('collapses the several errors one bad construct raises into one region', () => {
-		// A missing brace reports both the unexpected token and the '{' never
-		// found; both resolve to the same discarded text.
-		const css = '.first { color: red }\n.mid { color: green \n.last { color: blue }';
-		const { failures } = parseCssFile(css, '/w/styles.css');
+		// One malformed media feature raises three errors: what the parser
+		// wanted, the unexpected input, and the ')' never found. Two of them
+		// arrive with no fallback node at all — nothing was identified as
+		// discarded — and the third covers the whole prelude, bridging them.
+		const css = '@media (min-width:) { .a { color: red } }\n.two { color: blue }';
+		const { rules, failures } = parseCssFile(css, '/w/styles.css');
+
 		strictEqual(failures.length, 1);
-		strictEqual(failures[0].message, 'Unexpected input');
+		// The first message reported names what the parser was actually after.
+		strictEqual(failures[0].message, 'Number, dimension, ratio or identifier is expected');
+		// The region covers the prelude, not just the point of the last complaint.
+		strictEqual(failures[0].lostStartLine, 1);
+		strictEqual(failures[0].lostStartCol, 8);
+		// Damage is contained to the at-rule: everything after it still parses.
+		ok(rules.some(r => r.selectorText === '.two'));
 	});
 
 	it('merges overlapping regions, keeping the cause and the widest extent', () => {
@@ -135,20 +155,21 @@ describe('parseCssFile failures', () => {
 	});
 
 	it('keeps disjoint regions apart', () => {
-		// Two independent breakages in separate blocks are two real failures.
+		// Two independent breakages are two real failures. Each empty pseudo
+		// costs only its own prelude, so parsing recovers in between.
 		const css = [
-			'.one {',
-			'  .bare { color: red }',
-			'}',
-			'.two { color: blue }',
-			'.three {',
-			'  .alsoBare { color: teal }',
-			'}',
+			'.a:: { color: red }',
+			'.b { color: blue }',
+			'.c:: { color: teal }',
+			'.d { color: pink }',
 		].join('\n');
-		const { failures } = parseCssFile(css, '/w/styles.css');
+		const { rules, failures } = parseCssFile(css, '/w/styles.css');
 		strictEqual(failures.length, 2);
-		strictEqual(failures[0].lostStartLine, 2);
-		strictEqual(failures[1].lostStartLine, 6);
+		strictEqual(failures[0].lostStartLine, 1);
+		strictEqual(failures[1].lostStartLine, 3);
+		// The rules between and after the breakages survive.
+		ok(rules.some(r => r.selectorText === '.b'));
+		ok(rules.some(r => r.selectorText === '.d'));
 	});
 
 	it('reports an unparseable selector prelude', () => {
@@ -156,20 +177,6 @@ describe('parseCssFile failures', () => {
 		strictEqual(failures.length, 1);
 		strictEqual(failures[0].reason, 'stylesheet-parse');
 		strictEqual(failures[0].sourceLine, 1);
-	});
-
-	it('reports a nested rule that does not start with &', () => {
-		// css-tree only recognizes &-prefixed nesting; a bare nested selector is
-		// discarded along with everything after it in the block.
-		const css = '.card {\n  color: red;\n  .direct { color: teal }\n  & .ok { color: blue }\n}\n.after { color: green }';
-		const { rules, failures } = parseCssFile(css, '/w/styles.css');
-
-		deepStrictEqual(rules.map(r => r.selectorText), ['.card', '.after']);
-		strictEqual(failures.length, 1);
-		strictEqual(failures[0].sourceLine, 3);
-		// Contained to the block: `.after` still parsed.
-		strictEqual(failures[0].lostStartLine, 3);
-		strictEqual(failures[0].lostEndLine, 4);
 	});
 
 	it('reports failures per file, with no position when the file is unnamed', () => {

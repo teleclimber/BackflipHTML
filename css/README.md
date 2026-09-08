@@ -8,7 +8,7 @@ This is a separate Node.js package used by the [LSP server](../lsp/README.md) to
 
 `analyzeCss()` takes a list of stylesheets — `{ path, content }` each — plus the **compiled trees** for a template directory (`Map<relative path, CompiledFile>`, straight from the compiler's `compileDirectory` / `compileFiles`) and runs four steps:
 
-1. **Parse CSS** — parses rules and media conditions using css-tree, one stylesheet at a time
+1. **Parse CSS** — parses rules and media conditions using `@eslint/css-tree`, one stylesheet at a time
 2. **Build the instance forest** — expands the compiled trees into the tree the runtime would render
 3. **Match** — runs every selector against every instance with css-select and a custom adapter
 4. **Aggregate** — folds the instances of each source element back into one result, with specificity and a match type
@@ -34,7 +34,10 @@ not just point at where the parse broke.
 
 One malformed construct can raise several css-tree errors covering overlapping
 text. Those are merged into one failure, keeping the first message (which names
-the cause) and widening the region to everything dropped.
+the cause) and widening the region to everything dropped. Merging uses inclusive
+bounds, because css-tree reports some errors with no fallback node at all — there
+is nothing it identified as discarded — and those are recorded as an empty region
+at the error itself.
 
 Failures are never fatal. Rules that parsed before the failure still match, other
 stylesheets are unaffected, and a stylesheet that fails on line 1 still returns
@@ -43,12 +46,24 @@ its failure alongside an empty rule list.
 Two shapes come through this channel today, both from css-tree:
 
 - a **syntax error at the top level**, whose lost region runs to the end of the file
-- a **nested rule that does not start with `&`** — css-tree only recognizes
-  `&`-prefixed nesting, so a bare nested selector is dropped along with the rest
-  of its block. `.card { .direct { … } }` loses `.direct`; `.card { &.direct { … } }` does not.
+- a **malformed prelude** — a bad at-rule condition or an empty pseudo — whose
+  lost region is contained, so parsing recovers and later rules still match.
 
 Selectors that parse but that css-select refuses to compile are *not* reported
 here yet; they are still dropped silently in `compileSelector`.
+
+### Nested rules
+
+`@eslint/css-tree` parses CSS Nesting, with or without a leading `&`, so a nested
+rule reaches `CssRule` rather than being discarded. Its `selectorText` is **as
+written** — relative to the parent, not resolved against it. `.card { .direct { … } }`
+yields two rules, `.card` and `.direct`, and nothing records that the second is
+scoped to the first.
+
+Matching compiles each selector on its own, so `.direct` matches every `.direct`
+in the project rather than only those inside `.card`, and a selector css-select
+cannot compile at all — `& .ok` — is skipped silently. Resolving nested selectors
+against their parent is not implemented yet.
 
 ### The instance model
 
@@ -117,7 +132,7 @@ per-instance trace for any selector — use
 
 ## Dependencies
 
-- **css-tree** — CSS parsing and AST
+- **@eslint/css-tree** — CSS parsing and AST (ESLint's fork of `css-tree`, kept current with the CSS specs and shipping its own types)
 - **css-select** — CSS selector compilation and matching
 - **css-what** — CSS selector parsing
 - **specificity** — CSS specificity calculation

@@ -17,16 +17,17 @@ The server requires a `backflip.json` in the workspace root to activate (see [`d
 
 ### CSS parse warnings
 
-Malformed CSS makes css-tree skip to a recovery point, so rules after the
-problem are never analyzed and simply stop reporting matches. The server
-publishes those as **warnings on the stylesheet itself**, underlining the entire
-skipped region so it is obvious which rules stopped being analyzed, with the
-parser's own complaint and the line count in the message.
+Malformed CSS makes the parser (`@eslint/css-tree`) skip to a recovery point, so
+rules after the problem are never analyzed and simply stop reporting matches. The
+server publishes those as **warnings on the stylesheet itself**, underlining the
+entire skipped region so it is obvious which rules stopped being analyzed, with
+the parser's own complaint and the line count in the message.
 
-One bad character usually discards everything after it, so expect the underline
-to run to the end of the file. Where css-tree raises several errors for the same
-damage, the regions are merged before publishing, so the same CSS is never
-underlined twice.
+How much is lost depends on where the break is: a bad selector at the top level
+usually discards everything after it, so expect the underline to run to the end
+of the file, while a malformed prelude costs only its own rule and parsing
+recovers. Where the parser raises several errors for the same damage, the regions
+are merged before publishing, so the same CSS is never underlined twice.
 
 They are warnings rather than errors on purpose: the stylesheet still ships and
 still works in a browser: what is degraded is Backflip's view of it. Nothing

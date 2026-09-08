@@ -1,5 +1,15 @@
-import * as csstree from 'css-tree';
+import * as csstree from '@eslint/css-tree';
 import type { AnalysisFailure, CssRule, CssProperty } from './types.js';
+
+/** Byte offsets and 1-based line/column bounds of one discarded region. */
+interface LostRegion {
+	start: number;
+	end: number;
+	startLine: number;
+	startCol: number;
+	endLine: number;
+	endCol: number;
+}
 
 export interface CssParseResult {
 	rules: CssRule[];
@@ -13,7 +23,9 @@ export interface CssParseResult {
  * css-tree never throws on malformed CSS — it skips to a recovery point and
  * carries on with fewer rules. `onParseError` is the only way to learn that
  * happened, and its second argument is the node css-tree fell back to, whose
- * location is the extent of the discarded text.
+ * location is the extent of the discarded text. That node is typed as always
+ * present but is null when the parser had nothing to fall back to (a malformed
+ * at-rule prelude, say), so the error's own position stands in for it.
  */
 export function parseCssFile(cssContent: string, sourceFile = ''): CssParseResult {
 	const rules: CssRule[] = [];
@@ -23,30 +35,60 @@ export function parseCssFile(cssContent: string, sourceFile = ''): CssParseResul
 	// a missing brace reports both the unexpected token and the brace it never
 	// found, and css-tree widens the region it discards as it recovers. Those
 	// are one failure, not several, so overlapping regions merge into the first
-	// — which keeps the message naming the actual cause, while the region grows
-	// to the full extent of what was dropped.
-	const spans: { start: number; end: number; failure: AnalysisFailure }[] = [];
+	// reported — which keeps the message naming the actual cause, while the
+	// region grows to the full extent of what was dropped.
+	//
+	// Bounds are inclusive: an error the parser reports with no fallback node
+	// contributes an empty region, and an empty region overlaps nothing under
+	// strict comparison, so it would survive as a second warning underlining
+	// text the merged one already covers.
+	const spans: { region: LostRegion; failure: AnalysisFailure }[] = [];
+
+	/** Grow `span` to also cover `region`, keeping its failure's bounds in step. */
+	const absorb = (span: (typeof spans)[number], region: LostRegion) => {
+		if (region.start < span.region.start) {
+			span.region.start = region.start;
+			span.region.startLine = span.failure.lostStartLine = region.startLine;
+			span.region.startCol = span.failure.lostStartCol = region.startCol;
+		}
+		if (region.end > span.region.end) {
+			span.region.end = region.end;
+			span.region.endLine = span.failure.lostEndLine = region.endLine;
+			span.region.endCol = span.failure.lostEndCol = region.endCol;
+		}
+	};
 
 	const ast = csstree.parse(cssContent, {
 		positions: true,
-		onParseError(error: csstree.SyntaxParseError, fallbackNode: csstree.CssNode) {
-			const lost = fallbackNode.loc;
-			if (!lost) return;
+		onParseError(error: csstree.SyntaxParseError, fallbackNode: csstree.CssNode | null) {
+			// No fallback node, or one parsed without positions: nothing was
+			// identified as discarded, so the failure collapses onto the error
+			// itself. Consumers widen an empty region for display.
+			const lost = fallbackNode?.loc ?? {
+				start: { offset: error.offset, line: error.line, column: error.column },
+				end: { offset: error.offset, line: error.line, column: error.column },
+			};
 
-			const start = lost.start.offset;
-			const end = lost.end.offset;
+			const region: LostRegion = {
+				start: lost.start.offset,
+				end: lost.end.offset,
+				startLine: lost.start.line,
+				startCol: lost.start.column,
+				endLine: lost.end.line,
+				endCol: lost.end.column,
+			};
 
-			const overlapping = spans.find(s => start < s.end && end > s.start);
-			if (overlapping) {
-				if (start < overlapping.start) {
-					overlapping.start = start;
-					overlapping.failure.lostStartLine = lost.start.line;
-					overlapping.failure.lostStartCol = lost.start.column;
-				}
-				if (end > overlapping.end) {
-					overlapping.end = end;
-					overlapping.failure.lostEndLine = lost.end.line;
-					overlapping.failure.lostEndCol = lost.end.column;
+			// A region can bridge two spans that were disjoint until now — the
+			// widening error arrives after the pinpoint ones it spans. Keep the
+			// earliest, since its message named the cause, and fold the rest in.
+			const touching = spans.filter(s => region.start <= s.region.end && region.end >= s.region.start);
+			if (touching.length > 0) {
+				const [keep, ...merged] = touching;
+				absorb(keep, region);
+				for (const other of merged) {
+					absorb(keep, other.region);
+					spans.splice(spans.indexOf(other), 1);
+					failures.splice(failures.indexOf(other.failure), 1);
 				}
 				return;
 			}
@@ -57,12 +99,12 @@ export function parseCssFile(cssContent: string, sourceFile = ''): CssParseResul
 				message: error.message,
 				sourceLine: error.line,
 				sourceCol: error.column,
-				lostStartLine: lost.start.line,
-				lostStartCol: lost.start.column,
-				lostEndLine: lost.end.line,
-				lostEndCol: lost.end.column,
+				lostStartLine: region.startLine,
+				lostStartCol: region.startCol,
+				lostEndLine: region.endLine,
+				lostEndCol: region.endCol,
 			};
-			spans.push({ start, end, failure });
+			spans.push({ region, failure });
 			failures.push(failure);
 		},
 	});

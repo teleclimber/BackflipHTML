@@ -1,4 +1,4 @@
-import * as csstree from 'css-tree';
+import * as csstree from '@eslint/css-tree';
 import type { CssUrlReference } from './types.js';
 
 /**
