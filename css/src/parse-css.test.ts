@@ -75,15 +75,82 @@ describe('parseCssFile', () => {
 		strictEqual(rules[0].properties[2].name, 'margin');
 	});
 
-	it('parses nested rules, with or without a leading &', () => {
+	it('resolves nested rules against their parent, with or without a leading &', () => {
 		const css = '.card {\n  color: red;\n  .direct { color: teal }\n  & .ok { color: blue }\n}\n.after { color: green }';
 		const { rules, failures } = parseCssFile(css, '/w/styles.css');
 
 		deepStrictEqual(failures, []);
-		// Nested selectors are reported as written — relative to their parent,
-		// not resolved against it. Matching compiles each selector on its own,
-		// so a relative one simply matches nothing.
-		deepStrictEqual(rules.map(r => r.selectorText), ['.card', '.direct', '& .ok', '.after']);
+		// A bare nested selector means a descendant of the parent, which is the
+		// same thing `&` in that position means.
+		deepStrictEqual(rules.map(r => r.selectorText), ['.card', '.card .direct', '.card .ok', '.after']);
+	});
+
+	it('resolves & in a compound onto the parent element itself', () => {
+		const { rules } = parseCssFile('.card { &:hover { color: teal } &.featured { color: blue } }');
+		deepStrictEqual(rules.map(r => r.selectorText), ['.card', '.card:hover', '.card.featured']);
+	});
+
+	it('resolves & wherever it appears, including more than once', () => {
+		const { rules } = parseCssFile('.card { .outer & { color: teal } & + & { color: blue } }');
+		deepStrictEqual(rules.map(r => r.selectorText), ['.card', '.outer .card', '.card+.card']);
+	});
+
+	it('wraps a multi-selector parent in :is()', () => {
+		// `:is()` keeps one nested rule as one rule, and takes the specificity of
+		// its most specific argument — which is what the nesting spec says `&`
+		// scores. Expanding into one rule per parent would get both wrong.
+		const { rules } = parseCssFile('.card, .panel { .direct { color: teal } &:hover { color: blue } }');
+		deepStrictEqual(rules.map(r => r.selectorText), [
+			'.card,.panel',
+			':is(.card,.panel) .direct',
+			':is(.card,.panel):hover',
+		]);
+	});
+
+	it('resolves each selector of a nested selector list', () => {
+		const { rules } = parseCssFile('.card { .a, .b { color: teal } }');
+		deepStrictEqual(rules[1].selectors, ['.card .a', '.card .b']);
+		strictEqual(rules[1].selectorText, '.card .a,.card .b');
+	});
+
+	it('resolves nesting to any depth, one level at a time', () => {
+		const { rules } = parseCssFile('.a, .b { .c { .d { color: teal } } }');
+		// The parent is already absolute, so `.d` resolves against `:is(.a,.b) .c`
+		// as a whole rather than re-expanding the grandparent.
+		deepStrictEqual(rules.map(r => r.selectorText), ['.a,.b', ':is(.a,.b) .c', ':is(.a,.b) .c .d']);
+	});
+
+	it('leaves an ampersand that is only text alone', () => {
+		// Substitution is on the AST, where `&` is a NestingSelector node. A
+		// string replace would corrupt this attribute value.
+		const { rules } = parseCssFile('.card { [data-q="a&b"] { color: teal } }');
+		strictEqual(rules[1].selectorText, '.card [data-q="a&b"]');
+	});
+
+	it('combines a nested rule with an enclosing @media', () => {
+		const css = '.card { @media (min-width:700px) { .inner { color: teal } } }';
+		const { rules } = parseCssFile(css);
+		strictEqual(rules[1].selectorText, '.card .inner');
+		deepStrictEqual(rules[1].mediaConditions, ['(min-width:700px)']);
+	});
+
+	it('resolves nested rules inside an @media block', () => {
+		const { rules } = parseCssFile('@media print { .card { .inner { color: teal } } }');
+		deepStrictEqual(rules.map(r => r.selectorText), ['.card', '.card .inner']);
+		deepStrictEqual(rules[1].mediaConditions, ['print']);
+	});
+
+	it('leaves a top-level & alone, having no parent to resolve against', () => {
+		const { rules } = parseCssFile('& .ok { color: teal }');
+		deepStrictEqual(rules.map(r => r.selectorText), ['& .ok']);
+	});
+
+	it('keeps the selector stack balanced across a skipped at-rule', () => {
+		// @keyframes is skipped wholesale; its `from`/`to` are Rule nodes that
+		// must not be pushed, or every later rule would resolve against them.
+		const css = '@keyframes spin { from { opacity: 0 } to { opacity: 1 } }\n.card { .x { color: red } }';
+		const { rules } = parseCssFile(css);
+		deepStrictEqual(rules.map(r => r.selectorText), ['.card', '.card .x']);
 	});
 
 	it('rules outside @media have empty mediaConditions', () => {

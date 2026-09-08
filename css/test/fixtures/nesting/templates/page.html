@@ -1,0 +1,19 @@
+<div b-name="page">
+  <div class="card featured" data-mark="card">
+    <span class="direct" data-mark="direct-in">in</span>
+    <span class="amp" data-mark="amp-in">in</span>
+    <div class="inner" data-mark="inner">
+      <span class="deep" data-mark="deep-in">in</span>
+    </div>
+    <span class="responsive" data-mark="responsive-in">in</span>
+  </div>
+
+  <!-- decoys: same classes, outside .card, so scoping is actually tested -->
+  <span class="direct" data-mark="direct-out">out</span>
+  <span class="amp" data-mark="amp-out">out</span>
+  <span class="deep" data-mark="deep-out">out</span>
+
+  <div class="alpha" data-mark="alpha"><span class="shared" data-mark="shared-alpha">a</span></div>
+  <div class="beta" data-mark="beta"><span class="shared" data-mark="shared-beta">b</span></div>
+  <span class="shared" data-mark="shared-out">out</span>
+</div>

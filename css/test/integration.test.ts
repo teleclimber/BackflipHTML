@@ -552,3 +552,72 @@ describe('integration: mixed-doc-fragment (document and fragment partials in one
 	});
 });
 
+
+describe('integration: nesting', () => {
+	let result: CssAnalysisResult;
+	let doc: Document;
+
+	before(async () => {
+		result = await analyzeFixture('nesting');
+		const modules = await compileFixture('nesting');
+		doc = renderToDoc(modules, 'page.html', 'page');
+	});
+
+	// Every assertion below queries jsdom with the *resolved* selector, so a
+	// real CSS engine is the judge of whether resolution was correct — not just
+	// a string comparison against what we expected to produce.
+
+	it('resolves every nested rule against its parent', () => {
+		deepStrictEqual(result.rules.map(r => r.selectorText), [
+			'.card',
+			'.card .direct',
+			'.card .amp',
+			'.card.featured',
+			'.card .inner',
+			'.card .inner .deep',
+			'.card .responsive',
+			'.alpha,.beta',
+			':is(.alpha,.beta) .shared',
+		]);
+	});
+
+	it('scopes a bare nested selector to the parent, same as jsdom', () => {
+		// The decoy `.direct` outside `.card` must not match.
+		assertCssEqualsJsdom(result, doc, 'page.html', '.card .direct');
+		strictEqual(cssMarks(result, 'page.html', '.card .direct').has('direct-out'), false);
+	});
+
+	it('scopes an &-prefixed nested selector to the parent, same as jsdom', () => {
+		assertCssEqualsJsdom(result, doc, 'page.html', '.card .amp');
+		strictEqual(cssMarks(result, 'page.html', '.card .amp').has('amp-out'), false);
+	});
+
+	it('resolves & in a compound onto the parent element itself, same as jsdom', () => {
+		assertCssEqualsJsdom(result, doc, 'page.html', '.card.featured');
+	});
+
+	it('resolves two levels of nesting, same as jsdom', () => {
+		assertCssEqualsJsdom(result, doc, 'page.html', '.card .inner .deep');
+		strictEqual(cssMarks(result, 'page.html', '.card .inner .deep').has('deep-out'), false);
+	});
+
+	it('wraps a multi-selector parent in :is(), same as jsdom', () => {
+		assertCssEqualsJsdom(result, doc, 'page.html', ':is(.alpha,.beta) .shared');
+		strictEqual(cssMarks(result, 'page.html', ':is(.alpha,.beta) .shared').has('shared-out'), false);
+	});
+
+	it('gives :is() the specificity of the parent, not of a bare descendant', () => {
+		const rule = findMatchedRule(result, 'page.html', ':is(.alpha,.beta) .shared');
+		ok(rule);
+		// `.alpha .shared` would score the same; `:is()` must not add a level.
+		deepStrictEqual(rule.specificity, [0, 2, 0]);
+	});
+
+	it('carries both the parent selector and the media condition, same as jsdom', () => {
+		assertCssEqualsJsdom(result, doc, 'page.html', '.card .responsive');
+		const rule = findMatchedRule(result, 'page.html', '.card .responsive');
+		ok(rule);
+		ok(rule.mediaConditions.some(c => c.includes('min-width')),
+			'a rule nested inside @media inside a rule keeps both');
+	});
+});

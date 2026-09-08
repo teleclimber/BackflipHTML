@@ -18,6 +18,44 @@ export interface CssParseResult {
 }
 
 /**
+ * The text a nested rule's `&` stands for.
+ *
+ * Per CSS Nesting, `&` means `:is(<parent selector list>)` — which also gives it
+ * the specificity of the most specific parent selector, where expanding into one
+ * rule per parent would not. A single parent needs no wrapper: `:is(.card)` and
+ * `.card` match and score identically, and the bare form is what an author wrote
+ * and what the LSP shows on hover.
+ */
+function nestingText(parentSelectors: string[]): string {
+	return parentSelectors.length === 1 ? parentSelectors[0] : `:is(${parentSelectors.join(',')})`;
+}
+
+/**
+ * Resolve one nested selector against its parent.
+ *
+ * Substitution is done on the AST, never on the generated string: `&` is a
+ * `NestingSelector` node, so an ampersand that is merely *text* — `[data-q="a&b"]`
+ * — is left alone, which a string replace would corrupt. A selector with no `&`
+ * of its own is a descendant of the parent, which is what the spec says a bare
+ * nested selector means.
+ */
+function resolveNested(selector: csstree.CssNode, parentText: string): string {
+	const copy = csstree.clone(selector);
+	let sawNesting = false;
+
+	csstree.walk(copy, {
+		visit: 'NestingSelector',
+		enter(_node: csstree.CssNode, item, list) {
+			sawNesting = true;
+			list.replace(item, csstree.List.createItem<csstree.CssNode>({ type: 'Raw', value: parentText }));
+		},
+	});
+
+	const text = csstree.generate(copy);
+	return sawNesting ? text : `${parentText} ${text}`;
+}
+
+/**
  * Parse one stylesheet into rules, reporting what could not be parsed.
  *
  * css-tree never throws on malformed CSS — it skips to a recovery point and
@@ -110,6 +148,11 @@ export function parseCssFile(cssContent: string, sourceFile = ''): CssParseResul
 	});
 
 	const mediaStack: string[] = [];
+	// Resolved selector lists of the enclosing rules, innermost last. A nested
+	// rule is a `Rule` inside its parent's `Block`, so this is pushed and popped
+	// exactly like `mediaStack` — the walk already had the shape nesting needs.
+	// Entries are already absolute, so resolving is only ever one level deep.
+	const selectorStack: string[][] = [];
 	const skipAtrules = new Set(['keyframes', 'font-face', 'import', 'charset', 'namespace']);
 
 	csstree.walk(ast, {
@@ -124,19 +167,28 @@ export function parseCssFile(cssContent: string, sourceFile = ''): CssParseResul
 			}
 
 			if (node.type === 'Rule') {
-				const selectorText = csstree.generate(node.prelude);
+				const parent = selectorStack[selectorStack.length - 1];
+				const parentText = parent ? nestingText(parent) : null;
 
-				// Extract individual selectors from the SelectorList
+				// Extract individual selectors from the SelectorList, resolving
+				// each against the enclosing rule. At the top level there is no
+				// parent, and a stray `&` there simply fails to compile later.
 				const selectors: string[] = [];
 				if (node.prelude.type === 'SelectorList') {
 					node.prelude.children.forEach((selector: csstree.CssNode) => {
-						selectors.push(csstree.generate(selector));
+						selectors.push(parentText === null
+							? csstree.generate(selector)
+							: resolveNested(selector, parentText));
 					});
 				} else {
-					selectors.push(selectorText);
+					selectors.push(csstree.generate(node.prelude));
 				}
 
-				// Extract declarations
+				// Every rule pushes, nested or not, so `leave` can pop blindly.
+				selectorStack.push(selectors);
+
+				// Extract declarations. Nested rules are `Rule` children of the
+				// same block and are picked up by the walk, not from here.
 				const properties: CssProperty[] = [];
 				if (node.block) {
 					node.block.children.forEach((child: csstree.CssNode) => {
@@ -151,7 +203,7 @@ export function parseCssFile(cssContent: string, sourceFile = ''): CssParseResul
 
 				const loc = node.loc;
 				rules.push({
-					selectorText,
+					selectorText: selectors.join(','),
 					selectors,
 					properties,
 					mediaConditions: [...mediaStack],
@@ -164,6 +216,8 @@ export function parseCssFile(cssContent: string, sourceFile = ''): CssParseResul
 		leave(node: csstree.CssNode) {
 			if (node.type === 'Atrule' && node.name === 'media') {
 				mediaStack.pop();
+			} else if (node.type === 'Rule') {
+				selectorStack.pop();
 			}
 		},
 	});

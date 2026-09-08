@@ -12,6 +12,7 @@ function makeRule(selector: string, props: Record<string, string> = {}, media: s
 		selectors: selector.split(',').map(s => s.trim()),
 		properties: Object.entries(props).map(([name, value]) => ({ name, value })),
 		mediaConditions: media,
+		sourceFile: '',
 		sourceLine: 1,
 		sourceCol: 1,
 	};

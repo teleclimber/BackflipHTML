@@ -1,0 +1,41 @@
+.card {
+  color: red;
+
+  /* bare nested selector: a descendant of the parent */
+  .direct {
+    color: teal;
+  }
+
+  /* explicit & in the same descendant position */
+  & .amp {
+    color: blue;
+  }
+
+  /* & in a compound: the parent element itself, further qualified */
+  &.featured {
+    color: purple;
+  }
+
+  /* two levels down */
+  .inner {
+    border: 0;
+
+    .deep {
+      color: olive;
+    }
+  }
+
+  /* nesting and @media combine */
+  @media (min-width: 700px) {
+    .responsive {
+      color: gray;
+    }
+  }
+}
+
+/* a nested rule under a multi-selector parent */
+.alpha, .beta {
+  .shared {
+    color: brown;
+  }
+}

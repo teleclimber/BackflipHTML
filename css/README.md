@@ -54,16 +54,36 @@ here yet; they are still dropped silently in `compileSelector`.
 
 ### Nested rules
 
-`@eslint/css-tree` parses CSS Nesting, with or without a leading `&`, so a nested
-rule reaches `CssRule` rather than being discarded. Its `selectorText` is **as
-written** — relative to the parent, not resolved against it. `.card { .direct { … } }`
-yields two rules, `.card` and `.direct`, and nothing records that the second is
-scoped to the first.
+CSS Nesting is parsed and **resolved against the enclosing rule**, so every
+`CssRule.selectorText` that leaves the parser is absolute and can be matched on
+its own. `.card { .direct { … } }` yields `.card` and `.card .direct`.
 
-Matching compiles each selector on its own, so `.direct` matches every `.direct`
-in the project rather than only those inside `.card`, and a selector css-select
-cannot compile at all — `& .ok` — is skipped silently. Resolving nested selectors
-against their parent is not implemented yet.
+A nested rule is a `Rule` inside its parent's `Block`, so `parseCssFile` keeps a
+stack of resolved parent selectors and pushes/pops it exactly as it already does
+for `@media` — the two combine, so a rule nested inside `@media` inside a rule
+carries both. Resolution is one level deep at each step, because the parent on
+the stack is already absolute.
+
+| Written | Resolved |
+|---|---|
+| `.card { .direct { … } }` | `.card .direct` |
+| `.card { & .ok { … } }` | `.card .ok` |
+| `.card { &.featured { … } }` | `.card.featured` |
+| `.card { .outer & { … } }` | `.outer .card` |
+| `.a, .b { .c { … } }` | `:is(.a,.b) .c` |
+
+A multi-selector parent becomes `:is(…)` rather than one rule per parent. That
+keeps one authored rule as one `CssRule` — so hover and match counts reflect what
+was written — and it is what the spec scores: `&` takes the specificity of the
+*most specific* parent selector, which `:is()` does and per-parent expansion does
+not. A single parent needs no wrapper, so the common case stays readable.
+
+Two details worth knowing:
+
+- **Substitution is on the AST, not the string.** `&` is a `NestingSelector` node,
+  so an ampersand that is only text — `[data-q="a&b"]` — is left intact.
+- **A top-level `&` has no parent** and is left as written. It will not compile in
+  css-select, so it is skipped silently at match time.
 
 ### The instance model
 
