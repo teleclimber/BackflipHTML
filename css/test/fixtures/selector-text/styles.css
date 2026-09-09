@@ -1,0 +1,28 @@
+/* Selectors whose authored text differs from what csstree.generate would emit.
+   Each must reach the matcher exactly as written here. */
+
+/* `of S`: generate emits `of.x`, which css-select's nthOfRegex refuses */
+li:nth-child(2 of .x) {
+  color: red;
+}
+
+li:nth-last-child(1 of .x) {
+  color: maroon;
+}
+
+/* whitespace the author chose, around a combinator generate would collapse */
+.a  +  .b {
+  color: blue;
+}
+
+/* a comment inside a selector: dropped, and not turned into a separator */
+.list /* which items */ .x {
+  color: teal;
+}
+
+/* nesting keeps the authored text on both sides of the substitution */
+.list {
+  & > li  +  li {
+    color: green;
+  }
+}

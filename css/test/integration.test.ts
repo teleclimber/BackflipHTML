@@ -621,3 +621,55 @@ describe('integration: nesting', () => {
 			'a rule nested inside @media inside a rule keeps both');
 	});
 });
+
+describe('integration: selector-text (authored selector text reaches the matcher)', () => {
+	let result: CssAnalysisResult;
+	let doc: Document;
+
+	before(async () => {
+		result = await analyzeFixture('selector-text');
+		const modules = await compileFixture('selector-text');
+		doc = renderToDoc(modules, 'page.html', 'page');
+	});
+
+	// jsdom is the judge throughout: every selector below is queried against a
+	// real CSS engine with the same text we hand to css-select.
+
+	it('reports selectors as authored, not as csstree.generate would emit them', () => {
+		deepStrictEqual(result.rules.map(r => r.selectorText), [
+			'li:nth-child(2 of .x)',
+			'li:nth-last-child(1 of .x)',
+			'.a  +  .b',
+			'.list  .x',
+			'.list',
+			'.list > li  +  li',
+		]);
+	});
+
+	it('matches :nth-child(An+B of S), which was silently dropped before', () => {
+		// generate emitted `2 of.x`; css-select threw and selector-match ate it,
+		// so the rule matched nothing at all.
+		assertCssEqualsJsdom(result, doc, 'page.html', 'li:nth-child(2 of .x)');
+		deepStrictEqual(cssMarks(result, 'page.html', 'li:nth-child(2 of .x)'), new Set(['x2']));
+	});
+
+	it('matches :nth-last-child(An+B of S)', () => {
+		assertCssEqualsJsdom(result, doc, 'page.html', 'li:nth-last-child(1 of .x)');
+		deepStrictEqual(cssMarks(result, 'page.html', 'li:nth-last-child(1 of .x)'), new Set(['x3']));
+	});
+
+	it('matches through authored whitespace around a combinator', () => {
+		assertCssEqualsJsdom(result, doc, 'page.html', '.a  +  .b');
+	});
+
+	it('matches a selector that carried a comment, without the comment becoming a combinator', () => {
+		// The comment leaves its surrounding spaces behind, which a real CSS
+		// engine reads exactly as it reads a single one.
+		assertCssEqualsJsdom(result, doc, 'page.html', '.list  .x');
+		strictEqual(cssMarks(result, 'page.html', '.list  .x').has('x-out'), false);
+	});
+
+	it('resolves nesting while keeping the authored spacing on both sides', () => {
+		assertCssEqualsJsdom(result, doc, 'page.html', '.list > li  +  li');
+	});
+});

@@ -92,7 +92,7 @@ describe('parseCssFile', () => {
 
 	it('resolves & wherever it appears, including more than once', () => {
 		const { rules } = parseCssFile('.card { .outer & { color: teal } & + & { color: blue } }');
-		deepStrictEqual(rules.map(r => r.selectorText), ['.card', '.outer .card', '.card+.card']);
+		deepStrictEqual(rules.map(r => r.selectorText), ['.card', '.outer .card', '.card + .card']);
 	});
 
 	it('wraps a multi-selector parent in :is()', () => {
@@ -255,5 +255,72 @@ describe('parseCssFile failures', () => {
 	it('tags every rule with the file it was parsed from', () => {
 		const { rules } = parseCssFile('.a { color: red }', '/w/site.css');
 		strictEqual(rules[0].sourceFile, '/w/site.css');
+	});
+});
+
+describe('parseCssFile selector text', () => {
+	// Selector text is sliced from the source, not regenerated. These cases are
+	// the ones where `csstree.generate` produces something different from what
+	// the author wrote — and, in the first group, something css-select refuses.
+
+	it('keeps the space after `of` in :nth-child(An+B of S)', () => {
+		// `csstree.generate` emits `of.x`, which is legal CSS but which
+		// css-select's nthOfRegex (/^(.+?)\s+of\s+(.+)$/is) will not match, so
+		// the whole selector was silently dropped from analysis.
+		const cases = [
+			'li:nth-child(2 of .x)',
+			'li:nth-child(2 of #x)',
+			'li:nth-child(2 of [data-x])',
+			'li:nth-child(2 of :hover)',
+			'li:nth-child(2n + 1 of .x)',
+			'li:nth-last-child(1 of .x)',
+			'li:nth-child(2 of .x, li)',
+			'li:nth-child(2 of li)',
+		];
+		for (const selector of cases) {
+			const { rules } = parseCssFile(`${selector} { color: red }`);
+			strictEqual(rules[0].selectorText, selector, `authored text preserved for ${selector}`);
+		}
+	});
+
+	it('keeps authored whitespace around combinators', () => {
+		const { rules } = parseCssFile('.field:checked + .lbl { color: red }\n.a > .b { color: red }\n.c ~ .d { color: red }');
+		deepStrictEqual(rules.map(r => r.selectorText), ['.field:checked + .lbl', '.a > .b', '.c ~ .d']);
+	});
+
+	it('keeps a selector that spans lines, and splits a list on its commas', () => {
+		const { rules } = parseCssFile('.a,\n   .b   ,\n.c { color: red }');
+		deepStrictEqual(rules[0].selectors, ['.a', '.b', '.c']);
+	});
+
+	it('drops comments from selector text, as the parser does', () => {
+		// A comment is not a separator in CSS, so removing it must not add one:
+		// `.a/* x */.b` is the compound `.a.b`, `.a /* x */ .b` is a descendant.
+		// The whitespace that surrounded the comment is authored text and stays;
+		// collapsing it would be the normalization this whole path avoids.
+		const { rules } = parseCssFile('.a /* mid */ .b { color: red }\n.a/* x */.b { color: red }');
+		deepStrictEqual(rules.map(r => r.selectorText), ['.a  .b', '.a.b']);
+	});
+
+	it('drops a comment from a nested selector, and from the parent it resolves against', () => {
+		const { rules } = parseCssFile('.card /* p */ .outer { & /* n */ .inner { color: red } }');
+		deepStrictEqual(rules.map(r => r.selectorText), ['.card  .outer', '.card  .outer  .inner']);
+	});
+
+	it('leaves a comment-like attribute value alone', () => {
+		// Comment bounds come from the parser, which never sees `/*` inside a
+		// string. A regex over the source slice would eat the attribute.
+		const { rules } = parseCssFile('[data-q="/* not a comment */"] { color: red }');
+		deepStrictEqual(rules.map(r => r.selectorText), ['[data-q="/* not a comment */"]']);
+	});
+
+	it('keeps authored text on both sides of a nesting substitution', () => {
+		const { rules } = parseCssFile('.a  +  .b { & > .c { color: red } }');
+		deepStrictEqual(rules.map(r => r.selectorText), ['.a  +  .b', '.a  +  .b > .c']);
+	});
+
+	it('substitutes & inside a functional pseudo without regenerating the rest', () => {
+		const { rules } = parseCssFile('.card { :is(& .x, .y  +  .z) { color: red } }');
+		deepStrictEqual(rules[1].selectors, [':is(.card .x, .y  +  .z)']);
 	});
 });

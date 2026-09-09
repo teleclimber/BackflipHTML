@@ -240,7 +240,7 @@ describe('collectExplain: match types', () => {
 
 	it('is conditional for a positional selector over a b-for body', () => {
 		strictEqual(match('tag', '.tag:first-child').hits, 1);
-		strictEqual(match('tag', '.tag+.tag').hits, 2);
+		strictEqual(match('tag', '.tag + .tag').hits, 2);
 		strictEqual(match('tag', '.tag:first-child').matchType, 'conditional');
 	});
 

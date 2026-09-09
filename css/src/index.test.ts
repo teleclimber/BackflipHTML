@@ -284,7 +284,7 @@ describe('render-tree matching across partial, slot and loop boundaries', () => 
 				'</div>',
 			].join('\n')]]),
 		});
-		strictEqual(matchType(result, 'page.html', 'body', '.hd+.body'), 'definite');
+		strictEqual(matchType(result, 'page.html', 'body', '.hd + .body'), 'definite');
 	});
 
 	it('resolves :has() into a partial used below the subject', async () => {
@@ -313,10 +313,10 @@ describe('render-tree matching across partial, slot and loop boundaries', () => 
 				'<div b-name="card" class="card">c</div>',
 			].join('\n')]]),
 		});
-		strictEqual(matchType(result, 'page.html', 'lead', '.wrap>:first-child'), 'definite');
-		strictEqual(matchType(result, 'page.html', 'card', '.wrap>:first-child'), undefined,
+		strictEqual(matchType(result, 'page.html', 'lead', '.wrap > :first-child'), 'definite');
+		strictEqual(matchType(result, 'page.html', 'card', '.wrap > :first-child'), undefined,
 			'the partial root renders inside .slot-wrap, so it is no child of .wrap at all');
-		strictEqual(matchType(result, 'page.html', 'slot-wrap', '.wrap>:nth-child(2)'), 'definite');
+		strictEqual(matchType(result, 'page.html', 'slot-wrap', '.wrap > :nth-child(2)'), 'definite');
 	});
 
 	it('models a b-for body as several iterations', async () => {
@@ -328,7 +328,7 @@ describe('render-tree matching across partial, slot and loop boundaries', () => 
 				'</div>',
 			].join('\n')]]),
 		});
-		strictEqual(matchType(result, 'page.html', 'item', '.item+.item'), 'conditional',
+		strictEqual(matchType(result, 'page.html', 'item', '.item + .item'), 'conditional',
 			'a looped element follows a copy of itself in all but the first iteration');
 		strictEqual(matchType(result, 'page.html', 'item', '.item:first-child'), 'conditional',
 			'a looped element is only first in the first iteration');

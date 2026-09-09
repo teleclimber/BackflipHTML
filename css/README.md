@@ -52,6 +52,30 @@ Two shapes come through this channel today, both from css-tree:
 Selectors that parse but that css-select refuses to compile are *not* reported
 here yet; they are still dropped silently in `compileSelector`.
 
+### Selector text
+
+`CssRule.selectors` carries each selector **as authored**, sliced from the source
+rather than regenerated from the AST. Two things are patched into that slice,
+both located by AST node so neither is found by searching the text: comments are
+removed, and `&` is replaced by the enclosing rule (see below).
+
+This is not cosmetic. `csstree.generate` normalizes whitespace, and one of those
+normalizations produces text css-select cannot read: `:nth-child(2 of .x)` comes
+back as `:nth-child(2 of.x)`. That is legal CSS — `.` cannot continue an
+identifier — but css-select matches the `of` clause with a regex demanding
+whitespace on both sides, so it threw, `compileSelector` swallowed the throw, and
+the rule matched nothing at all. The same round-trip also dropped the author's
+spacing around combinators (`.a + .b` became `.a+.b`), which is what the LSP
+shows on hover.
+
+A comment is not a separator in CSS, so it is replaced with nothing rather than
+with a space: `.a/* x */.b` is the compound `.a.b`. Whitespace that surrounded a
+comment is authored text and stays, so `.a /* x */ .b` becomes `.a  .b` — two
+spaces, which any CSS engine reads as the one descendant combinator it is.
+
+`@media` conditions are still generated rather than sliced; they never reach
+css-select.
+
 ### Nested rules
 
 CSS Nesting is parsed and **resolved against the enclosing rule**, so every
@@ -80,8 +104,9 @@ not. A single parent needs no wrapper, so the common case stays readable.
 
 Two details worth knowing:
 
-- **Substitution is on the AST, not the string.** `&` is a `NestingSelector` node,
-  so an ampersand that is only text — `[data-q="a&b"]` — is left intact.
+- **Substitution is located by AST node, not by string search.** `&` is a
+  `NestingSelector` node, so an ampersand that is only text — `[data-q="a&b"]` —
+  is left intact, and the authored text on either side of it is untouched.
 - **A top-level `&` has no parent** and is left as written. It will not compile in
   css-select, so it is skipped silently at match time.
 
