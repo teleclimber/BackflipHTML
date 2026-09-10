@@ -7,7 +7,7 @@
 - **Diagnostics** — red underlines for template compilation errors, and warnings on CSS files whose syntax stopped the analyzer
 - **Go to Definition** — click a `b-part` reference to jump to the `b-name` definition, or click a custom element partial tag (e.g. `<my-card>`) to jump to its definition
 - **Find All References** — from a `b-name` definition, find all `b-part` usages
-- **Document Symbols** — lists partials in the editor outline/breadcrumbs
+- **Document Symbols** — lists partials in the editor outline/breadcrumbs, each spanning its whole definition so breadcrumbs track the cursor anywhere inside a partial
 - **Hover (HTML)** — hover over `b-part`, `b-name`, `b-in`, `b-slot`, `b-data:` attributes, custom element partial tags (e.g. `<my-card>`), or HTML elements to see directive info and matching CSS rules
 - **Hover (CSS)** — hover over a selector in a CSS file to see which partials contain matching elements
 
@@ -41,6 +41,20 @@ selector — see [CSS parse warnings](#css-parse-warnings).
 
 Note that relaxation *widens* what a hover lists: `a:hover` and `a:visited` both
 show every link, and a bare `::selection` shows every element.
+
+### Symbol ranges
+
+A partial's symbol spans the whole definition — opening `<` through the end of
+the closing tag — while its `selectionRange` covers just the name: the
+`b-name="..."` attribute, or the open tag for a custom element partial. The wide
+range is what makes breadcrumbs track the cursor as it moves through a partial's
+body, and what lets the extension answer "which partial is the cursor in?" for
+**Preview Partial** rather than only on the definition line.
+
+The compiler reports that extent as file offsets (`PartialMeta`), so converting
+it needs the open document. Without one — or for a definition whose closing tag
+was never found, which leaves no usable extent — both ranges fall back to the
+name span.
 
 ### CSS parse warnings
 
@@ -83,7 +97,7 @@ File changes trigger recompilation with a 300ms debounce. The server runs its ow
 | `src/hover.ts` | Hover information for directives and CSS selectors |
 | `src/definition.ts` | Go-to-definition for `b-part` → `b-name` |
 | `src/references.ts` | Find-references for partial usage |
-| `src/symbols.ts` | Document symbols: lists partials in file |
+| `src/symbols.ts` | Document symbols: lists partials in file, with full-definition ranges |
 | `src/diagnostics.ts` | Compilation error and CSS parse failure → LSP diagnostic conversion |
 | `build.mjs` | Rollup build script (bundles to `dist/server.cjs`) |
 

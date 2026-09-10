@@ -423,7 +423,9 @@ connection.onDocumentSymbol((params: DocumentSymbolParams) => {
 	const filePath = uri.replace('file://', '');
 	const relPath = path.relative(templateRoot, filePath);
 
-	return getDocumentSymbols(relPath, projectIndex);
+	// The document supplies the offset→position conversion for each partial's
+	// extent; without it the symbols fall back to name-only ranges.
+	return getDocumentSymbols(relPath, projectIndex, documents.get(uri));
 });
 
 // Hover: show info for b-directives

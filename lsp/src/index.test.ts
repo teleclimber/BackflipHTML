@@ -4,6 +4,8 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { buildIndex } from './index.js';
 import { findDefinition } from './definition.js';
+import { getDocumentSymbols } from './symbols.js';
+import { TextDocument } from 'vscode-languageserver-textdocument';
 // Runs against the built @backflip/html dist (like the LSP server itself);
 // rebuild the root package (`npm run build`) after compiler changes.
 import { compileDirectory } from '@backflip/html';
@@ -192,5 +194,84 @@ describe('buildIndex', () => {
 		const index = buildIndex(dir);
 		deepStrictEqual(index.partialRefs[0].dataBindings, ['title', 'items']);
 		deepStrictEqual(index.partialRefs[0].slotsFilled, ['default', 'header']);
+	});
+});
+
+describe('buildIndex — partial extents', () => {
+	const HTML = [
+		'<div b-name="first">',       // line 1
+		'  <p>hello</p>',             // line 2
+		'  <p>still first</p>',       // line 3
+		'</div>',                     // line 4
+		'<my-widget b-attr:label>',   // line 5
+		'  <b>{{ label }}</b>',       // line 6
+		'</my-widget>',               // line 7
+	].join('\n');
+
+	async function compiled(): Promise<{ index: ReturnType<typeof buildIndex>; html: string }> {
+		const dir = path.join('/tmp/claude-1000', `lsp_index_extent_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+		await fs.mkdir(dir, { recursive: true });
+		try {
+			await fs.writeFile(path.join(dir, 'page.html'), HTML, 'utf-8');
+			const { directory } = await compileDirectory(dir);
+			return { index: buildIndex(directory as CompiledDirectory), html: HTML };
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	}
+
+	it('records the full file-relative extent of every partial', async () => {
+		const { index, html } = await compiled();
+
+		const first = index.partialDefs.get('first')![0];
+		strictEqual(first.extent!.startOffset, 0);
+		strictEqual(html.slice(first.extent!.startOffset, first.extent!.endOffset).endsWith('</div>'), true);
+
+		// The second partial is compiled from a slice, so its offsets must be
+		// rebased to the whole file rather than starting at 0 again.
+		const widget = index.partialDefs.get('my-widget')![0];
+		strictEqual(widget.extent!.startOffset, html.indexOf('<my-widget'));
+		strictEqual(html.slice(widget.extent!.startOffset, widget.extent!.endOffset), [
+			'<my-widget b-attr:label>',
+			'  <b>{{ label }}</b>',
+			'</my-widget>',
+		].join('\n'));
+	});
+
+	it('produces symbol ranges that contain every line of their partial', async () => {
+		// The bug: `range` was the b-name attribute span, so it covered only the
+		// definition line. The extension finds the partial under the cursor by
+		// testing the cursor line against this range (Preview Partial), and the
+		// outline/breadcrumbs use it too — both worked on one line per partial.
+		const { index, html } = await compiled();
+		const doc = TextDocument.create('file:///page.html', 'html', 1, html);
+		const symbols = getDocumentSymbols('page.html', index, doc);
+
+		const partialAtLine = (line0: number) =>
+			symbols.find(s => line0 >= s.range.start.line && line0 <= s.range.end.line)?.name ?? null;
+
+		strictEqual(partialAtLine(0), 'first');
+		strictEqual(partialAtLine(1), 'first');
+		strictEqual(partialAtLine(2), 'first');
+		strictEqual(partialAtLine(3), 'first');
+		strictEqual(partialAtLine(4), 'my-widget');
+		strictEqual(partialAtLine(5), 'my-widget');
+		strictEqual(partialAtLine(6), 'my-widget');
+	});
+
+	it('keeps selectionRange on the definition name and inside range', async () => {
+		const { index, html } = await compiled();
+		const doc = TextDocument.create('file:///page.html', 'html', 1, html);
+		const symbols = getDocumentSymbols('page.html', index, doc);
+
+		for (const sym of symbols) {
+			const { range: r, selectionRange: sr } = sym;
+			strictEqual(r.start.line <= sr.start.line, true, `${sym.name}: selectionRange starts before range`);
+			strictEqual(r.end.line >= sr.end.line, true, `${sym.name}: selectionRange ends after range`);
+		}
+
+		// `first` is a b-name partial: the name range is the attribute itself.
+		const first = symbols.find(s => s.name === 'first')!;
+		strictEqual(doc.getText(first.selectionRange), 'b-name="first"');
 	});
 });
