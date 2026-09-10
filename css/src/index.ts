@@ -1,6 +1,7 @@
 export type {
 	CssRule,
 	CssProperty,
+	SelectorLoc,
 	MatchedRule,
 	ElementMatches,
 	CssAnalysisInput,
@@ -12,6 +13,16 @@ export type {
 } from './types.js';
 
 export { discoverCssFiles, type CssFileRef } from './discover.js';
+export {
+	relaxSelector,
+	type RelaxedSelector,
+	type StrippedPseudo,
+} from './relax-selector.js';
+export {
+	PSEUDO_CATEGORIES,
+	categoryOf,
+	type PseudoCategory,
+} from './pseudo-categories.js';
 export { extractAssetUrlsFromCss } from './urls.js';
 
 import type { AnalysisFailure, CssAnalysisInput, CssAnalysisResult, CssRule } from './types.js';
@@ -39,8 +50,9 @@ export {
  * capture.
  *
  * Stylesheets are parsed one at a time so every rule carries the file it came
- * from. `failures` reports CSS that could not be parsed; it is never fatal, and
- * a stylesheet that fails outright still leaves the others analyzed.
+ * from. `failures` reports CSS that could not be analyzed — a region css-tree
+ * could not parse, or a single selector the matcher cannot read. Neither is
+ * fatal: a stylesheet that fails outright still leaves the others analyzed.
  */
 export function analyzeCss(input: CssAnalysisInput): CssAnalysisResult {
 	const { files, compiled } = input;
@@ -67,10 +79,11 @@ export function analyzeCss(input: CssAnalysisInput): CssAnalysisResult {
 	}
 
 	t = performance.now();
-	const elementMatches = matchSelectors(rules, forest);
+	const matched = matchSelectors(rules, forest);
+	failures.push(...matched.failures);
 	timings.push(`match-selectors: ${(performance.now() - t).toFixed(0)}ms`);
 
 	console.log(`[backflip] css analysis breakdown: ${timings.join(', ')}`);
 
-	return { elementMatches, rules, failures };
+	return { elementMatches: matched.elementMatches, rules, failures };
 }

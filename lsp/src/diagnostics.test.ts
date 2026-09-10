@@ -172,4 +172,53 @@ describe('cssFailuresToDiagnostics', () => {
 		ok(diag.message.includes('2 lines'), `should say how much was lost: ${diag.message}`);
 		ok(diag.message.includes('will not report matches'), 'should say what that means');
 	});
+
+	// --- A selector the matcher cannot read ---
+
+	const badSelector = (over: Partial<AnalysisFailure> = {}): AnalysisFailure => failure({
+		reason: 'selector-parse',
+		message: 'Backflip cannot parse the selector `.a:brand-new-pseudo`',
+		sourceLine: 4,
+		sourceCol: 8,
+		lostStartLine: 4,
+		lostStartCol: 8,
+		lostEndLine: 4,
+		lostEndCol: 8 + '.a:brand-new-pseudo'.length,
+		...over,
+	});
+
+	it('underlines just the selector, converted to 0-based', () => {
+		const [diag] = cssFailuresToDiagnostics([badSelector()]).get('/w/styles.css')!;
+		deepStrictEqual(diag.range, {
+			start: { line: 3, character: 7 },
+			end: { line: 3, character: 7 + '.a:brand-new-pseudo'.length },
+		});
+	});
+
+	it('warns rather than errors on a bad selector too — the rest of the file is fine', () => {
+		const [diag] = cssFailuresToDiagnostics([badSelector()]).get('/w/styles.css')!;
+		strictEqual(diag.severity, DiagnosticSeverity.Warning);
+		strictEqual(diag.source, 'backflip');
+	});
+
+	it('says the rule will not report matches, and never quotes a line count', () => {
+		// The line count belongs to a skipped region. One selector is not a
+		// region, and "(1 line)" on a squiggle this narrow reads as a bug.
+		const [diag] = cssFailuresToDiagnostics([badSelector()]).get('/w/styles.css')!;
+		ok(diag.message.startsWith('Backflip cannot parse the selector'), diag.message);
+		ok(diag.message.includes('will not report matches'), diag.message);
+		ok(!diag.message.includes('line'), `no line count on a selector: ${diag.message}`);
+	});
+
+	it('never emits a zero-width range for a selector it could not locate', () => {
+		const nowhere = badSelector({ lostStartCol: 3, lostEndCol: 3 });
+		const [diag] = cssFailuresToDiagnostics([nowhere]).get('/w/styles.css')!;
+		strictEqual(diag.range.start.character, 2);
+		strictEqual(diag.range.end.character, 3);
+	});
+
+	it('publishes both kinds against the same stylesheet', () => {
+		const diags = cssFailuresToDiagnostics([failure(), badSelector()]).get('/w/styles.css')!;
+		strictEqual(diags.length, 2);
+	});
 });

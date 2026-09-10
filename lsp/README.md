@@ -11,23 +11,58 @@
 - **Hover (HTML)** — hover over `b-part`, `b-name`, `b-in`, `b-slot`, `b-data:` attributes, custom element partial tags (e.g. `<my-card>`), or HTML elements to see directive info and matching CSS rules
 - **Hover (CSS)** — hover over a selector in a CSS file to see which partials contain matching elements
 
+Both CSS hovers also name the pseudos that were stripped before matching, and what kind of thing each one is — see [Relaxed pseudos in CSS hover](#relaxed-pseudos-in-css-hover).
+
 ## How it works
 
 The server requires a `backflip.json` in the workspace root to activate (see [`docs/configuration.md`](../docs/configuration.md)). On file open/save, it runs `compileDirectory()` on the template directory and builds a project index of partial definitions and references. CSS analysis is provided by [`@backflip/css`](../css/README.md) — CSS files are automatically discovered from configured asset directories.
 
+### Relaxed pseudos in CSS hover
+
+A template cannot say whether an element is hovered, focused, visited or
+checked, so [`@backflip/css`](../css/README.md#pseudo-relaxation) strips those
+pseudos from a selector before matching and reports the rule against the element
+the remainder targets. Both CSS hovers say when that happened, so a rule listed
+against an element despite its `:hover` explains itself:
+
+- **Element → rules** adds a line under the selector: ``ignoring `:hover` (user-action)``.
+  The selector on the line above is the authored text, `.card:hover`, and the
+  specificity beside it is the authored one.
+- **Selector → elements** adds one note for the whole rule:
+  ``Matched ignoring `::before` (tree-abiding) — not answerable from a template.``
+
+The category — `user-action`, `input`, `tree-abiding`, `highlight`, … — comes
+from the analyzer. Both are carried on `MatchedRule.strippedPseudos` and reach
+the "Find All Matches" and "Find All Selectors" panels through the same fields.
+
+A pseudo the analyzer's list has never heard of is *not* relaxed: the selector
+carrying it is reported as one Backflip cannot parse, and warned about on the
+selector — see [CSS parse warnings](#css-parse-warnings).
+
+Note that relaxation *widens* what a hover lists: `a:hover` and `a:visited` both
+show every link, and a bare `::selection` shows every element.
+
 ### CSS parse warnings
+
+Two things stop CSS being analyzed, and both are published as **warnings on the
+stylesheet itself**.
 
 Malformed CSS makes the parser (`@eslint/css-tree`) skip to a recovery point, so
 rules after the problem are never analyzed and simply stop reporting matches. The
-server publishes those as **warnings on the stylesheet itself**, underlining the
-entire skipped region so it is obvious which rules stopped being analyzed, with
-the parser's own complaint and the line count in the message.
+server underlines the entire skipped region so it is obvious which rules stopped
+being analyzed, with the parser's own complaint and the line count in the message.
 
 How much is lost depends on where the break is: a bad selector at the top level
 usually discards everything after it, so expect the underline to run to the end
 of the file, while a malformed prelude costs only its own rule and parsing
 recovers. Where the parser raises several errors for the same damage, the regions
 are merged before publishing, so the same CSS is never underlined twice.
+
+The same channel carries the second kind: a **selector the matcher cannot
+read**. That is valid CSS as far as the parser is concerned — an uncategorized
+pseudo, an argument css-select refuses, a top-level `&` — so nothing is skipped
+around it; only that one selector reports no matches. The warning underlines the
+selector itself and says so, and its rule's other selectors keep working.
 
 They are warnings rather than errors on purpose: the stylesheet still ships and
 still works in a browser: what is degraded is Backflip's view of it. Nothing

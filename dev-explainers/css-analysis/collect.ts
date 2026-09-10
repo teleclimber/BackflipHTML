@@ -11,6 +11,7 @@ import {
 	type InstanceForest, type InstanceNode,
 } from '../../css/src/instance-tree.js';
 import { compileSelector, matchSelectors } from '../../css/src/selector-match.js';
+import type { StrippedPseudo } from '../../css/src/relax-selector.js';
 import {
 	attrIndexOf, isElementLike, tagNameOf, type ElementLikeTNode,
 } from '../../css/src/tnode-view.js';
@@ -101,6 +102,12 @@ export interface SelectorView {
 	 * that loses instances is where a selector stops matching.
 	 */
 	steps: { text: string; hits: number }[];
+	/**
+	 * Pseudos the matcher stripped before compiling this selector — empty when
+	 * it compiled as authored. A selector that matches only because `:hover`
+	 * came off looks unremarkable in `hits` without this.
+	 */
+	stripped: StrippedPseudo[];
 	/** Instances this selector matched, by id. */
 	hits: number[];
 }
@@ -491,7 +498,7 @@ export function collectExplain(input: ExplainInput): ExplainPayload {
 	const forest = timed('expand forest', () => buildInstanceForest(input.compiled));
 
 	// Step 3/4 — the analyzer's own aggregate, used verbatim for match types.
-	const aggregate = timed('match + aggregate', () => matchSelectors(rules, forest));
+	const aggregate = timed('match + aggregate', () => matchSelectors(rules, forest).elementMatches);
 
 	const partials = collectPartials(input, forest);
 	const partialIdOf = new Map<RootTNode, number>();
@@ -565,7 +572,8 @@ export function collectExplain(input: ExplainInput): ExplainPayload {
 			const selectorIds: number[] = [];
 			for (const text of rule.selectors) {
 				const id = selectors.length;
-				const test = compileSelector(forest, text);
+				const compiled = compileSelector(forest, text);
+				const test = compiled?.test ?? null;
 				const hits: number[] = [];
 				if (test) {
 					forest.all.forEach((node, i) => {
@@ -576,15 +584,16 @@ export function collectExplain(input: ExplainInput): ExplainPayload {
 					});
 				}
 				const steps = selectorSteps(text).map(stepText => {
-					const stepTest = stepText === text ? test : compileSelector(forest, stepText);
+					const stepTest = stepText === text ? test : (compileSelector(forest, stepText)?.test ?? null);
 					return {
 						text: stepText,
 						hits: stepTest ? forest.all.reduce((n, node) => n + (stepTest(node) ? 1 : 0), 0) : 0,
 					};
 				});
 				selectors.push({
-					id, text, ruleId, valid: test !== null,
+					id, text, ruleId, valid: compiled !== null,
 					specificity: specificityOf(text),
+					stripped: compiled?.strippedPseudos ?? [],
 					steps, hits,
 				});
 				selectorIds.push(id);

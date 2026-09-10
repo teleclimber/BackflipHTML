@@ -2,7 +2,7 @@ import type { Hover, Position } from 'vscode-languageserver';
 import { MarkupKind } from 'vscode-languageserver';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 import type { ProjectIndex, PartialDef } from './index.js';
-import type { CssAnalysisResult } from '@backflip/css';
+import type { CssAnalysisResult, StrippedPseudo } from '@backflip/css';
 import type { DataShape } from '@backflip/html';
 import { parseBPartValue } from '@backflip/html';
 import * as path from 'node:path';
@@ -635,6 +635,20 @@ export interface ElementMatchInfo {
 	startLine: number;
 	startCol: number;
 	matchType: string;
+	/** Pseudos the CSS analyzer stripped from this rule's selector before matching. */
+	strippedPseudos: StrippedPseudo[];
+}
+
+/**
+ * "`:hover` (user-action), `::before` (tree-abiding)" — what came off a selector
+ * before it was matched, and what kind of thing each one is.
+ *
+ * The analyzer removes the pseudos a template cannot answer, so a rule reports
+ * against the element it targets rather than against nothing. Saying so is what
+ * keeps the widening legible: `a:hover` and `a:visited` both list every link.
+ */
+function formatStrippedPseudos(stripped: StrippedPseudo[]): string {
+	return stripped.map(p => `\`${p.text}\` (${p.category})`).join(', ');
 }
 
 /**
@@ -671,6 +685,7 @@ export function findElementsForSelector(
 						startLine: el.startLine,
 						startCol: el.startCol,
 						matchType: m.matchType,
+						strippedPseudos: m.strippedPseudos,
 					});
 				}
 			}
@@ -708,6 +723,18 @@ function hoverCssSelector(
 
 	const lines: string[] = [];
 	lines.push(`**Matched elements** (${matchCount} match${matchCount !== 1 ? 'es' : ''} in ${partialCount} partial${partialCount !== 1 ? 's' : ''})`);
+
+	// One note for the whole rule, not one per element: the pseudos came off the
+	// selector, so they explain the list rather than any single entry in it.
+	const stripped = new Map<string, StrippedPseudo>();
+	for (const el of unique) {
+		for (const pseudo of el.strippedPseudos) stripped.set(pseudo.text, pseudo);
+	}
+	if (stripped.size > 0) {
+		lines.push('');
+		lines.push(`Matched ignoring ${formatStrippedPseudos([...stripped.values()])} — not answerable from a template.`);
+	}
+
 	lines.push('');
 
 	for (const el of unique) {
@@ -730,6 +757,8 @@ export interface RuleMatchInfo {
 	selector: string;
 	specificity: [number, number, number];
 	matchType: 'definite' | 'conditional' | 'dynamic';
+	/** Pseudos the CSS analyzer stripped from `selector` before matching. */
+	strippedPseudos: StrippedPseudo[];
 	properties: Array<{ name: string; value: string }>;
 	mediaConditions: string[];
 	sourceLine: number;
@@ -783,6 +812,7 @@ export function findRulesForElement(
 			selector: m.selector,
 			specificity: m.specificity,
 			matchType: m.matchType,
+			strippedPseudos: m.strippedPseudos,
 			properties: m.rule.properties.map(p => ({ name: p.name, value: p.value })),
 			mediaConditions: m.mediaConditions,
 			sourceLine: m.rule.sourceLine,
@@ -827,6 +857,12 @@ function hoverCssRules(
 		}
 
 		lines.push(`\`${m.selector}\` — ${spec}${typeTag}${locationLink}`);
+
+		// The selector above is as authored, so a rule listed here despite a
+		// `:hover` needs to say why it is listed.
+		if (m.strippedPseudos.length > 0) {
+			lines.push(`  ignoring ${formatStrippedPseudos(m.strippedPseudos)}`);
+		}
 
 		if (m.properties.length > 0) {
 			const props = m.properties.map(p => `${p.name}: ${p.value}`).join('; ');

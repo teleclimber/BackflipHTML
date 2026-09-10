@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
-import { strictEqual, ok } from 'node:assert';
-import { analyzeSource as analyze } from './test-helpers.js';
+import { strictEqual, deepStrictEqual, ok } from 'node:assert';
+import { analyzeSource as analyze, VIRTUAL_CSS_PATH } from './test-helpers.js';
 import { attrIndexOf } from './tnode-view.js';
 
 describe('analyzeCss', () => {
@@ -400,6 +400,39 @@ describe('analyzeCss failure reporting', () => {
 		ok(result.rules.some(r => r.selectorText === '.title'), '.title survived the broken file');
 		strictEqual(result.rules.find(r => r.selectorText === '.title')!.sourceFile, '/w/good.css');
 		ok(result.failures.every(f => f.sourceFile === '/w/broken.css'), 'failure blamed on the right file');
+	});
+
+	it('reports a selector that cannot be compiled, located on the selector itself', async () => {
+		// Valid CSS as far as css-tree is concerned, so the stylesheet parses and
+		// the rules around it match — but the matcher cannot read it, and that is
+		// an error in the authored CSS rather than something to shrug off.
+		const result = await analyze({
+			cssContent: '.card { color: red }\n.card, .title:brand-new-pseudo { color: blue }',
+			templateFiles: page,
+		});
+
+		strictEqual(result.failures.length, 1);
+		const [failure] = result.failures;
+		strictEqual(failure.reason, 'selector-parse');
+		strictEqual(failure.sourceFile, VIRTUAL_CSS_PATH);
+		ok(failure.message.includes('.title:brand-new-pseudo'), failure.message);
+		strictEqual(failure.sourceLine, 2);
+		strictEqual(failure.lostStartLine, 2);
+		strictEqual(failure.lostStartCol, 8, 'the selector, not the rule');
+		strictEqual(failure.lostEndCol, 8 + '.title:brand-new-pseudo'.length);
+
+		// The good selector in the same rule is untouched.
+		const matches = result.elementMatches.get('page.html');
+		ok(matches!.some(m => m.matches.some(r => r.selector === '.card')), '.card still matched');
+	});
+
+	it('reports a stylesheet failure and a selector failure side by side', async () => {
+		const result = await analyze({
+			cssContent: '.title:brand-new-pseudo { color: red }\n.a[ { color: red }',
+			templateFiles: page,
+		});
+		deepStrictEqual(result.failures.map(f => f.reason).sort(),
+			['selector-parse', 'stylesheet-parse']);
 	});
 
 	it('reports line numbers relative to each file, not a concatenation', async () => {

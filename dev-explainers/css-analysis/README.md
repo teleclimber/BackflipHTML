@@ -70,7 +70,9 @@ you last clicked.
 
 1. **Parse & roots** — every parsed selector with its hit count, and every
    partial with the reason it was or was not an expansion root, plus its call
-   sites.
+   sites. A selector the matcher had to relax carries a `relaxed` badge naming
+   the pseudos that came off — `.card:hover` is matched as `.card`, so its hit
+   count is only readable next to what was stripped.
 2. **Expansion** — the authoring tree with every node kind, containers included.
    It is one tree *per partial*, each headed by its definition: `b-name` in the
    gutter for a named partial, `ce-partial` where the call site renders the tag.
@@ -99,7 +101,9 @@ you last clicked.
 4. **Trace** — pick a selector and it decomposes into compound steps, run
    rightmost-first: `.card-title` → 2 instances, `.featured .card-title` → 1.
    Where the count drops is the constraint doing the work. Below that, per
-   element, `hits/total → matchType` with a dot per instance.
+   element, `hits/total → matchType` with a dot per instance. A relaxed selector
+   says so above the steps, with the category of each pseudo stripped — the
+   steps are run without them, which is why such a selector reaches anything.
 
 The page uses system fonts only and inlines everything, so it has no network
 dependency and works offline. It is theme-aware and keyboard-navigable.

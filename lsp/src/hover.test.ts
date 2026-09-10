@@ -681,7 +681,7 @@ describe('getHover', () => {
 		function makeCssAnalysis(file: string, matches: Array<{
 			startLine: number;
 			startCol: number;
-			rules: Array<{ selector: string; specificity: [number, number, number]; properties?: Array<{ name: string; value: string }>; media?: string[]; matchType?: string; sourceLine?: number; sourceCol?: number }>;
+			rules: Array<{ selector: string; specificity: [number, number, number]; properties?: Array<{ name: string; value: string }>; media?: string[]; matchType?: string; sourceLine?: number; sourceCol?: number; stripped?: Array<{ text: string; name: string; category: string }> }>;
 		}>) {
 			const elementMatches = new Map();
 			elementMatches.set(file, matches.map(m => ({
@@ -705,6 +705,7 @@ describe('getHover', () => {
 					specificity: r.specificity,
 					mediaConditions: r.media ?? [],
 					matchType: r.matchType ?? 'definite',
+					strippedPseudos: r.stripped ?? [],
 				})),
 			})));
 			return { elementMatches, rules: [] };
@@ -757,6 +758,42 @@ describe('getHover', () => {
 			const result = getHover(doc, pos(0, 2), 'page.html', index, cssAnalysis as any);
 			const v = hoverValue(result);
 			ok(v.includes('*conditional*'));
+		});
+
+		it('shows the pseudos that were stripped before matching', async () => {
+			const index = makeIndex([], []);
+			const cssAnalysis = makeCssAnalysis('page.html', [{
+				startLine: 1,
+				startCol: 1,
+				rules: [
+					{
+						selector: '.card:hover::before',
+						specificity: [0, 2, 1],
+						stripped: [
+							{ text: ':hover', name: 'hover', category: 'user-action' },
+							{ text: '::before', name: 'before', category: 'tree-abiding' },
+						],
+					},
+				],
+			}]);
+			const doc = makeDoc(['<div class="card">Hello</div>']);
+			const result = getHover(doc, pos(0, 5), 'page.html', index, cssAnalysis as any);
+			const v = hoverValue(result);
+			ok(v.includes('`.card:hover::before`'), 'shows the selector as authored');
+			ok(v.includes('`:hover` (user-action)'), 'names the stripped pseudo and its category');
+			ok(v.includes('`::before` (tree-abiding)'), 'names every stripped pseudo');
+		});
+
+		it('says nothing about stripping for a selector that matched as authored', async () => {
+			const index = makeIndex([], []);
+			const cssAnalysis = makeCssAnalysis('page.html', [{
+				startLine: 1,
+				startCol: 1,
+				rules: [{ selector: '.card', specificity: [0, 1, 0] }],
+			}]);
+			const doc = makeDoc(['<div class="card">Hello</div>']);
+			const result = getHover(doc, pos(0, 5), 'page.html', index, cssAnalysis as any);
+			ok(!hoverValue(result).includes('ignoring'), 'no relaxation note when nothing was stripped');
 		});
 
 		it('returns null when no CSS analysis available', async () => {
@@ -837,6 +874,7 @@ describe('CSS selector hover (hover in CSS file)', () => {
 		selector: string;
 		ruleLine: number;
 		matchType?: string;
+		stripped?: Array<{ text: string; name: string; category: string }>;
 	}>) {
 		const elementMatches = new Map<string, any[]>();
 		for (const e of entries) {
@@ -869,6 +907,7 @@ describe('CSS selector hover (hover in CSS file)', () => {
 				specificity: [0, 1, 0] as [number, number, number],
 				mediaConditions: [],
 				matchType: e.matchType ?? 'definite',
+				strippedPseudos: e.stripped ?? [],
 			});
 			elementMatches.set(e.file, arr);
 		}
@@ -938,6 +977,34 @@ describe('CSS selector hover (hover in CSS file)', () => {
 		const result = getHover(doc, pos(0, 3), ssRelPath, index, cssAnalysis as any, [ssPath], tplRoot);
 		const v = hoverValue(result);
 		ok(v.includes('conditional'), 'should show match type');
+	});
+
+	it('says which pseudos were stripped before the elements were matched', async () => {
+		const index = makeIndex([], []);
+		const cssAnalysis = makeCssAnalysisWithElements([
+			{
+				file: 'page.html', partialName: 'card', startLine: 5, startCol: 3,
+				selector: '.card:hover', ruleLine: 1,
+				stripped: [{ text: ':hover', name: 'hover', category: 'user-action' }],
+			},
+		]);
+		const doc = makeDoc(['.card:hover { color: red; }']);
+		const result = getHover(doc, pos(0, 3), ssRelPath, index, cssAnalysis as any, [ssPath], tplRoot);
+		const v = hoverValue(result);
+		ok(v.includes('**Matched elements**'), 'still lists the elements');
+		ok(v.includes('`:hover` (user-action)'), 'names the stripped pseudo and its category');
+	});
+
+	it('names each stripped pseudo once, however many elements matched', async () => {
+		const index = makeIndex([], []);
+		const stripped = [{ text: '::before', name: 'before', category: 'tree-abiding' }];
+		const cssAnalysis = makeCssAnalysisWithElements([
+			{ file: 'page.html', partialName: 'card', startLine: 5, startCol: 3, selector: '.x::before', ruleLine: 1, stripped },
+			{ file: 'other.html', partialName: 'header', startLine: 3, startCol: 1, selector: '.x::before', ruleLine: 1, stripped },
+		]);
+		const doc = makeDoc(['.x::before { content: "!"; }']);
+		const v = hoverValue(getHover(doc, pos(0, 3), ssRelPath, index, cssAnalysis as any, [ssPath], tplRoot));
+		strictEqual(v.split('`::before` (tree-abiding)').length - 1, 1);
 	});
 
 	it('returns null when hovering on a non-selector line (e.g. property)', async () => {
@@ -1168,6 +1235,7 @@ describe('findRulesForElement', () => {
 				specificity: r.specificity,
 				mediaConditions: r.media ?? [],
 				matchType: r.matchType ?? 'definite',
+				strippedPseudos: [],
 			})),
 		})));
 		return { elementMatches, rules: [] };
@@ -1250,6 +1318,7 @@ describe('findElementsForSelector', () => {
 				specificity: [0, 1, 0] as [number, number, number],
 				mediaConditions: [],
 				matchType: e.matchType ?? 'definite',
+				strippedPseudos: [],
 			});
 			elementMatches.set(e.file, arr);
 		}
@@ -1383,7 +1452,7 @@ describe('asset ref hover', () => {
 				startLine: 1, startCol: 1, startOffset: 0,
 				matches: [{
 					rule: { selectorText: '.hero', selectors: ['.hero'], properties: [], mediaConditions: [], sourceFile: '/workspace/styles.css', sourceLine: 1, sourceCol: 1 },
-					selector: '.hero', specificity: [0, 1, 0] as [number, number, number], mediaConditions: [], matchType: 'definite',
+					selector: '.hero', specificity: [0, 1, 0] as [number, number, number], mediaConditions: [], matchType: 'definite', strippedPseudos: [],
 				}],
 			}]]]),
 			rules: [],
@@ -1410,7 +1479,7 @@ describe('asset ref hover', () => {
 				startLine: 1, startCol: 1, startOffset: 0,
 				matches: [{
 					rule: { selectorText: '.hero', selectors: ['.hero'], properties: [], mediaConditions: [], sourceFile: '/workspace/styles.css', sourceLine: 1, sourceCol: 1 },
-					selector: '.hero', specificity: [0, 1, 0] as [number, number, number], mediaConditions: [], matchType: 'definite',
+					selector: '.hero', specificity: [0, 1, 0] as [number, number, number], mediaConditions: [], matchType: 'definite', strippedPseudos: [],
 				}],
 			}]]]),
 			rules: [],
@@ -1437,7 +1506,7 @@ describe('asset ref hover', () => {
 				startLine: 1, startCol: 1, startOffset: 0,
 				matches: [{
 					rule: { selectorText: '.hero', selectors: ['.hero'], properties: [], mediaConditions: [], sourceFile: '/workspace/styles.css', sourceLine: 1, sourceCol: 1 },
-					selector: '.hero', specificity: [0, 1, 0] as [number, number, number], mediaConditions: [], matchType: 'definite',
+					selector: '.hero', specificity: [0, 1, 0] as [number, number, number], mediaConditions: [], matchType: 'definite', strippedPseudos: [],
 				}],
 			}]]]),
 			rules: [],
@@ -1458,7 +1527,7 @@ describe('asset ref hover', () => {
 				startLine: 1, startCol: 1, startOffset: 0,
 				matches: [{
 					rule: { selectorText: '.hero', selectors: ['.hero'], properties: [], mediaConditions: [], sourceFile: '/workspace/styles.css', sourceLine: 1, sourceCol: 1 },
-					selector: '.hero', specificity: [0, 1, 0] as [number, number, number], mediaConditions: [], matchType: 'definite',
+					selector: '.hero', specificity: [0, 1, 0] as [number, number, number], mediaConditions: [], matchType: 'definite', strippedPseudos: [],
 				}],
 			}]]]),
 			rules: [],
@@ -1483,7 +1552,7 @@ describe('asset ref hover', () => {
 				startLine: 1, startCol: 1, startOffset: 0,
 				matches: [{
 					rule: { selectorText: '.hero', selectors: ['.hero'], properties: [], mediaConditions: [], sourceFile: '/workspace/styles.css', sourceLine: 1, sourceCol: 1 },
-					selector: '.hero', specificity: [0, 1, 0] as [number, number, number], mediaConditions: [], matchType: 'definite',
+					selector: '.hero', specificity: [0, 1, 0] as [number, number, number], mediaConditions: [], matchType: 'definite', strippedPseudos: [],
 				}],
 			}]]]),
 			rules: [],
@@ -1507,7 +1576,7 @@ describe('asset ref hover', () => {
 				startLine: 1, startCol: 1, startOffset: 0,
 				matches: [{
 					rule: { selectorText: '.hero', selectors: ['.hero'], properties: [], mediaConditions: [], sourceFile: '/workspace/styles.css', sourceLine: 1, sourceCol: 1 },
-					selector: '.hero', specificity: [0, 1, 0] as [number, number, number], mediaConditions: [], matchType: 'definite',
+					selector: '.hero', specificity: [0, 1, 0] as [number, number, number], mediaConditions: [], matchType: 'definite', strippedPseudos: [],
 				}],
 			}]]]),
 			rules: [],

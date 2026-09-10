@@ -673,3 +673,101 @@ describe('integration: selector-text (authored selector text reaches the matcher
 		assertCssEqualsJsdom(result, doc, 'page.html', '.list > li  +  li');
 	});
 });
+
+describe('integration: pseudo-relaxation (pseudos Backflip cannot answer are stripped, then matched)', () => {
+	let result: CssAnalysisResult;
+	let doc: Document;
+
+	before(async () => {
+		result = await analyzeFixture('pseudo-relaxation');
+		const modules = await compileFixture('pseudo-relaxation');
+		doc = renderToDoc(modules, 'page.html', 'page');
+	});
+
+	/**
+	 * jsdom cannot judge `:hover` — it is never true in a static document — so
+	 * the judge is the selector with the pseudo taken off. That is exactly the
+	 * claim relaxation makes: the rule targets whatever the remainder targets.
+	 */
+	function assertTargetsSameAs(authored: string, remainder: string) {
+		deepStrictEqual(cssMarks(result, 'page.html', authored), jsdomMarks(doc, remainder),
+			`${authored} should target what ${remainder} targets`);
+	}
+
+	/** `['name=category', …]` for one selector's stripped pseudos. */
+	function strippedOn(selector: string): string[] {
+		const rule = findMatchedRule(result, 'page.html', selector);
+		ok(rule, `${selector} should be reported somewhere`);
+		return rule!.strippedPseudos.map(p => `${p.text} ${p.name}=${p.category}`);
+	}
+
+	it('reports a :hover rule against the links it targets', () => {
+		assertTargetsSameAs('.nav a:hover', '.nav a');
+		deepStrictEqual(strippedOn('.nav a:hover'), [':hover hover=user-action']);
+	});
+
+	it('reports :hover and :visited against the same links, which is the widening', () => {
+		assertTargetsSameAs('.nav a:visited', '.nav a');
+		deepStrictEqual(cssMarks(result, 'page.html', '.nav a:visited'),
+			cssMarks(result, 'page.html', '.nav a:hover'));
+		deepStrictEqual(strippedOn('.nav a:visited'), [':visited visited=location']);
+	});
+
+	it('reports both spellings of a pseudo-element against their originating element', () => {
+		assertTargetsSameAs('.note::before', '.note');
+		assertTargetsSameAs('.note:after', '.note');
+		deepStrictEqual(strippedOn('.note::before'), ['::before before=tree-abiding']);
+		deepStrictEqual(strippedOn('.note:after'), [':after after=tree-abiding']);
+	});
+
+	it('reports the canonical :checked toggle against the label it styles', () => {
+		assertTargetsSameAs('.toggle:checked + .toggle-label', '.toggle + .toggle-label');
+		deepStrictEqual(cssMarks(result, 'page.html', '.toggle:checked + .toggle-label'),
+			new Set(['toggle-label']));
+		deepStrictEqual(strippedOn('.toggle:checked + .toggle-label'), [':checked checked=input']);
+	});
+
+	it('reports a rule that relaxes away entirely against every element', () => {
+		deepStrictEqual(cssMarks(result, 'page.html', '::selection'),
+			new Set(['nav', 'nav-home', 'nav-docs', 'link-home', 'link-docs', 'note', 'toggle', 'toggle-label']));
+		deepStrictEqual(strippedOn('::selection'), ['::selection selection=highlight']);
+	});
+
+	it('leaves a structural pseudo alone, with jsdom as the judge', () => {
+		assertCssEqualsJsdom(result, doc, 'page.html', '.nav li:first-child');
+		deepStrictEqual(strippedOn('.nav li:first-child'), []);
+	});
+
+	it('reports a selector relaxation cannot rescue, located on the selector', () => {
+		// `:brand-new-pseudo` is on no list, so relaxation leaves it and css-select
+		// refuses it. The rule reports nothing, and the author is told where.
+		strictEqual(findMatchedRule(result, 'page.html', '.nav a:brand-new-pseudo'), null);
+
+		strictEqual(result.failures.length, 1);
+		const [failure] = result.failures;
+		strictEqual(failure.reason, 'selector-parse');
+		ok(failure.sourceFile.endsWith('pseudo-relaxation/styles.css'), failure.sourceFile);
+		ok(failure.message.includes('.nav a:brand-new-pseudo'), failure.message);
+
+		// The extent is the selector itself, checked against the file on disk.
+		const line = fs.readFileSync(failure.sourceFile, 'utf-8').split('\n')[failure.lostStartLine - 1];
+		strictEqual(line.slice(failure.lostStartCol - 1, failure.lostEndCol - 1), '.nav a:brand-new-pseudo');
+	});
+
+	it('leaves every other rule in the stylesheet matching', () => {
+		// One unreadable selector is not a stylesheet-level failure: the rules
+		// around it are analyzed exactly as before.
+		ok(findMatchedRule(result, 'page.html', '.nav a:hover'), ':hover still relaxes and matches');
+		ok(findMatchedRule(result, 'page.html', '.nav li:first-child'), 'structural rules unaffected');
+	});
+
+	it('keeps the authored selector and its specificity on every relaxed rule', () => {
+		const hover = findMatchedRule(result, 'page.html', '.nav a:hover');
+		strictEqual(hover!.selector, '.nav a:hover');
+		deepStrictEqual(hover!.specificity, [0, 2, 1]);
+		strictEqual(hover!.matchType, 'definite');
+
+		const before = findMatchedRule(result, 'page.html', '.note::before');
+		deepStrictEqual(before!.specificity, [0, 1, 1]);
+	});
+});

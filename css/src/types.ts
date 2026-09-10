@@ -1,5 +1,6 @@
 import type { CompiledFile } from '@backflip/html';
 import type { ElementLikeTNode } from './tnode-view.js';
+import type { StrippedPseudo } from './relax-selector.js';
 
 // --- CSS Rule types ---
 
@@ -8,11 +9,28 @@ export interface CssProperty {
 	value: string;
 }
 
+/** Where one selector sits in its stylesheet. 1-based, end exclusive, like css-tree. */
+export interface SelectorLoc {
+	startLine: number;
+	startCol: number;
+	endLine: number;
+	endCol: number;
+}
+
 export interface CssRule {
 	/** Full selector text, e.g. ".card > .title, .card > .subtitle" */
 	selectorText: string;
 	/** Individual selectors split on comma */
 	selectors: string[];
+	/**
+	 * Where each entry of `selectors` was written, parallel to it.
+	 *
+	 * A nested selector's extent is what the author can see — `&.featured` — not
+	 * the resolved `.card.featured` that `selectors` carries. This is what lets a
+	 * selector-level failure be underlined on the selector rather than on the
+	 * rule, so keep the two arrays in step.
+	 */
+	selectorLocs: SelectorLoc[];
 	/** Declarations in this rule */
 	properties: CssProperty[];
 	/** Stack of enclosing @media conditions, e.g. ["(min-width: 768px)"] */
@@ -30,29 +48,36 @@ export interface CssRule {
 /**
  * Why a piece of CSS could not be analyzed.
  *
- * Only `stylesheet-parse` is produced today.
+ * - `stylesheet-parse` — css-tree could not parse a region of the file, and
+ *   skipped whatever it took to recover.
+ * - `selector-parse` — one selector parsed as CSS but is not one the matcher
+ *   can read, so its rule reports no matches. See `selector-match.ts`.
  */
 export type AnalysisFailureReason =
-	| 'stylesheet-parse';
+	| 'stylesheet-parse'
+	| 'selector-parse';
 
 /**
  * One region of CSS that was dropped before matching ran.
  *
  * css-tree recovers from a syntax error by skipping to a safe point, so a
  * single bad character can silently discard everything after it. This records
- * both where parsing broke and how much was lost, so the LSP can say what the
- * consequence was rather than only quoting the parser.
+ * both where the analysis broke and how much was lost, so the LSP can say what
+ * the consequence was rather than only quoting the parser.
+ *
+ * A `selector-parse` failure has the same shape at a smaller scale: the lost
+ * region is the one selector, and nothing else about the stylesheet is affected.
  */
 export interface AnalysisFailure {
 	reason: AnalysisFailureReason;
 	/** Absolute path of the stylesheet. */
 	sourceFile: string;
-	/** Message from css-tree, verbatim. */
+	/** What went wrong: css-tree's own message for `stylesheet-parse`. */
 	message: string;
-	/** 1-based position where parsing failed. */
+	/** 1-based position where the analysis broke. */
 	sourceLine: number;
 	sourceCol: number;
-	/** 1-based extent of the text css-tree discarded as a result. */
+	/** 1-based extent of the text that is not analyzed as a result. */
 	lostStartLine: number;
 	lostStartCol: number;
 	lostEndLine: number;
@@ -77,6 +102,21 @@ export interface MatchedRule {
 	 *   evaluates to a matching value
 	 */
 	matchType: 'definite' | 'conditional' | 'dynamic';
+	/**
+	 * The pseudos removed from `selector` before matching, left to right. Empty
+	 * when the selector matched exactly as authored.
+	 *
+	 * A template cannot say whether an element is hovered, focused or checked,
+	 * so those pseudos come off and the rule is reported against the element it
+	 * targets — `.card:hover` against `.card`. That *widens* matching on
+	 * purpose: `a:hover` and `a:visited` both report against every `a`. This
+	 * array is what says so, and with what kind of thing.
+	 *
+	 * Orthogonal to `matchType`, which is about render-time knowability:
+	 * `.card:hover` targets the card definitely; it is only the state that is
+	 * open. Do not fold one into the other.
+	 */
+	strippedPseudos: StrippedPseudo[];
 }
 
 export interface ElementMatches {

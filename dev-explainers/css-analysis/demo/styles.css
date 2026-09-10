@@ -26,3 +26,8 @@
 /* A custom element call: caller attrs and definition attrs on one tag. */
 my-chip.chip-call { display: inline-block; }
 my-chip[data-role="chip"] { border-radius: 999px; }
+
+/* Pseudos a template cannot answer: stripped before matching, then reported
+   against the element the remainder targets. */
+.card-title:hover { text-decoration: underline; }
+.lede::before { content: "— "; }

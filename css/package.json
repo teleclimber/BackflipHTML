@@ -12,6 +12,7 @@
     "@backflip/html": "file:..",
     "@eslint/css-tree": "^4.1.0",
     "css-select": "^7.0.0",
+    "css-what": "^8.0.0",
     "specificity": "^1.0.0"
   },
   "devDependencies": {

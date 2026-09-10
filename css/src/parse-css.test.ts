@@ -324,3 +324,35 @@ describe('parseCssFile selector text', () => {
 		deepStrictEqual(rules[1].selectors, [':is(.card .x, .y  +  .z)']);
 	});
 });
+
+describe('parseCssFile selector locations', () => {
+	/** `'startLine:startCol-endLine:endCol'` per selector, parallel to `selectors`. */
+	function locs(css: string): string[] {
+		const { rules } = parseCssFile(css);
+		return rules.flatMap(r => r.selectorLocs.map(
+			l => `${l.startLine}:${l.startCol}-${l.endLine}:${l.endCol}`));
+	}
+
+	it('locates a single selector at the text it was written as', () => {
+		deepStrictEqual(locs('.card { color: red }'), ['1:1-1:6']);
+	});
+
+	it('locates each selector of a list separately, across lines', () => {
+		deepStrictEqual(locs('.a,\n  .b:hover { color: red }'), ['1:1-1:3', '2:3-2:11']);
+	});
+
+	it('locates a nested selector at the text authored, not the resolved form', () => {
+		// `selectors` carries `.card.featured`; the extent is the `&.featured`
+		// the author can actually see underlined.
+		const { rules } = parseCssFile('.card { &.featured { color: red } }');
+		deepStrictEqual(rules[1].selectors, ['.card.featured']);
+		deepStrictEqual(rules[1].selectorLocs, [
+			{ startLine: 1, startCol: 9, endLine: 1, endCol: 19 },
+		]);
+	});
+
+	it('keeps one location per selector, parallel to the list', () => {
+		const { rules } = parseCssFile('.a, .b, .c { color: red }');
+		strictEqual(rules[0].selectorLocs.length, rules[0].selectors.length);
+	});
+});

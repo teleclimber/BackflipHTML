@@ -1,5 +1,5 @@
 import * as csstree from '@eslint/css-tree';
-import type { AnalysisFailure, CssRule, CssProperty } from './types.js';
+import type { AnalysisFailure, CssRule, CssProperty, SelectorLoc } from './types.js';
 
 /** Byte offsets and 1-based line/column bounds of one discarded region. */
 interface LostRegion {
@@ -131,6 +131,17 @@ function generatedSelector(selector: csstree.CssNode, parentText: string | null)
 	return sawNesting ? text : `${parentText} ${text}`;
 }
 
+/** Where a node sits in the source, or null when the parser located it nowhere. */
+function locOf(node: csstree.CssNode): SelectorLoc | null {
+	if (!node.loc) return null;
+	return {
+		startLine: node.loc.start.line,
+		startCol: node.loc.start.column,
+		endLine: node.loc.end.line,
+		endCol: node.loc.end.column,
+	};
+}
+
 /**
  * Parse one stylesheet into rules, reporting what could not be parsed.
  *
@@ -258,10 +269,12 @@ export function parseCssFile(cssContent: string, sourceFile = ''): CssParseResul
 				// each against the enclosing rule. At the top level there is no
 				// parent, and a stray `&` there simply fails to compile later.
 				const selectors: string[] = [];
+				const locs: (SelectorLoc | null)[] = [];
 				if (node.prelude.type === 'SelectorList') {
 					node.prelude.children.forEach((selector: csstree.CssNode) => {
 						selectors.push(authoredSelector(cssContent, selector, comments, parentText)
 							?? generatedSelector(selector, parentText));
+						locs.push(locOf(selector));
 					});
 				} else {
 					// A prelude css-tree declined to parse as a selector list. Its raw
@@ -270,6 +283,7 @@ export function parseCssFile(cssContent: string, sourceFile = ''): CssParseResul
 					// there is no NestingSelector node here to resolve an `&` through.
 					selectors.push(authoredSelector(cssContent, node.prelude, comments, null)
 						?? csstree.generate(node.prelude));
+					locs.push(locOf(node.prelude));
 				}
 
 				// Every rule pushes, nested or not, so `leave` can pop blindly.
@@ -290,9 +304,18 @@ export function parseCssFile(cssContent: string, sourceFile = ''): CssParseResul
 				}
 
 				const loc = node.loc;
+				// A selector the parser located nowhere collapses onto the rule's
+				// own start, as an empty region; consumers widen one for display.
+				const ruleStart: SelectorLoc = {
+					startLine: loc?.start.line ?? 0,
+					startCol: loc?.start.column ?? 0,
+					endLine: loc?.start.line ?? 0,
+					endCol: loc?.start.column ?? 0,
+				};
 				rules.push({
 					selectorText: selectors.join(','),
 					selectors,
+					selectorLocs: locs.map(l => l ?? ruleStart),
 					properties,
 					mediaConditions: [...mediaStack],
 					sourceFile,

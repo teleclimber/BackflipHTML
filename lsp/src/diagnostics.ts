@@ -38,13 +38,13 @@ export function errorsToDiagnostics(errors: BackflipError[]): Map<string, Diagno
  *
  * These are warnings, not errors: the CSS itself still ships and still works in
  * a browser. What is degraded is Backflip's view of it, so the message leads
- * with the parser's own complaint and then says what was lost — a bare
- * "Identifier is expected" tells an author nothing about why their selectors
- * stopped matching.
+ * with the cause and then says what was lost — a bare "Identifier is expected"
+ * tells an author nothing about why their selectors stopped matching.
  *
- * The range covers the whole discarded region, so the underline shows exactly
- * which CSS stopped being analyzed. Overlapping regions are already merged in
- * `parseCssFile`, so two reports never underline the same text twice.
+ * The range covers what stopped being analyzed, so the underline shows it: the
+ * whole discarded region for a parse failure, and the one selector for a
+ * selector the matcher cannot read. Overlapping parse regions are already merged
+ * in `parseCssFile`, so two reports never underline the same text twice.
  */
 export function cssFailuresToDiagnostics(failures: AnalysisFailure[]): Map<string, Diagnostic[]> {
 	const byFile = new Map<string, Diagnostic[]>();
@@ -64,8 +64,13 @@ export function cssFailuresToDiagnostics(failures: AnalysisFailure[]): Map<strin
 			endCol = startCol + 1;
 		}
 
+		// A selector is not a region, so it gets no line count — the underline is
+		// already the whole of what was lost, and only its own rule is affected.
 		const lostLines = failure.lostEndLine - failure.lostStartLine + 1;
 		const extent = lostLines === 1 ? '1 line' : `${lostLines} lines`;
+		const message = failure.reason === 'selector-parse'
+			? `${failure.message}, so this rule will not report matches.`
+			: `${failure.message}. Backflip skipped this CSS (${extent}), so rules in it will not report matches.`;
 
 		const diag: Diagnostic = {
 			severity: DiagnosticSeverity.Warning,
@@ -73,7 +78,7 @@ export function cssFailuresToDiagnostics(failures: AnalysisFailure[]): Map<strin
 				start: { line: startLine, character: startCol },
 				end: { line: endLine, character: endCol },
 			},
-			message: `${failure.message}. Backflip skipped this CSS (${extent}), so rules in it will not report matches.`,
+			message,
 			source: 'backflip',
 		};
 

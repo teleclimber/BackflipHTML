@@ -226,7 +226,7 @@ async function recompile(): Promise<void> {
 				const cssElapsed = performance.now() - cssStart;
 				const matchCount = Array.from(cssAnalysis.elementMatches.values())
 					.reduce((sum, arr) => sum + arr.length, 0);
-				const failureNote = cssAnalysis.failures.length > 0 ? `, ${cssAnalysis.failures.length} unparsed region(s)` : '';
+				const failureNote = cssAnalysis.failures.length > 0 ? `, ${cssAnalysis.failures.length} unanalyzed region(s)/selector(s)` : '';
 				connection.console.log(`[backflip] css analysis: ${cssPaths.length} file(s), ${cssAnalysis.rules.length} rules, ${matchCount} element matches${failureNote} (${cssElapsed.toFixed(0)}ms)`);
 			} catch (err) {
 				connection.console.error(`[backflip] css analysis failed: ${err instanceof Error ? err.message : err}`);

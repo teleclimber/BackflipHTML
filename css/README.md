@@ -10,7 +10,7 @@ This is a separate Node.js package used by the [LSP server](../lsp/README.md) to
 
 1. **Parse CSS** — parses rules and media conditions using `@eslint/css-tree`, one stylesheet at a time
 2. **Build the instance forest** — expands the compiled trees into the tree the runtime would render
-3. **Match** — runs every selector against every instance with css-select and a custom adapter
+3. **Match** — strips the pseudos a template cannot answer, then runs every selector against every instance with css-select and a custom adapter, reporting any selector it cannot read
 4. **Aggregate** — folds the instances of each source element back into one result, with specificity and a match type
 
 The package parses no HTML of its own. Everything it knows comes from the compiler's `TNode` trees, so a match is reported as the `ElementTNode` (or custom-element call) the compiler produced, and element identity and source locations come from the compiler.
@@ -30,7 +30,8 @@ silently.
 `CssAnalysisResult.failures` reports that. Each `AnalysisFailure` carries the
 file, the position where parsing broke, the parser's own message, and the extent
 of the text that was dropped — enough for the LSP to underline *what was lost*,
-not just point at where the parse broke.
+not just point at where the parse broke. Unreadable selectors come through the
+same channel, under a different `reason`; see below.
 
 One malformed construct can raise several css-tree errors covering overlapping
 text. Those are merged into one failure, keeping the first message (which names
@@ -43,14 +44,32 @@ Failures are never fatal. Rules that parsed before the failure still match, othe
 stylesheets are unaffected, and a stylesheet that fails on line 1 still returns
 its failure alongside an empty rule list.
 
-Two shapes come through this channel today, both from css-tree:
+Two shapes of `stylesheet-parse` failure come from css-tree:
 
 - a **syntax error at the top level**, whose lost region runs to the end of the file
 - a **malformed prelude** — a bad at-rule condition or an empty pseudo — whose
   lost region is contained, so parsing recovers and later rules still match.
 
-Selectors that parse but that css-select refuses to compile are *not* reported
-here yet; they are still dropped silently in `compileSelector`.
+### Unreadable selectors
+
+A selector can be valid CSS and still be one the matcher cannot read: a pseudo
+nobody has categorized, a supported name with an argument css-select refuses
+(`:nth-child(2 of svg|circle)`), a top-level `&` with no parent to resolve
+against. Most selectors that used to land here no longer do — the pseudos
+css-select chokes on come off before compiling, see
+[Pseudo relaxation](#pseudo-relaxation) — and what is left is treated as an
+error in the authored CSS rather than guessed at.
+
+Those come through the same `failures` channel, as `reason: 'selector-parse'`,
+with the lost region set to the selector's own extent so the LSP underlines the
+selector and nothing else. Only that selector is affected: the rest of its rule
+list, its rule's declarations, and every other rule in the file are analyzed
+exactly as before.
+
+`CssRule.selectorLocs` is what makes that possible — one source extent per entry
+of `CssRule.selectors`, parallel to it. For a nested rule the extent is the text
+as authored (`&.featured`), not the resolved selector, because the extent is
+what an editor underlines.
 
 ### Selector text
 
@@ -108,7 +127,7 @@ Two details worth knowing:
   `NestingSelector` node, so an ampersand that is only text — `[data-q="a&b"]` —
   is left intact, and the authored text on either side of it is untouched.
 - **A top-level `&` has no parent** and is left as written. It will not compile in
-  css-select, so it is skipped silently at match time.
+  css-select, so it is reported as an unreadable selector at match time.
 
 ### The instance model
 
@@ -149,11 +168,40 @@ Matching runs against the render tree, so combinators, structural pseudos and `:
 
 The tree is the compiler's, so directive attributes (`b-if`, `b-part`, `:class`, …) are not attributes: `[b-part]` matches nothing. The *name* of a `:class` / `b-bind:class` binding is still known, and drives the `dynamic` match type.
 
+### Pseudo relaxation
+
+Backflip analyzes templates. There is no browser, no user, no session — whether an element is hovered, focused, visited or checked is not a property of the template but a state the page passes through over its life. A rule mentioning one of those used to match **nothing at all**.
+
+So the pseudos Backflip cannot answer are **stripped from the selector before matching**, and the rule is reported against the element the remainder targets. `relaxSelector()` does the rewriting; `pseudo-categories.ts` is the list that decides what comes off, and `MatchedRule.strippedPseudos` reports what did, with a category for each.
+
+```
+.card:hover                  →  .card                 :hover      (user-action)
+a:visited                    →  a                     :visited    (location)
+.note::before                →  .note                 ::before    (tree-abiding)
+.toggle:checked + .label     →  .toggle + .label      :checked    (input)
+.a:not(:focus)               →  .a                    :focus :not
+.wrap > ::selection          →  .wrap > *             ::selection (highlight)
+```
+
+**Relaxation widens matching, on purpose.** `a:hover` and `a:visited` both report as targeting every `a`; a rule that relaxes away entirely, like a bare `::selection`, reports against every element, because it really does apply everywhere. `strippedPseudos` is what lets a consumer say so rather than enumerate the tree.
+
+**The reported selector and its specificity stay as authored.** `MatchedRule.selector` is `.card:hover`, not `.card`, and its specificity is `[0, 2, 0]` — `:hover` counts as a class and `::before` as an element. Relaxation is confined to what gets handed to `css-select`.
+
+**`matchType` is a separate axis.** `.card::before` genuinely applies whenever `.card` renders, so it is `definite`; `.card:hover` targets the card definitely too, and it is only the *state* that is open. `matchType` describes render-time knowability; `strippedPseudos` describes what could not be answered at all.
+
+What gets stripped is a statement about what Backflip can *know*, not about what `css-select` can compile:
+
+- `:checked`, `:disabled`, `:enabled`, `:required` and `:optional` come off **even though `css-select` supports them** — it resolves them to attribute presence, which is the template's initial markup rather than the element's state. `input:checked + label` is the canonical toggle and would otherwise report nothing.
+- `:lang()` stays, because it resolves against the markup's own `lang` attributes, which the template does settle.
+
+What stays native, because the render tree answers it: everything tree-structural (`:first-child`, `:nth-child()` including `:nth-child(2 of S)`, `:root`, `:empty`, `:only-of-type`, …), the functional pseudos (`:is`, `:not`, `:where`, `:has`), `:scope`, `:lang()`, `:any-link` and `:link`, and `css-select`'s jQuery-flavored aliases (`:parent`, `:header`, `:checkbox`, …).
+
+An unrecognized `-moz-` / `-webkit-` / `-ms-` / `-o-` name is stripped as `non-standard`, since enumerating vendor prefixes is a losing game. Any *other* pseudo the list has never heard of is left alone for `css-select` to judge — and if it refuses, the selector is reported as one Backflip cannot parse (see [Unreadable selectors](#unreadable-selectors)) rather than stripped on spec. CSS grows a pseudo rarely; guessing at what an uncategorized one means, on every selector that carries one, is the worse trade. Adding it to `pseudo-categories.ts` is the fix.
+
 What the model does not capture:
 
 - **`b-for` past three iterations.** A loop body is modelled as `FOR_REPS = 3` instances, enough for `:first-child`, `:last-child`, `+`, `~` and a middle `:nth-child(2)`. `:nth-child(9)` is not modelled — any fixed count would lie about some selector.
 - **Mutually exclusive `b-if` branches.** Every branch is modelled as present, so two elements in different branches look like siblings. `.a + .b` across them is a false positive — always reported `conditional`, never `definite`.
-- **`:contains()`.** Template text is not modelled (`getText` returns `''`), so it never matches.
 - **`<template>` content.** A browser keeps a template's children out of the DOM tree; here they are ordinary instances. `:has()` does not look inside one — css-select skips a `template` tag's children whenever it walks down — but a descendant selector, which matches upwards from the element, still reaches in: `.wrap .t` is reported where a browser reports nothing.
 - **Dynamic class and id values.** A `:class="expr"` is known by name only; `.btn-primary` is not predicted from the expression. The element is reported `dynamic` for any class/id selector instead.
 - **Runtime data.** Which `b-if` branch is taken, how many times a `b-for` runs, and what a binding evaluates to are all unknown at analysis time. That is what `conditional` and `dynamic` exist to say.
@@ -166,6 +214,8 @@ What the model does not capture:
 | `src/parse-css.ts` | CSS parsing, handles `@media` rules, reports parse failures |
 | `src/instance-tree.ts` | The render tree: expansion rules, environments, roots, budgets |
 | `src/selector-match.ts` | The css-select adapter over instances, and match aggregation |
+| `src/relax-selector.ts` | Strips the pseudos Backflip cannot answer, so the remainder can be matched |
+| `src/pseudo-categories.ts` | Which pseudos those are, and what kind of thing each one is |
 | `src/tnode-view.ts` | Tag name and attribute lookup over the compiler's TNodes |
 | `src/types.ts` | Type definitions |
 | `src/test-helpers.ts` | Test-only: compiles template sources and runs `analyzeCss` over them |

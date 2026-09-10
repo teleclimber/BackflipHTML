@@ -1,0 +1,42 @@
+/* Pseudos a template cannot answer. Each rule must report the element it
+   targets, with the pseudo recorded as stripped. */
+
+/* User action and location: state the page passes through, not markup. */
+.nav a:hover {
+  color: red;
+}
+
+.nav a:visited {
+  color: purple;
+}
+
+/* Pseudo-elements: css-select refuses them outright, both spellings. */
+.note::before {
+  content: "!";
+}
+
+.note:after {
+  content: "?";
+}
+
+/* The canonical toggle. css-select resolves `:checked` to `[checked]`, which is
+   the template's initial markup rather than the element's state. */
+.toggle:checked + .toggle-label {
+  font-weight: bold;
+}
+
+/* Relaxes away entirely: the rule really does apply everywhere. */
+::selection {
+  background: yellow;
+}
+
+/* Structural, answerable from the render tree, and must survive untouched. */
+.nav li:first-child {
+  margin-left: 0;
+}
+
+/* Relaxation stops at a pseudo nobody has categorized. Rather than guess, the
+   matcher reports the whole selector as one it cannot read. */
+.nav a:brand-new-pseudo {
+  color: green;
+}

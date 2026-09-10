@@ -605,6 +605,11 @@ const SCRIPT = String.raw`
       var b = h('button', 'sel' + (s.valid ? '' : ' dead'), s.text);
       b.onclick = function (e) { e.stopPropagation(); pick('selector', s.id); };
       td.appendChild(b);
+      if (s.stripped.length) {
+        td.appendChild(h('span', 'badge conditional', 'relaxed · ' + s.stripped.map(function (x) {
+          return x.text;
+        }).join(' ')));
+      }
       tr.appendChild(td);
       tr.appendChild(h('td', null, rule.properties.map(function (d) { return d.name; }).join(', ')));
       tr.appendChild(h('td', null, rule.media.join(' and ')));
@@ -880,6 +885,15 @@ const SCRIPT = String.raw`
       panel.appendChild(body); out.appendChild(panel); return out;
     }
     var s = P.selectors[state.selector];
+
+    if (s.stripped.length) {
+      var relax = h('p', 'note');
+      relax.textContent = 'Matched with ' + s.stripped.map(function (x) {
+        return x.text + ' (' + x.category + ')';
+      }).join(', ') + ' stripped off first. A template cannot say whether those hold, so the ' +
+        'steps below are run without them — which is why this selector reaches anything at all.';
+      body.appendChild(relax);
+    }
 
     body.appendChild(h('h3', null, 'Compound steps'));
     body.appendChild(h('p', 'note', 'Each step is compiled and run for real, rightmost compound first. ' +
