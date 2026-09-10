@@ -1,5 +1,6 @@
 import { Location } from 'vscode-languageserver';
 import type { ProjectIndex } from './index.js';
+import type { AssetReference } from '@backflip/assets';
 import * as path from 'node:path';
 
 /**
@@ -83,36 +84,49 @@ export function parseAssetRefAtCursor(
 }
 
 /**
- * Find all locations in template files that reference a specific asset (@name/subpath).
+ * Find every reference to one asset, as editor locations.
+ *
+ * `refs` comes from `collectAllAssetReferences`, which walks the compiled
+ * trees and the stylesheets rather than the raw source, so what is listed here
+ * is what actually renders: an `@name/subpath` sitting in text content, in a
+ * comment, or on an attribute without the `~` suffix is not a reference and
+ * does not appear, and one written across a line break does. Matching is on the
+ * parsed name/subpath pair, so `photo.jpg` never matches `photo.jpg.bak`.
+ *
+ * Template references resolve against `templateRoot`; stylesheet references —
+ * which carry no `partialName`, and whose `sourceFile` is relative to an asset
+ * directory rather than the template root — resolve against that directory.
+ * References with no source position (a `b-script` entry names an asset but has
+ * nowhere to jump to) are dropped.
  */
 export function findAssetReferences(
 	assetName: string,
 	assetSubpath: string,
-	templateFiles: Map<string, string>,
+	refs: AssetReference[],
 	templateRoot: string,
+	assetDirs: Map<string, string>,
 ): Location[] {
 	const locations: Location[] = [];
-	const searchStr = `@${assetName}/${assetSubpath}`;
 
-	for (const [filePath, content] of templateFiles) {
-		const lines = content.split('\n');
-		for (let i = 0; i < lines.length; i++) {
-			const line = lines[i];
-			// Only look inside ~ attributes
-			if (!line.includes('~=') || !line.includes(searchStr)) continue;
+	for (const ref of refs) {
+		if (ref.assetName !== assetName || ref.assetSubpath !== assetSubpath) continue;
+		if (ref.line <= 0) continue;
 
-			let col = line.indexOf(searchStr);
-			while (col !== -1) {
-				locations.push({
-					uri: `file://${templateRoot}/${filePath}`,
-					range: {
-						start: { line: i, character: col },
-						end: { line: i, character: col + searchStr.length },
-					},
-				});
-				col = line.indexOf(searchStr, col + 1);
-			}
-		}
+		const base = ref.partialName !== undefined ? templateRoot : assetDirs.get(ref.assetName);
+		if (base === undefined) continue;
+
+		// 1-based from the compiler and css-tree, 0-based in the protocol. An
+		// absent end means the collector had only a start (stylesheet urls), so
+		// the location is a caret rather than a wrong span.
+		const start = { line: ref.line - 1, character: ref.column - 1 };
+		const end = ref.endLine !== undefined && ref.endColumn !== undefined
+			? { line: ref.endLine - 1, character: ref.endColumn - 1 }
+			: start;
+
+		locations.push({
+			uri: `file://${base}/${ref.sourceFile}`,
+			range: { start, end },
+		});
 	}
 
 	return locations;

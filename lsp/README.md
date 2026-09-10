@@ -6,7 +6,7 @@
 
 - **Diagnostics** — red underlines for template compilation errors, and warnings on CSS files whose syntax stopped the analyzer
 - **Go to Definition** — click a `b-part` reference to jump to the `b-name` definition, or click a custom element partial tag (e.g. `<my-card>`) to jump to its definition
-- **Find All References** — from a `b-name` definition, find all `b-part` usages
+- **Find All References** — from a `b-name` definition, find all `b-part` usages; from an `@name/subpath` asset reference, find every use of that asset across templates and stylesheets
 - **Document Symbols** — lists partials in the editor outline/breadcrumbs, each spanning its whole definition so breadcrumbs track the cursor anywhere inside a partial
 - **Hover (HTML)** — hover over `b-part`, `b-name`, `b-in`, `b-slot`, `b-data:` attributes, custom element partial tags (e.g. `<my-card>`), or HTML elements to see directive info and matching CSS rules
 - **Hover (CSS)** — hover over a selector in a CSS file to see which partials contain matching elements
@@ -41,6 +41,21 @@ selector — see [CSS parse warnings](#css-parse-warnings).
 
 Note that relaxation *widens* what a hover lists: `a:hover` and `a:visited` both
 show every link, and a bare `::selection` shows every element.
+
+### Asset references
+
+Find-all-references on an `@name/subpath` reads the asset references collected
+from the last compile — `collectAllAssetReferences`, which walks the compiled
+trees and the discovered stylesheets.
+
+A stylesheet's `url(...)` is a use of the asset too, so those are listed
+alongside the template ones. They differ in two ways: their path resolves
+against the asset directory holding the stylesheet rather than the template
+root, and css-tree reports only where a url starts, so those locations are a
+caret while template references carry the reference's full extent.
+
+The collected set is shared with asset validation and the Asset Report panel, so
+all three agree and only one pass walks the trees per compile.
 
 ### Symbol ranges
 
@@ -96,7 +111,7 @@ File changes trigger recompilation with a 300ms debounce. The server runs its ow
 | `src/index.ts` | Project indexing: maps partial definitions and references |
 | `src/hover.ts` | Hover information for directives and CSS selectors |
 | `src/definition.ts` | Go-to-definition for `b-part` → `b-name` |
-| `src/references.ts` | Find-references for partial usage |
+| `src/references.ts` | Find-references for partial usage and asset references |
 | `src/symbols.ts` | Document symbols: lists partials in file, with full-definition ranges |
 | `src/diagnostics.ts` | Compilation error and CSS parse failure → LSP diagnostic conversion |
 | `build.mjs` | Rollup build script (bundles to `dist/server.cjs`) |

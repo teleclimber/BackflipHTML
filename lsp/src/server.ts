@@ -17,7 +17,7 @@ import {
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { compileDirectory, loadConfig, resolveConfigRoot, resolveAssetDirs, resolveDomPatchOutputDirs, CONFIG_FILENAME, previewPartial, parseBPartValue, type BackflipError, type CompiledFile, type CompileOptions, type LoadConfigResult } from '@backflip/html';
 import { analyzeCss, discoverCssFiles, type CssAnalysisResult, type CssSourceFile } from '@backflip/css';
-import { discoverAssetFileInfos, collectAllAssetReferences, validateAssetFiles, buildAssetUsageReport, filterReport, renderAssetReportHtml } from '@backflip/assets';
+import { discoverAssetFileInfos, collectAllAssetReferences, validateAssetFiles, buildAssetUsageReport, filterReport, renderAssetReportHtml, type AssetReference } from '@backflip/assets';
 import { buildIndex, type ProjectIndex } from './index.js';
 import { errorsToDiagnostics, cssFailuresToDiagnostics } from './diagnostics.js';
 import { findDefinition, findAssetDefinition, findCustomElementDefinition } from './definition.js';
@@ -45,7 +45,8 @@ let knownFiles: Set<string> = new Set();
 let knownCssFiles: Set<string> = new Set();
 let assetMap: Map<string, string> | undefined;
 let assetDirs: Map<string, string> | undefined;
-let templateFileContents: Map<string, string> = new Map();
+/** Asset references from the last compile: compiled trees plus stylesheets. */
+let assetReferences: AssetReference[] = [];
 let domPatchOutputDirs: string[] = [];
 let domPatchTmpDir: string | undefined;
 let fileWatcher: Watcher | null = null;
@@ -91,6 +92,7 @@ async function loadAndApplyConfig(): Promise<void> {
 			cssPaths = [];
 			cssAnalysis = null;
 			compiledFiles = new Map();
+			assetReferences = [];
 			assetMap = undefined;
 			assetDirs = undefined;
 			domPatchOutputDirs = [];
@@ -117,6 +119,7 @@ async function loadAndApplyConfig(): Promise<void> {
 		cssPaths = [];
 		cssAnalysis = null;
 		compiledFiles = new Map();
+		assetReferences = [];
 		assetMap = undefined;
 		assetDirs = undefined;
 		domPatchOutputDirs = [];
@@ -192,26 +195,15 @@ async function recompile(): Promise<void> {
 		const { directory, errors } = await compileDirectory(templateRoot, compileOpts);
 		compiledFiles = directory.files;
 
+		// Collected once per compile and kept: validation, find-references and the
+		// usage report all read the same set.
+		assetReferences = assetDirs ? collectAllAssetReferences(directory.files, assetDirs) : [];
 		if (assetDirs) {
-			const refs = collectAllAssetReferences(directory.files, assetDirs);
-			const assetErrors = validateAssetFiles(refs, assetDirs);
-			errors.push(...assetErrors);
+			errors.push(...validateAssetFiles(assetReferences, assetDirs));
 		}
 
 		projectIndex = buildIndex(directory);
 		connection.console.log(`[backflip] recompile: ${directory.files.size} files, ${errors.length} errors, ${projectIndex.partialDefs.size} partials, ${projectIndex.partialRefs.length} refs`);
-
-		// Read template file contents (used for asset reference lookups)
-		templateFileContents = new Map();
-		for (const [filePath] of directory.files) {
-			try {
-				const fullPath = path.join(templateRoot, filePath);
-				const html = await fs.readFile(fullPath, 'utf-8');
-				templateFileContents.set(filePath, html);
-			} catch {
-				// skip unreadable files
-			}
-		}
 
 		// Run CSS analysis if CSS files are discovered in asset dirs
 		cssAnalysis = null;
@@ -389,10 +381,10 @@ connection.onReferences((params: ReferenceParams) => {
 	});
 
 	// Check if cursor is on an asset reference
-	if (assetDirs && templateFileContents.size > 0) {
+	if (assetDirs && assetReferences.length > 0) {
 		const assetRef = parseAssetRefAtCursor(line, params.position.character);
 		if (assetRef) {
-			return findAssetReferences(assetRef.name, assetRef.subpath, templateFileContents, templateRoot);
+			return findAssetReferences(assetRef.name, assetRef.subpath, assetReferences, templateRoot, assetDirs);
 		}
 	}
 
@@ -626,8 +618,7 @@ connection.onRequest('backflip/assetUsageReport', (params: { uri?: string }) => 
 	if (!assetDirs || compiledFiles.size === 0) return null;
 
 	const assets = discoverAssetFileInfos(assetDirs);
-	const refs = collectAllAssetReferences(compiledFiles, assetDirs);
-	let report = buildAssetUsageReport(assets, refs);
+	let report = buildAssetUsageReport(assets, assetReferences);
 
 	// If a URI is provided, filter by asset dir and subpath
 	let filterName: string | undefined;
