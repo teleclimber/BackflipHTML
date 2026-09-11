@@ -2,3 +2,7 @@ node_modules/
 dist/
 *.vsix
 vscode-backflip/server/
+claude-specs/
+zznotes/
+
+todo.md
