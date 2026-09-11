@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import { visitTNodes, mapTNodes, appendCoalesced } from "./walk.ts";
+import { visitTNodes, mapTNodes, appendCoalesced, collectPartialRefs, visitPartialRefs } from "./walk.ts";
 import type { TNode } from "./types.ts";
 
 function raw(s: string): TNode { return { type: 'raw', raw: s }; }
@@ -92,4 +92,77 @@ Deno.test("appendCoalesced merges trailing raw, pushes otherwise", () => {
 	appendCoalesced(arr, raw('c'));
 	assertEquals(arr.length, 3);
 	assertEquals(arr[2], raw('c'));
+});
+
+// --- collectPartialRefs / visitPartialRefs ---
+
+function pref(name: string, slots: Record<string, TNode[]> = {}): TNode {
+	return { type: 'partial-ref', kind: 'b-part', file: null, partialName: name, bindings: [], slots } as TNode;
+}
+
+Deno.test("collectPartialRefs finds refs nested inside elements", () => {
+	// Elements are the container it is easiest to forget, and the one holding
+	// most refs in practice.
+	const tree: TNode[] = [
+		{ type: 'element', tagName: 'html', attrs: [], tnodes: [
+			{ type: 'element', tagName: 'body', attrs: [], tnodes: [
+				{ type: 'element', tagName: 'div', attrs: [], tnodes: [pref('leaderboard')] },
+				pref('ga-script'),
+			] },
+		] },
+	];
+	assertEquals(collectPartialRefs(tree).map(r => r.partialName), ['leaderboard', 'ga-script']);
+});
+
+Deno.test("collectPartialRefs reaches refs through every container type", () => {
+	const tree: TNode[] = [
+		pref('top'),
+		{ type: 'for', iterable: { errs: [], vars: [], expr: null } as any, valName: 'x', tnodes: [pref('in-for')] },
+		{ type: 'if', branches: [
+			{ condition: { errs: [], vars: [], expr: null } as any, tnodes: [pref('in-if-1')] },
+			{ tnodes: [pref('in-if-2')] },
+		] },
+		{ type: 'element', tagName: 'div', attrs: [], tnodes: [pref('in-elem')] },
+		pref('with-slot', { default: [pref('in-slot')] }),
+	];
+	assertEquals(collectPartialRefs(tree).map(r => r.partialName), [
+		'top', 'in-for', 'in-if-1', 'in-if-2', 'in-elem', 'with-slot', 'in-slot',
+	]);
+});
+
+Deno.test("collectPartialRefs mixes containers: element inside if inside element", () => {
+	const tree: TNode[] = [
+		{ type: 'element', tagName: 'div', attrs: [], tnodes: [
+			{ type: 'if', branches: [
+				{ condition: { errs: [], vars: [], expr: null } as any, tnodes: [
+					{ type: 'element', tagName: 'span', attrs: [], tnodes: [pref('deep')] },
+				] },
+			] },
+		] },
+	];
+	assertEquals(collectPartialRefs(tree).map(r => r.partialName), ['deep']);
+});
+
+Deno.test("collectPartialRefs finds refs inside an element in a slot body", () => {
+	const tree: TNode[] = [
+		pref('outer', { default: [
+			{ type: 'element', tagName: 'div', attrs: [], tnodes: [pref('inner')] },
+		] }),
+	];
+	assertEquals(collectPartialRefs(tree).map(r => r.partialName), ['outer', 'inner']);
+});
+
+Deno.test("collectPartialRefs returns an empty list when there are none", () => {
+	assertEquals(collectPartialRefs([raw('a'), { type: 'element', tagName: 'div', attrs: [], tnodes: [raw('b')] }]), []);
+});
+
+Deno.test("visitPartialRefs visits the same refs in the same order", () => {
+	const tree: TNode[] = [
+		{ type: 'element', tagName: 'div', attrs: [], tnodes: [pref('a', { default: [pref('b')] })] },
+		pref('c'),
+	];
+	const seen: string[] = [];
+	visitPartialRefs(tree, (r) => seen.push(r.partialName));
+	assertEquals(seen, ['a', 'b', 'c']);
+	assertEquals(seen, collectPartialRefs(tree).map(r => r.partialName));
 });

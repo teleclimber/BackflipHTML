@@ -1,5 +1,5 @@
 import { BackflipError } from './errors.js';
-import { visitTNodes } from './walk.js';
+import { visitPartialRefs } from './walk.js';
 import type {
 	CompiledFile, PartialRegistry, PartialRefTNode, RootTNode, SourceLoc, PartialBinding,
 } from './types.js';
@@ -69,9 +69,7 @@ export function resolveCustomElementCalls(
 
 	for (const [filePath, compiled] of files) {
 		for (const [, root] of compiled.partials) {
-			visitTNodes(root.tnodes, (node) => {
-				if (node.type !== 'partial-ref') return;
-				const ref = node;
+			visitPartialRefs(root.tnodes, (ref) => {
 				if (ref.kind !== 'custom-element') return;
 				if (ref.file !== null) return; // already resolved (shouldn't happen at this stage)
 
@@ -120,9 +118,7 @@ export function linkBAttrBindings(
 
 	for (const [sourceRelPath, compiled] of files) {
 		for (const [, root] of compiled.partials) {
-			visitTNodes(root.tnodes, (node) => {
-				if (node.type !== 'partial-ref') return;
-				const ref = node;
+			visitPartialRefs(root.tnodes, (ref) => {
 				if (ref.kind !== 'custom-element') return;
 				if (ref.file === '__unresolved_custom_element__') return;
 

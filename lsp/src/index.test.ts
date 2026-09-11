@@ -275,3 +275,102 @@ describe('buildIndex — partial extents', () => {
 		strictEqual(doc.getText(first.selectionRange), 'b-name="first"');
 	});
 });
+
+describe('buildIndex — references nested in markup', () => {
+	// A b-part is usually written inside ordinary markup, so the index has to
+	// reach through elements as well as for/if/slot bodies. Hover's reference
+	// count and Find All References both read what this produces.
+	function makeElement(tagName: string, tnodes: any[]): any {
+		return { type: 'element', tagName, attrs: [], tnodes };
+	}
+
+	function refNames(dir: CompiledDirectory): string[] {
+		return buildIndex(dir).partialRefs.map(r => r.partialName);
+	}
+
+	function fileWith(tnodes: any[]): CompiledDirectory {
+		return { files: new Map([['page.html', { partials: new Map([['main', makeRoot(tnodes)]]) }]]) };
+	}
+
+	it('finds a reference inside a plain element', () => {
+		deepStrictEqual(refNames(fileWith([makeElement('div', [makePartialRef('card', null)])])), ['card']);
+	});
+
+	it('finds a reference nested several elements deep', () => {
+		const tree = makeElement('html', [makeElement('body', [makeElement('div', [makePartialRef('card', null)])])]);
+		deepStrictEqual(refNames(fileWith([tree])), ['card']);
+	});
+
+	it('finds a reference inside an element inside an if branch', () => {
+		const tree = { type: 'if', branches: [{ tnodes: [makeElement('div', [makePartialRef('card', null)])] }] };
+		deepStrictEqual(refNames(fileWith([tree])), ['card']);
+	});
+
+	it('finds a reference inside an element inside a for loop', () => {
+		const tree = { type: 'for', valName: 'x', iterable: { vars: [], errs: [], expr: undefined }, tnodes: [makeElement('li', [makePartialRef('card', null)])] };
+		deepStrictEqual(refNames(fileWith([tree])), ['card']);
+	});
+
+	it('finds a reference inside an element in a slot body', () => {
+		const outer = makePartialRef('shell', null, undefined, {
+			slots: { default: [makeElement('div', [makePartialRef('card', null)])] },
+		});
+		deepStrictEqual(refNames(fileWith([outer])), ['shell', 'card']);
+	});
+
+	it('keeps loc, targetFile, bindings and slots on a nested reference', () => {
+		const refLoc = makeLoc(7, 3, 7, 40);
+		const ref = makePartialRef('card', 'components.html', refLoc, {
+			bindings: [{ kind: 'expr', name: 'title', data: { vars: [], errs: [], expr: undefined } }],
+			slots: { header: [] },
+		});
+		const index = buildIndex(fileWith([makeElement('div', [ref])]));
+		strictEqual(index.partialRefs.length, 1);
+		strictEqual(index.partialRefs[0].targetFile, 'components.html');
+		deepStrictEqual(index.partialRefs[0].loc, refLoc);
+		deepStrictEqual(index.partialRefs[0].dataBindings, ['title']);
+		deepStrictEqual(index.partialRefs[0].slotsFilled, ['header']);
+	});
+
+	it('indexes every reference in a real layout template', async () => {
+		// A page shell whose b-parts all sit inside <body>.
+		const dir = path.join('/tmp/claude-1000', `lsp_index_nested_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+		await fs.mkdir(dir, { recursive: true });
+		try {
+			const html = [
+				'<html b-name="page-shell">',                       // 1
+				'<body>',                                           // 2
+				'\t<div class="leaderboard" b-part="#leaderboard"></div>', // 3
+				'\t<div id="main">',                                // 4
+				'\t\t<b-unwrap b-part="#mobile-menu-js"></b-unwrap>', // 5
+				'\t\t<b-unwrap b-if="!hide_menu">',                 // 6
+				'\t\t\t<b-unwrap b-part="#nav-menu"></b-unwrap>',   // 7
+				'\t\t</b-unwrap>',                                  // 8
+				'\t</div>',                                         // 9
+				'\t<b-unwrap b-part="#ga-script"></b-unwrap>',      // 10
+				'</body>',                                          // 11
+				'</html>',                                          // 12
+				'<b-unwrap b-name="leaderboard">L</b-unwrap>',
+				'<b-unwrap b-name="mobile-menu-js">M</b-unwrap>',
+				'<b-unwrap b-name="nav-menu">N</b-unwrap>',
+				'<b-unwrap b-name="ga-script">G</b-unwrap>',
+			].join('\n');
+			await fs.writeFile(path.join(dir, 'layout.html'), html, 'utf-8');
+
+			const { directory } = await compileDirectory(dir);
+			const index = buildIndex(directory as CompiledDirectory);
+
+			deepStrictEqual(
+				index.partialRefs.map(r => r.partialName).sort(),
+				['ga-script', 'leaderboard', 'mobile-menu-js', 'nav-menu'],
+			);
+			// Locations must point at the reference, not the top of the file.
+			const leaderboard = index.partialRefs.find(r => r.partialName === 'leaderboard')!;
+			strictEqual(leaderboard.file, 'layout.html');
+			strictEqual(leaderboard.targetFile, null);
+			strictEqual(leaderboard.loc!.startLine, 3);
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	});
+});

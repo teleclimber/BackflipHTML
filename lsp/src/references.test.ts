@@ -6,6 +6,9 @@ import { compileDirectory } from '@backflip/html';
 import { collectAllAssetReferences } from '@backflip/assets';
 import type { AssetReference } from '@backflip/assets';
 import { findReferences, parseAssetRefAtCursor, findAssetReferences } from './references.js';
+import { buildIndex } from './index.js';
+import { getHover } from './hover.js';
+import { TextDocument } from 'vscode-languageserver-textdocument';
 import { makeLoc, makeIndex } from './test-helpers.js';
 
 describe('findReferences', () => {
@@ -271,5 +274,61 @@ describe('findAssetReferences — against compiled templates', () => {
 		// `    <img src~="@images/photo.jpg" />` — the span covers @images/photo.jpg
 		strictEqual(first.range.start.character, 15);
 		strictEqual(first.range.end.character, 15 + '@images/photo.jpg'.length);
+	});
+});
+
+describe('findReferences — end to end from a compiled project', () => {
+	// The whole pipeline: compileDirectory → buildIndex → findReferences. The
+	// unit tests above build their index by hand, so only this one covers what
+	// the indexer actually collects from a compiled tree.
+	const LAYOUT = [
+		'<html b-name="page-shell">',                                  // 1
+		'<body>',                                                      // 2
+		'\t<div class="leaderboard" b-part="#leaderboard"></div>',     // 3
+		'\t<div id="main">',                                           // 4
+		'\t\t<b-unwrap b-part="#mobile-menu-js"></b-unwrap>',          // 5
+		'\t</div>',                                                    // 6
+		'</body>',                                                     // 7
+		'</html>',                                                     // 8
+		'<b-unwrap b-name="leaderboard">L</b-unwrap>',                 // 9
+		'<b-unwrap b-name="mobile-menu-js">M</b-unwrap>',              // 10
+	].join('\n');
+
+	async function indexOf(): Promise<ReturnType<typeof buildIndex>> {
+		const dir = path.join('/tmp/claude-1000', `lsp_refs_e2e_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+		await fs.mkdir(dir, { recursive: true });
+		try {
+			await fs.writeFile(path.join(dir, 'layout.html'), LAYOUT, 'utf-8');
+			const { directory } = await compileDirectory(dir);
+			return buildIndex(directory);
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	}
+
+	it('finds the b-part that sits inside <body> markup', async () => {
+		const index = await indexOf();
+		const hits = findReferences('leaderboard', 'layout.html', index, '/workspace');
+		strictEqual(hits.length, 1);
+		strictEqual(hits[0].uri, 'file:///workspace/layout.html');
+		strictEqual(hits[0].range.start.line, 2); // 0-based: source line 3
+	});
+
+	it('finds a b-part nested two elements deep', async () => {
+		const index = await indexOf();
+		const hits = findReferences('mobile-menu-js', 'layout.html', index, '/workspace');
+		strictEqual(hits.length, 1);
+		strictEqual(hits[0].range.start.line, 4); // 0-based: source line 5
+	});
+
+	it('reports the same count that hover shows', async () => {
+		const index = await indexOf();
+		for (const name of ['leaderboard', 'mobile-menu-js']) {
+			const doc = TextDocument.create(`file:///workspace/layout.html`, 'html', 1, `<b-unwrap b-name="${name}">`);
+			const hover = getHover(doc, { line: 0, character: 20 }, 'layout.html', index);
+			const value = (hover!.contents as { value: string }).value;
+			ok(value.includes('1 reference'), `hover for ${name} said: ${value}`);
+			ok(!value.includes('0 references'));
+		}
 	});
 });

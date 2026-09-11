@@ -42,6 +42,23 @@ selector — see [CSS parse warnings](#css-parse-warnings).
 Note that relaxation *widens* what a hover lists: `a:hover` and `a:visited` both
 show every link, and a bare `::selection` shows every element.
 
+### Indexing partial references
+
+`src/index.ts` builds the project index that answers "where is this partial
+used?" — the reference count in a `b-name` hover and the results of Find All
+References both read `index.partialRefs`.
+
+The traversal is the compiler's
+[`collectPartialRefs`](../compiler/README.md#tree-traversal-walkts), the same
+one codegen and `link.ts` use, so what the editor counts is what the generated
+output resolves. It reaches references wherever they are written — including
+inside ordinary markup, which is where most of them live, anything under a
+layout's `<body>` included.
+
+A reference is matched to a definition by file: a same-file `b-part="#name"`
+(`targetFile === null`) matches a definition in the file it was written in, and
+a cross-file one matches the file it names.
+
 ### Resolving the cursor
 
 `src/resolve.ts` answers "what is at this position?" from the compiled tree.
@@ -140,7 +157,7 @@ File changes trigger recompilation with a 300ms debounce. The server runs its ow
 | File | Purpose |
 |------|---------|
 | `src/server.ts` | LSP connection setup, all request/notification handlers |
-| `src/index.ts` | Project indexing: maps partial definitions and references |
+| `src/index.ts` | Project indexing: maps partial definitions and references (walk shared with the compiler) |
 | `src/resolve.ts` | Cursor position → the element/directive under it, from the compiled tree |
 | `src/hover.ts` | Hover information for directives and CSS selectors |
 | `src/definition.ts` | Go-to-definition for `b-part` → `b-name` |

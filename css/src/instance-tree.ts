@@ -1,7 +1,7 @@
 import type {
 	CompiledFile, CustomElementCallTNode, ElementTNode, PartialRefTNode, RootTNode, TNode,
 } from '@backflip/html';
-import { resolvePartial, visitTNodes } from '@backflip/html';
+import { resolvePartial, visitPartialRefs } from '@backflip/html';
 import { attrIndexOf, buildAttrIndex, type AttrIndex, type ElementLikeTNode } from './tnode-view.js';
 
 /**
@@ -372,9 +372,8 @@ function collectReferenced(files: Map<string, CompiledFile>): Set<RootTNode> {
 	const referenced = new Set<RootTNode>();
 	for (const compiled of files.values()) {
 		for (const root of compiled.partials.values()) {
-			visitTNodes(root.tnodes, (n) => {
-				if (n.type !== 'partial-ref') return;
-				const target = resolvePartial(n, compiled, files);
+			visitPartialRefs(root.tnodes, (ref) => {
+				const target = resolvePartial(ref, compiled, files);
 				if (target) referenced.add(target);
 			});
 		}

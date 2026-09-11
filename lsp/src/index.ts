@@ -1,5 +1,5 @@
-import { collectSlots, inferDataShape, inferFreeVars } from '@backflip/html';
-import type { CompiledDirectory, CompiledFile, RootTNode, TNode, PartialRefTNode, ForTNode, IfTNode, SlotTNode, SourceLoc, DataShape } from '@backflip/html';
+import { collectSlots, inferDataShape, inferFreeVars, visitPartialRefs } from '@backflip/html';
+import type { CompiledDirectory, RootTNode, TNode, SourceLoc, DataShape } from '@backflip/html';
 
 export interface PartialDef {
 	file: string;
@@ -87,40 +87,22 @@ function partialExtent(root: RootTNode): { startOffset: number; endOffset: numbe
 	return { startOffset: meta.startOffset, endOffset: meta.endOffset };
 }
 
+/**
+ * Record every `b-part` / custom-element call under `tnodes` as a PartialRef.
+ *
+ * The traversal is the compiler's `visitPartialRefs`, the same one codegen and
+ * `link.ts` use, so the references the editor counts are the ones the generated
+ * output resolves.
+ */
 function collectRefs(tnodes: TNode[], filePath: string, refs: PartialRef[]): void {
-	for (const tnode of tnodes) {
-		switch (tnode.type) {
-			case 'partial-ref': {
-				const ref = tnode as PartialRefTNode;
-				refs.push({
-					file: filePath,
-					partialName: ref.partialName,
-					targetFile: ref.file,
-					loc: ref.loc,
-					dataBindings: ref.bindings.map(b => b.name),
-					slotsFilled: Object.keys(ref.slots),
-				});
-				// Also walk slot contents
-				for (const slotNodes of Object.values(ref.slots)) {
-					collectRefs(slotNodes as TNode[], filePath, refs);
-				}
-				break;
-			}
-			case 'for': {
-				const forNode = tnode as ForTNode;
-				collectRefs(forNode.tnodes, filePath, refs);
-				break;
-			}
-			case 'if': {
-				const ifNode = tnode as IfTNode;
-				for (const branch of ifNode.branches) {
-					collectRefs(branch.tnodes, filePath, refs);
-				}
-				break;
-			}
-			default:
-				break;
-		}
-	}
+	visitPartialRefs(tnodes, (ref) => {
+		refs.push({
+			file: filePath,
+			partialName: ref.partialName,
+			targetFile: ref.file,
+			loc: ref.loc,
+			dataBindings: ref.bindings.map(b => b.name),
+			slotsFilled: Object.keys(ref.slots),
+		});
+	});
 }
-

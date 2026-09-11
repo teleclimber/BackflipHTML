@@ -1,4 +1,4 @@
-import type { TNode } from './types.js';
+import type { TNode, PartialRefTNode } from './types.js';
 
 /**
  * Shared TNode tree-traversal utilities. The compiler recurses over the same
@@ -102,4 +102,26 @@ export function appendCoalesced(arr: TNode[], node: TNode): void {
 	} else {
 		arr.push(node);
 	}
+}
+
+/**
+ * Visit every `PartialRefTNode` in `tnodes`, depth-first pre-order.
+ *
+ * The single "where is this partial used?" traversal: codegen orders same-file
+ * definitions and gathers cross-file imports with it, `link.ts` resolves
+ * custom-element calls and `b-attr:` bindings, the CSS analyzer finds reachable
+ * partials, and the LSP indexes references. Route new callers through here so
+ * the list of child containers stays in one place.
+ */
+export function visitPartialRefs(tnodes: TNode[], visit: (ref: PartialRefTNode) => void): void {
+	visitTNodes(tnodes, (n) => {
+		if (n.type === 'partial-ref') visit(n);
+	});
+}
+
+/** Every `PartialRefTNode` in `tnodes`, depth-first pre-order. See `visitPartialRefs`. */
+export function collectPartialRefs(tnodes: TNode[]): PartialRefTNode[] {
+	const refs: PartialRefTNode[] = [];
+	visitPartialRefs(tnodes, (ref) => refs.push(ref));
+	return refs;
 }

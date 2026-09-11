@@ -29,6 +29,27 @@ The AST is a tree of `TNode`s under a `RootTNode`. Each variant models one struc
 
 `AttrPart` itself is `static` (literal text), `dynamic` (runtime-evaluated expression), or `asset` (compile-time-resolved `@name/...` URL). The `resolveAssetRefs()` pass replaces `asset` parts with `static` parts after compilation.
 
+### Tree traversal (`walk.ts`)
+
+Every recursion over the AST has the same job of knowing which variants hold
+children: `for.tnodes`, `if.branches[i].tnodes`, `element.tnodes`, and a
+`partial-ref`'s `slots[name]`. Miss one and the walk silently skips a subtree,
+so the container list lives in exactly one place:
+
+- `visitTNodes(tnodes, visit)` — depth-first pre-order visit of every node.
+- `mapTNodes(tnodes, fn, opts)` — structural copy-transform, rebuilt bottom-up.
+  Copies are spreads, so fields this utility does not know about survive.
+- `visitPartialRefs(tnodes, visit)` / `collectPartialRefs(tnodes)` — the
+  "where is this partial used?" traversal, layered on `visitTNodes`.
+
+`collectPartialRefs` has five callers and no reimplementations: both code
+generators (to topologically order same-file partials and gather cross-file
+imports), `link.ts` (custom-element calls and `b-attr:` bindings), the CSS
+analyzer (which partials are reachable), and the LSP (reference indexing for
+hover counts and Find All References). A second copy of that recursion is a
+subtree the editor and the generated output can disagree about, so new callers
+route through here.
+
 ### Expression language (`backcode.ts`)
 
 Handles expressions used in directives and `{{ }}` interpolations. Uses `acorn` to parse expressions as a safe subset of JavaScript (identifiers, literals, member access, unary operators). Validates that only allowed constructs are used and extracts the list of variable names each expression depends on.

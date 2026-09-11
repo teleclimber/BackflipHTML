@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, CommentTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, CustomElementCallTNode, PartialBinding, ElementTNode, AttrBindTNode, AttrPart, CompiledFile } from '../../types.js';
 import type { Parsed } from '../../backcode.js';
 import { generateFunction } from './generatejs.js';
+import { collectPartialRefs } from '../../walk.js';
 
 export function sanitizeName(name: string): string {
 	return name.replace(/[^a-zA-Z0-9_$]/g, '_');
@@ -276,27 +277,6 @@ export function backcodeToJS(c :Parsed) :string {
 	return `{ fn: ${fn}, vars: ${vars} }`;
 }
 
-// Collect all PartialRefTNodes in a tree (depth-first)
-function collectPartialRefs(root: RootTNode): PartialRefTNode[] {
-	const refs: PartialRefTNode[] = [];
-	function walk(nodes: TNode[]) {
-		for (const n of nodes) {
-			if (n.type === 'partial-ref') {
-				refs.push(n);
-				for (const slotNodes of Object.values(n.slots)) walk(slotNodes);
-			} else if (n.type === 'for') {
-				walk(n.tnodes);
-			} else if (n.type === 'if') {
-				for (const b of n.branches) walk(b.tnodes);
-			} else if (n.type === 'element') {
-				walk(n.tnodes);
-			}
-		}
-	}
-	walk(root.tnodes);
-	return refs;
-}
-
 // Topologically sort partials so same-file deps come before dependents
 function topoSortPartials(partials: Map<string, RootTNode>): string[] {
 	const names = Array.from(partials.keys());
@@ -307,7 +287,7 @@ function topoSortPartials(partials: Map<string, RootTNode>): string[] {
 		if (visited.has(name)) return;
 		visited.add(name);
 		const root = partials.get(name)!;
-		const refs = collectPartialRefs(root);
+		const refs = collectPartialRefs(root.tnodes);
 		for (const ref of refs) {
 			if (ref.file === null && partials.has(ref.partialName)) {
 				visit(ref.partialName);
@@ -328,7 +308,7 @@ export function fileToJsModule(file: CompiledFile, filePath: string, assetMap?: 
 	// Collect all cross-file refs across all partials in this file
 	const crossFileRefs = new Map<string, Set<string>>();  // file → set of partial names
 	for (const root of file.partials.values()) {
-		for (const ref of collectPartialRefs(root)) {
+		for (const ref of collectPartialRefs(root.tnodes)) {
 			if (ref.file !== null && ref.file !== UNRESOLVED_CE) {
 				if (!crossFileRefs.has(ref.file)) crossFileRefs.set(ref.file, new Set());
 				crossFileRefs.get(ref.file)!.add(ref.partialName);
