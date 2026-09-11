@@ -42,6 +42,38 @@ selector — see [CSS parse warnings](#css-parse-warnings).
 Note that relaxation *widens* what a hover lists: `a:hover` and `a:visited` both
 show every link, and a bare `::selection` shows every element.
 
+### Resolving the cursor
+
+`src/resolve.ts` answers "what is at this position?" from the compiled tree.
+`resolveAt(file, offset)`
+returns everything whose span covers the offset — the element, the directive on
+it, the partial it belongs to — innermost first, where innermost means the
+narrowest span. `elementAt` and `targetAt` are the narrow forms.
+
+Spans come from the compiler, so the answer does not change when two elements
+share a line, when an element's open tag straddles a line break, or when the
+cursor is in text content rather than on a tag: the element you are inside is
+the element you get, and its ancestors follow it in the list. Spans are
+half-open, so where `</span>` ends is the `<` of the next tag and belongs to
+that tag alone.
+
+Two limits are worth knowing. Content outside every partial definition never
+reaches a compiled tree, so it resolves to nothing. And raw text runs carry no
+location at all, so they resolve to their containing element rather than to
+themselves.
+
+Element hover (**Hover (HTML)** on a plain tag) is built on this: the element
+under the cursor is looked up in the CSS analysis by the offset its open tag
+starts at. The analysis only lists elements that matched at least one rule, so
+an element with no rules shows no hover rather than its parent's rules.
+
+The directive probes — `b-part`, `b-name`, `b-in`, `b-slot`, `b-data:`,
+`b-attr:`, asset references — still match against the hovered line's text, and
+still take the first match on that line. `resolve.ts` already reports all of
+them, so moving those over is a mechanical change; it is held back only because
+their tests are built on template fragments that carry no `b-name` and so
+compile to no tree at all.
+
 ### Asset references
 
 Find-all-references on an `@name/subpath` reads the asset references collected
@@ -109,6 +141,7 @@ File changes trigger recompilation with a 300ms debounce. The server runs its ow
 |------|---------|
 | `src/server.ts` | LSP connection setup, all request/notification handlers |
 | `src/index.ts` | Project indexing: maps partial definitions and references |
+| `src/resolve.ts` | Cursor position → the element/directive under it, from the compiled tree |
 | `src/hover.ts` | Hover information for directives and CSS selectors |
 | `src/definition.ts` | Go-to-definition for `b-part` → `b-name` |
 | `src/references.ts` | Find-references for partial usage and asset references |

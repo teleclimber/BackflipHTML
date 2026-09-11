@@ -1,16 +1,20 @@
 import { describe, it } from 'node:test';
 import { strictEqual, ok, match, deepStrictEqual } from 'node:assert';
 import { getHover, findRulesForElement, findElementsForSelector } from './hover.js';
+import { elementAt } from './resolve.js';
 import { makeIndex, makeLoc } from './test-helpers.js';
 import { analyzeCss } from '@backflip/css';
 import { compileFiles } from '@backflip/html';
 
 async function analyze(input: { cssContent: string; cssPath?: string; templateFiles: Map<string, string> }) {
 	const { directory } = await compileFiles(input.templateFiles);
-	return analyzeCss({
+	const cssAnalysis = analyzeCss({
 		files: [{ path: input.cssPath ?? '/workspace/styles.css', content: input.cssContent }],
 		compiled: directory.files,
 	});
+	// The compiled files come back too: getHover resolves the element under the
+	// cursor from the same trees the analysis was built against.
+	return Object.assign(cssAnalysis, { files: directory.files });
 }
 
 import type { TextDocument } from 'vscode-languageserver-textdocument';
@@ -35,6 +39,7 @@ function makeDoc(lines: string[]): TextDocument {
 			if (!range) return text;
 			return text.substring(offsetAt(range.start), offsetAt(range.end));
 		},
+		offsetAt,
 	} as TextDocument;
 }
 
@@ -678,20 +683,41 @@ describe('getHover', () => {
 	});
 
 	describe('CSS rules', () => {
-		function makeCssAnalysis(file: string, matches: Array<{
-			startLine: number;
-			startCol: number;
-			rules: Array<{ selector: string; specificity: [number, number, number]; properties?: Array<{ name: string; value: string }>; media?: string[]; matchType?: string; sourceLine?: number; sourceCol?: number; stripped?: Array<{ text: string; name: string; category: string }> }>;
-		}>) {
+		type RuleSpec = {
+			selector: string;
+			specificity: [number, number, number];
+			properties?: Array<{ name: string; value: string }>;
+			media?: string[];
+			matchType?: string;
+			sourceLine?: number;
+			sourceCol?: number;
+			stripped?: Array<{ text: string; name: string; category: string }>;
+		};
+
+		/**
+		 * A real compiled template paired with a hand-built analysis pinned to one
+		 * of its elements. The analysis stays synthetic because these tests are
+		 * about how a matched rule is rendered, not about which element the cursor
+		 * lands on — but it has to hang off a real element for the cursor to reach
+		 * it, since the element now comes from the compiled tree.
+		 */
+		async function fixture(inner: string, rules: RuleSpec[]) {
+			const html = `<div b-name="page">${inner}</div>`;
+			const { directory } = await compileFiles(new Map([['page.html', html]]));
+			const compiledFile = directory.files.get('page.html')!;
+			const innerStart = html.indexOf(inner);
+			const el = elementAt(compiledFile, innerStart)!;
+			const loc = (el.openTagLoc ?? el.loc)!;
+
 			const elementMatches = new Map();
-			elementMatches.set(file, matches.map(m => ({
-				element: null,
-				file,
-				partialName: 'test',
-				startLine: m.startLine,
-				startCol: m.startCol,
-				startOffset: 0,
-				matches: m.rules.map(r => ({
+			elementMatches.set('page.html', [{
+				element: el,
+				file: 'page.html',
+				partialName: 'page',
+				startLine: loc.startLine,
+				startCol: loc.startCol,
+				startOffset: loc.startOffset,
+				matches: rules.map(r => ({
 					rule: {
 						selectorText: r.selector,
 						selectors: [r.selector],
@@ -707,22 +733,27 @@ describe('getHover', () => {
 					matchType: r.matchType ?? 'definite',
 					strippedPseudos: r.stripped ?? [],
 				})),
-			})));
-			return { elementMatches, rules: [] };
+			}]);
+
+			const cssAnalysis = { elementMatches, rules: [] };
+			return {
+				cssAnalysis,
+				compiledFile,
+				/** Hover inside the inner element's open tag. */
+				hover(cssPaths?: string[] | null) {
+					return getHover(
+						makeDoc([html]), pos(0, innerStart + 2), 'page.html', makeIndex([], []),
+						cssAnalysis as any, cssPaths ?? null, null, null, compiledFile,
+					);
+				},
+			};
 		}
 
 		it('shows CSS rules on hover', async () => {
-			const index = makeIndex([], []);
-			const cssAnalysis = makeCssAnalysis('page.html', [{
-				startLine: 1,
-				startCol: 1,
-				rules: [
-					{ selector: '.card', specificity: [0, 1, 0], properties: [{ name: 'color', value: 'red' }] },
-				],
-			}]);
-			const doc = makeDoc(['<div class="card">Hello</div>']);
-			const result = getHover(doc, pos(0, 5), 'page.html', index, cssAnalysis as any);
-			const v = hoverValue(result);
+			const f = await fixture('<div class="card">Hello</div>', [
+				{ selector: '.card', specificity: [0, 1, 0], properties: [{ name: 'color', value: 'red' }] },
+			]);
+			const v = hoverValue(f.hover());
 			ok(v.includes('**CSS Rules**'));
 			ok(v.includes('`.card`'));
 			ok(v.includes('(0, 1, 0)'));
@@ -730,136 +761,88 @@ describe('getHover', () => {
 		});
 
 		it('shows media conditions', async () => {
-			const index = makeIndex([], []);
-			const cssAnalysis = makeCssAnalysis('page.html', [{
-				startLine: 1,
-				startCol: 1,
-				rules: [
-					{ selector: '.card', specificity: [0, 1, 0], media: ['(min-width:768px)'] },
-				],
-			}]);
-			const doc = makeDoc(['<div class="card">Hello</div>']);
-			const result = getHover(doc, pos(0, 5), 'page.html', index, cssAnalysis as any);
-			const v = hoverValue(result);
+			const f = await fixture('<div class="card">Hello</div>', [
+				{ selector: '.card', specificity: [0, 1, 0], media: ['(min-width:768px)'] },
+			]);
+			const v = hoverValue(f.hover());
 			ok(v.includes('@media'));
 			ok(v.includes('(min-width:768px)'));
 		});
 
 		it('shows match type for conditional matches', async () => {
-			const index = makeIndex([], []);
-			const cssAnalysis = makeCssAnalysis('page.html', [{
-				startLine: 1,
-				startCol: 1,
-				rules: [
-					{ selector: 'span', specificity: [0, 0, 1], matchType: 'conditional' },
-				],
-			}]);
-			const doc = makeDoc(['<span>Hello</span>']);
-			const result = getHover(doc, pos(0, 2), 'page.html', index, cssAnalysis as any);
-			const v = hoverValue(result);
-			ok(v.includes('*conditional*'));
+			const f = await fixture('<span>Hello</span>', [
+				{ selector: 'span', specificity: [0, 0, 1], matchType: 'conditional' },
+			]);
+			ok(hoverValue(f.hover()).includes('*conditional*'));
 		});
 
 		it('shows the pseudos that were stripped before matching', async () => {
-			const index = makeIndex([], []);
-			const cssAnalysis = makeCssAnalysis('page.html', [{
-				startLine: 1,
-				startCol: 1,
-				rules: [
-					{
-						selector: '.card:hover::before',
-						specificity: [0, 2, 1],
-						stripped: [
-							{ text: ':hover', name: 'hover', category: 'user-action' },
-							{ text: '::before', name: 'before', category: 'tree-abiding' },
-						],
-					},
+			const f = await fixture('<div class="card">Hello</div>', [{
+				selector: '.card:hover::before',
+				specificity: [0, 2, 1],
+				stripped: [
+					{ text: ':hover', name: 'hover', category: 'user-action' },
+					{ text: '::before', name: 'before', category: 'tree-abiding' },
 				],
 			}]);
-			const doc = makeDoc(['<div class="card">Hello</div>']);
-			const result = getHover(doc, pos(0, 5), 'page.html', index, cssAnalysis as any);
-			const v = hoverValue(result);
+			const v = hoverValue(f.hover());
 			ok(v.includes('`.card:hover::before`'), 'shows the selector as authored');
 			ok(v.includes('`:hover` (user-action)'), 'names the stripped pseudo and its category');
 			ok(v.includes('`::before` (tree-abiding)'), 'names every stripped pseudo');
 		});
 
 		it('says nothing about stripping for a selector that matched as authored', async () => {
-			const index = makeIndex([], []);
-			const cssAnalysis = makeCssAnalysis('page.html', [{
-				startLine: 1,
-				startCol: 1,
-				rules: [{ selector: '.card', specificity: [0, 1, 0] }],
-			}]);
-			const doc = makeDoc(['<div class="card">Hello</div>']);
-			const result = getHover(doc, pos(0, 5), 'page.html', index, cssAnalysis as any);
-			ok(!hoverValue(result).includes('ignoring'), 'no relaxation note when nothing was stripped');
-		});
-
-		it('returns null when no CSS analysis available', async () => {
-			const index = makeIndex([], []);
-			const doc = makeDoc(['<div class="card">Hello</div>']);
-			const result = getHover(doc, pos(0, 5), 'page.html', index, null);
-			strictEqual(result, null);
+			const f = await fixture('<div class="card">Hello</div>', [
+				{ selector: '.card', specificity: [0, 1, 0] },
+			]);
+			const v = hoverValue(f.hover());
+			ok(v.includes('`.card`'), 'the rule is shown');
+			ok(!v.includes('ignoring'), 'no relaxation note when nothing was stripped');
 		});
 
 		it('shows CSS file name and line number when cssPaths is provided', async () => {
-			const index = makeIndex([], []);
-			const cssAnalysis = makeCssAnalysis('page.html', [{
-				startLine: 1,
-				startCol: 1,
-				rules: [
-					{ selector: '.card', specificity: [0, 1, 0], properties: [{ name: 'color', value: 'red' }], sourceLine: 10 },
-				],
-			}]);
-			const doc = makeDoc(['<div class="card">Hello</div>']);
-			const result = getHover(doc, pos(0, 5), 'page.html', index, cssAnalysis as any, ['/workspace/styles.css']);
-			const v = hoverValue(result);
+			const f = await fixture('<div class="card">Hello</div>', [
+				{ selector: '.card', specificity: [0, 1, 0], properties: [{ name: 'color', value: 'red' }], sourceLine: 10 },
+			]);
+			const v = hoverValue(f.hover(['/workspace/styles.css']));
 			ok(v.includes('styles.css:10'), 'should include file name and line number');
 			ok(v.includes('command:backflipHTML.openFileAtLocation'), 'should include command URI');
 		});
 
 		it('shows correct line numbers for multiple rules', async () => {
-			const index = makeIndex([], []);
-			const cssAnalysis = makeCssAnalysis('page.html', [{
-				startLine: 1,
-				startCol: 1,
-				rules: [
-					{ selector: '.a', specificity: [0, 1, 0], sourceLine: 5 },
-					{ selector: '.b', specificity: [0, 1, 0], sourceLine: 12 },
-				],
-			}]);
-			const doc = makeDoc(['<div class="a b">Hello</div>']);
-			const result = getHover(doc, pos(0, 5), 'page.html', index, cssAnalysis as any, ['/workspace/theme.css']);
-			const v = hoverValue(result);
+			const f = await fixture('<div class="a b">Hello</div>', [
+				{ selector: '.a', specificity: [0, 1, 0], sourceLine: 5 },
+				{ selector: '.b', specificity: [0, 1, 0], sourceLine: 12 },
+			]);
+			const v = hoverValue(f.hover(['/workspace/theme.css']));
 			ok(v.includes('theme.css:5'), 'should include first rule line');
 			ok(v.includes('theme.css:12'), 'should include second rule line');
 		});
 
 		it('does not show file link when cssPaths is not provided', async () => {
-			const index = makeIndex([], []);
-			const cssAnalysis = makeCssAnalysis('page.html', [{
-				startLine: 1,
-				startCol: 1,
-				rules: [
-					{ selector: '.card', specificity: [0, 1, 0] },
-				],
-			}]);
-			const doc = makeDoc(['<div class="card">Hello</div>']);
-			const result = getHover(doc, pos(0, 5), 'page.html', index, cssAnalysis as any);
-			const v = hoverValue(result);
+			const f = await fixture('<div class="card">Hello</div>', [
+				{ selector: '.card', specificity: [0, 1, 0] },
+			]);
+			const v = hoverValue(f.hover());
+			ok(v.includes('`.card`'), 'the rule is shown');
 			ok(!v.includes('command:'), 'should not include command URI without cssPaths');
 		});
 
-		it('returns null when cursor not on HTML tag', async () => {
-			const index = makeIndex([], []);
-			const cssAnalysis = makeCssAnalysis('page.html', [{
-				startLine: 1,
-				startCol: 1,
-				rules: [{ selector: '.card', specificity: [0, 1, 0] }],
-			}]);
+		it('returns null when no CSS analysis available', async () => {
+			const doc = makeDoc(['<div b-name="page"><div class="card">Hello</div></div>']);
+			strictEqual(getHover(doc, pos(0, 25), 'page.html', makeIndex([], []), null), null);
+		});
+
+		it('returns null when the cursor is on no element', async () => {
+			// Text outside any partial definition reaches no compiled tree.
+			const f = await fixture('<div class="card">Hello</div>', [
+				{ selector: '.card', specificity: [0, 1, 0] },
+			]);
 			const doc = makeDoc(['Hello world']);
-			const result = getHover(doc, pos(0, 5), 'page.html', index, cssAnalysis as any);
+			const result = getHover(
+				doc, pos(0, 5), 'page.html', makeIndex([], []),
+				f.cssAnalysis as any, null, null, null, f.compiledFile,
+			);
 			strictEqual(result, null);
 		});
 	});
@@ -1057,7 +1040,7 @@ describe('getHover integration (analyzeCss + getHover)', () => {
 		});
 		const doc = makeDoc(html.split('\n'));
 		// Hover on the div.card-body (line 1, 0-based)
-		const result = getHover(doc, pos(1, 5), 'page.html', makeIndex([], []), cssAnalysis);
+		const result = getHover(doc, pos(1, 5), 'page.html', makeIndex([], []), cssAnalysis, null, null, null, cssAnalysis.files.get('page.html'));
 		const v = hoverValue(result);
 		ok(v.includes('**CSS Rules**'), 'should show CSS rules header');
 		ok(v.includes('.card-body'), 'should show .card-body selector');
@@ -1083,7 +1066,7 @@ describe('getHover integration (analyzeCss + getHover)', () => {
 		});
 		const doc = makeDoc(html.split('\n'));
 		// Hover on the h2 (line 7, 0-based)
-		const result = getHover(doc, pos(7, 6), 'page.html', makeIndex([], []), cssAnalysis);
+		const result = getHover(doc, pos(7, 6), 'page.html', makeIndex([], []), cssAnalysis, null, null, null, cssAnalysis.files.get('page.html'));
 		const v = hoverValue(result);
 		ok(v.includes('**CSS Rules**'), 'should show CSS rules for b-in element');
 		ok(v.includes('.card-header h2'), 'should match descendant selector through slot');
@@ -1111,7 +1094,7 @@ describe('getHover integration (analyzeCss + getHover)', () => {
 		});
 		const doc = makeDoc(html.split('\n'));
 		// Hover on the p (line 8, 0-based)
-		const result = getHover(doc, pos(8, 8), 'page.html', makeIndex([], []), cssAnalysis);
+		const result = getHover(doc, pos(8, 8), 'page.html', makeIndex([], []), cssAnalysis, null, null, null, cssAnalysis.files.get('page.html'));
 		const v = hoverValue(result);
 		ok(v.includes('**CSS Rules**'), 'should show CSS rules for b-in element');
 		ok(v.includes('.page-wrapper .card-body p'), 'should match selector spanning caller and partial');
@@ -1142,7 +1125,7 @@ describe('getHover integration (analyzeCss + getHover)', () => {
 		});
 		const doc = makeDoc(pageHtml.split('\n'));
 		// Hover on the span (line 2, 0-based)
-		const result = getHover(doc, pos(2, 6), 'page.html', makeIndex([], []), cssAnalysis);
+		const result = getHover(doc, pos(2, 6), 'page.html', makeIndex([], []), cssAnalysis, null, null, null, cssAnalysis.files.get('page.html'));
 		const v = hoverValue(result);
 		ok(v.includes('**CSS Rules**'), 'should show CSS rules for cross-file slot content');
 		ok(v.includes('.card-header span'), 'should match selector from cross-file partial');
@@ -1200,79 +1183,85 @@ describe('CSS selector hover integration (analyzeCss + getHover on CSS file)', (
 });
 
 describe('findRulesForElement', () => {
-	function makeCssAnalysis(file: string, matches: Array<{
-		startLine: number;
-		startCol: number;
-		rules: Array<{
-			selector: string;
-			specificity: [number, number, number];
-			properties?: Array<{ name: string; value: string }>;
-			media?: string[];
-			matchType?: string;
-			sourceLine?: number;
-			sourceCol?: number;
-		}>;
-	}>) {
-		const elementMatches = new Map();
-		elementMatches.set(file, matches.map(m => ({
-			element: null,
-			file,
-			partialName: 'test',
-			startLine: m.startLine,
-			startCol: m.startCol,
-			startOffset: 0,
-			matches: m.rules.map(r => ({
-				rule: {
-					selectorText: r.selector,
-					selectors: [r.selector],
-					properties: r.properties ?? [],
-					mediaConditions: r.media ?? [],
-					sourceFile: '/workspace/styles.css',
-					sourceLine: r.sourceLine ?? 1,
-					sourceCol: r.sourceCol ?? 1,
-				},
-				selector: r.selector,
-				specificity: r.specificity,
-				mediaConditions: r.media ?? [],
-				matchType: r.matchType ?? 'definite',
-				strippedPseudos: [],
-			})),
-		})));
-		return { elementMatches, rules: [] };
+	/** Compile a template, analyze CSS against it, and hand back a cursor helper. */
+	async function fixture(cssContent: string, html: string) {
+		const { directory } = await compileFiles(new Map([['page.html', html]]));
+		const cssAnalysis = analyzeCss({
+			files: [{ path: '/workspace/styles.css', content: cssContent }],
+			compiled: directory.files,
+		});
+		const file = directory.files.get('page.html')!;
+		return {
+			/** Rules for the element at the middle of `needle`. */
+			rulesAt(needle: string) {
+				const i = html.indexOf(needle);
+				if (i === -1) throw new Error(`fixture has no ${JSON.stringify(needle)}`);
+				return findRulesForElement(file, i + Math.floor(needle.length / 2), 'page.html', cssAnalysis);
+			},
+		};
 	}
 
-	it('returns structured data for matching element', async () => {
-		const cssAnalysis = makeCssAnalysis('page.html', [{
-			startLine: 1,
-			startCol: 1,
-			rules: [
-				{ selector: '.card', specificity: [0, 1, 0], properties: [{ name: 'color', value: 'red' }], sourceLine: 5, sourceCol: 3 },
-			],
-		}]);
-		const result = findRulesForElement('<div class="card">Hello</div>', 0, 5, 'page.html', cssAnalysis as any);
+	it('returns structured data for the element under the cursor', async () => {
+		const { rulesAt } = await fixture(
+			'.card { color: red; }',
+			'<div b-name="page"><div class="card">Hello</div></div>',
+		);
+		const result = rulesAt('class="card"');
 		ok(result, 'should return a result');
 		strictEqual(result!.tagName, 'div');
 		strictEqual(result!.rules.length, 1);
 		strictEqual(result!.rules[0].selector, '.card');
-		strictEqual(result!.rules[0].specificity[1], 1);
 		strictEqual(result!.rules[0].properties[0].name, 'color');
-		strictEqual(result!.rules[0].sourceLine, 5);
 	});
 
-	it('returns null when no element matches', async () => {
-		const cssAnalysis = makeCssAnalysis('page.html', [{
-			startLine: 2,
-			startCol: 1,
-			rules: [{ selector: '.card', specificity: [0, 1, 0] }],
-		}]);
-		const result = findRulesForElement('<div>Hello</div>', 0, 5, 'page.html', cssAnalysis as any);
-		strictEqual(result, null);
+	it('tells two elements on the same line apart', async () => {
+		// The reported bug: hovering the second element reported the first,
+		// because the element was found by regexing the line for a tag.
+		const { rulesAt } = await fixture(
+			'span { color: red; } a { color: blue; }',
+			'<div b-name="page"><span>Email: </span><a href="mailto:x@y.z">email</a></div>',
+		);
+		strictEqual(rulesAt('<span')!.rules[0].selector, 'span');
+		strictEqual(rulesAt('mailto:x@y.z')!.rules[0].selector, 'a');
+		strictEqual(rulesAt('>email<')!.rules[0].selector, 'a');
 	});
 
-	it('returns null for non-tag lines', async () => {
-		const cssAnalysis = makeCssAnalysis('page.html', []);
-		const result = findRulesForElement('Hello world', 0, 5, 'page.html', cssAnalysis as any);
-		strictEqual(result, null);
+	it('reports the innermost element rather than an ancestor', async () => {
+		const { rulesAt } = await fixture(
+			'.outer { color: red; } .inner { color: blue; }',
+			'<div b-name="page"><div class="outer"><b class="inner">hi</b></div></div>',
+		);
+		strictEqual(rulesAt('class="inner"')!.rules[0].selector, '.inner');
+		strictEqual(rulesAt('class="outer"')!.rules[0].selector, '.outer');
+	});
+
+	it('returns null for an element with no matching rules', async () => {
+		// Not the enclosing element's rules: the question is what applies here.
+		const { rulesAt } = await fixture(
+			'.card { color: red; }',
+			'<div b-name="page"><div class="card"><b>hi</b></div></div>',
+		);
+		strictEqual(rulesAt('<b>'), null);
+	});
+
+	it('resolves an element whose open tag spans several lines', async () => {
+		const { rulesAt } = await fixture(
+			'.mail { color: blue; }',
+			['<div b-name="page">', '  <a', '    href="mailto:x@y.z"', '    class="mail">email</a>', '</div>'].join('\n'),
+		);
+		strictEqual(rulesAt('class="mail"')!.rules[0].selector, '.mail');
+	});
+
+	it('returns null when the file has no analyzed elements', async () => {
+		const { directory } = await compileFiles(new Map([['page.html', '<div b-name="page"><div>Hello</div></div>']]));
+		const cssAnalysis = analyzeCss({ files: [{ path: '/workspace/styles.css', content: '.nope { color: red; }' }], compiled: directory.files });
+		strictEqual(findRulesForElement(directory.files.get('page.html')!, 25, 'other.html', cssAnalysis), null);
+	});
+
+	it('returns null for an offset outside every partial', async () => {
+		const { directory } = await compileFiles(new Map([['page.html', '<div b-name="page"><div class="card">Hello</div></div>']]));
+		const cssAnalysis = analyzeCss({ files: [{ path: '/workspace/styles.css', content: '.card { color: red; }' }], compiled: directory.files });
+		strictEqual(findRulesForElement(directory.files.get('page.html')!, 100000, 'page.html', cssAnalysis), null);
 	});
 });
 
@@ -1498,12 +1487,18 @@ describe('asset ref hover', () => {
 
 	it('still shows CSS rules when hovering on class attr (not asset attr)', async () => {
 		const index = makeIndex([], []);
-		const line = '<img class="hero" src~="@images/photo.jpg" />';
-		const doc = makeDoc([line]);
+		const html = '<div b-name="page"><img class="hero" src~="@images/photo.jpg" /></div>';
+		const { directory } = await compileFiles(new Map([['page.html', html]]), {
+			assetMap: new Map([['images', '/i/']]),
+			assetDirs: new Map([['images', '/workspace/assets/images']]),
+		});
+		const compiledFile = directory.files.get('page.html')!;
+		const img = elementAt(compiledFile, html.indexOf('<img'))!;
+		const loc = (img.openTagLoc ?? img.loc)!;
 		const cssAnalysis = {
 			elementMatches: new Map([['page.html', [{
-				element: null, file: 'page.html', partialName: 'test',
-				startLine: 1, startCol: 1, startOffset: 0,
+				element: img, file: 'page.html', partialName: 'page',
+				startLine: loc.startLine, startCol: loc.startCol, startOffset: loc.startOffset,
 				matches: [{
 					rule: { selectorText: '.hero', selectors: ['.hero'], properties: [], mediaConditions: [], sourceFile: '/workspace/styles.css', sourceLine: 1, sourceCol: 1 },
 					selector: '.hero', specificity: [0, 1, 0] as [number, number, number], mediaConditions: [], matchType: 'definite', strippedPseudos: [],
@@ -1511,8 +1506,9 @@ describe('asset ref hover', () => {
 			}]]]),
 			rules: [],
 		};
-		// Cursor on "hero" inside class="hero" (character 12)
-		const result = getHover(doc, pos(0, 12), 'page.html', index, cssAnalysis as any, null, null, assetDirs);
+		// Cursor on "hero" inside class="hero"
+		const doc = makeDoc([html]);
+		const result = getHover(doc, pos(0, html.indexOf('hero')), 'page.html', index, cssAnalysis as any, null, null, assetDirs, compiledFile);
 		const v = hoverValue(result);
 		ok(v.includes('CSS Rules'), `Expected CSS rules on class attr, got: ${v}`);
 	});

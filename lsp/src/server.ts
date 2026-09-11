@@ -439,7 +439,7 @@ connection.onHover((params: HoverParams) => {
 	const hasAssetAttr = /~=["']/.test(line);
 	connection.console.log(`[hover] file=${relPath} line=${params.position.line} ch=${ch} assetDirs=${assetDirs ? assetDirs.size : 'null'} hasAssetAttr=${hasAssetAttr} line=${JSON.stringify(line.trimEnd())}`);
 
-	const result = getHover(doc, params.position, relPath, projectIndex, cssAnalysis, cssPaths, templateRoot, assetDirs);
+	const result = getHover(doc, params.position, relPath, projectIndex, cssAnalysis, cssPaths, templateRoot, assetDirs, compiledFiles.get(relPath));
 	if (result) {
 		const preview = typeof result.contents === 'object' && 'value' in result.contents
 			? result.contents.value.substring(0, 80)
@@ -547,12 +547,11 @@ connection.onRequest('backflip/findSelectorsForElement', (params: { uri: string;
 	const doc = documents.get(params.uri);
 	if (!doc) return null;
 
-	const lineText = doc.getText({
-		start: { line: params.line, character: 0 },
-		end: { line: params.line + 1, character: 0 },
-	});
+	const compiledFile = compiledFiles.get(relPath);
+	if (!compiledFile) return null;
 
-	const result = findRulesForElement(lineText, params.line, params.character, relPath, cssAnalysis);
+	const offset = doc.offsetAt({ line: params.line, character: params.character });
+	const result = findRulesForElement(compiledFile, offset, relPath, cssAnalysis);
 	if (!result) return null;
 
 	return {

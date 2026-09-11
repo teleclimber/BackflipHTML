@@ -3,6 +3,8 @@ import { MarkupKind } from 'vscode-languageserver';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 import type { ProjectIndex, PartialDef } from './index.js';
 import type { CssAnalysisResult, StrippedPseudo } from '@backflip/css';
+import type { CompiledFile } from '@backflip/html';
+import { resolveAt } from './resolve.js';
 import type { DataShape } from '@backflip/html';
 import { parseBPartValue } from '@backflip/html';
 import * as path from 'node:path';
@@ -19,11 +21,13 @@ export function getHover(
 	cssPaths?: string[] | null,
 	templateRoot?: string | null,
 	assetDirs?: Map<string, string> | null,
+	compiledFile?: CompiledFile | null,
 ): Hover | null {
 	const line = doc.getText({
 		start: { line: position.line, character: 0 },
 		end: { line: position.line + 1, character: 0 },
 	});
+	const offset = compiledFile ? doc.offsetAt(position) : undefined;
 
 	return hoverCssSelector(line, position, filePath, cssAnalysis, cssPaths, templateRoot)
 		?? hoverAssetRef(line, position, assetDirs)
@@ -34,7 +38,7 @@ export function getHover(
 		?? hoverBData(doc, line, position, filePath, index)
 		?? hoverBAttrCallSite(doc, line, position, filePath, index)
 		?? hoverCustomElement(line, position, filePath, index)
-		?? hoverCssRules(line, position, filePath, cssAnalysis, cssPaths)
+		?? hoverCssRules(filePath, cssAnalysis, cssPaths, compiledFile, offset)
 		?? null;
 }
 
@@ -775,35 +779,35 @@ export interface ElementRulesResult {
 }
 
 /**
- * Find all CSS rules that match an HTML element at the given position.
+ * Find all CSS rules that match the HTML element at the given position.
  * Shared by hover and "Find All Selectors" panel.
+ *
+ * The element comes from the compiled tree, so the answer is the element the
+ * cursor is actually in — the innermost one, told apart from its siblings on
+ * the same line and from its own ancestors. `cssAnalysis` only lists elements
+ * that matched at least one rule, so an element with no rules resolves to
+ * null rather than borrowing a neighbour's.
  */
 export function findRulesForElement(
-	line: string,
-	lspLine0: number,
-	character: number,
+	file: CompiledFile,
+	offset: number,
 	filePath: string,
 	cssAnalysis: CssAnalysisResult,
 ): ElementRulesResult | null {
 	const matches = cssAnalysis.elementMatches.get(filePath);
 	if (!matches) return null;
 
-	const lspLine = lspLine0 + 1; // convert to 1-based
+	const target = elementLikeAt(file, offset);
+	if (!target) return null;
 
-	const tagMatch = line.match(/<([a-zA-Z][\w-]*)/);
-	if (!tagMatch) return null;
-
-	const tagStart = line.indexOf(tagMatch[0]);
-
-	const elementMatch = matches.find(m => {
-		if (m.startLine !== lspLine) return false;
-		return character >= tagStart;
-	});
-
+	// `ElementMatches.startOffset` is the start of the same span, and the CSS
+	// layer synthesizes a tag for a custom element definition rather than
+	// reusing the tree's node — so match on position, not object identity.
+	const elementMatch = matches.find(m => m.startOffset === target.startOffset);
 	if (!elementMatch || elementMatch.matches.length === 0) return null;
 
 	return {
-		tagName: tagMatch[1],
+		tagName: target.tagName,
 		file: elementMatch.file,
 		partialName: elementMatch.partialName,
 		startLine: elementMatch.startLine,
@@ -821,16 +825,42 @@ export function findRulesForElement(
 	};
 }
 
+/**
+ * The innermost thing at `offset` that renders as a tag, as the tag name it
+ * renders and the offset its open tag starts at. A custom element call renders
+ * one, and so does a custom element definition, so neither is skipped just
+ * because it is not an `element` node.
+ */
+function elementLikeAt(file: CompiledFile, offset: number): { tagName: string; startOffset: number } | null {
+	for (const target of resolveAt(file, offset)) {
+		switch (target.kind) {
+			case 'element':
+				return {
+					tagName: target.node.tagName,
+					startOffset: (target.node.openTagLoc ?? target.node.loc)!.startOffset,
+				};
+			case 'custom-element':
+				return {
+					tagName: target.node.callerTagName ?? target.node.partialName,
+					startOffset: target.loc.startOffset,
+				};
+			case 'custom-element-def':
+				return { tagName: target.partialName, startOffset: target.loc.startOffset };
+		}
+	}
+	return null;
+}
+
 function hoverCssRules(
-	line: string,
-	position: Position,
 	filePath: string,
 	cssAnalysis?: CssAnalysisResult | null,
 	cssPaths?: string[] | null,
+	compiledFile?: CompiledFile | null,
+	offset?: number,
 ): Hover | null {
-	if (!cssAnalysis) return null;
+	if (!cssAnalysis || !compiledFile || offset === undefined) return null;
 
-	const result = findRulesForElement(line, position.line, position.character, filePath, cssAnalysis);
+	const result = findRulesForElement(compiledFile, offset, filePath, cssAnalysis);
 	if (!result) return null;
 
 	const ruleCount = result.rules.length;
