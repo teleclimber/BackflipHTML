@@ -1,7 +1,8 @@
 import type { Hover, Position } from 'vscode-languageserver';
 import { MarkupKind } from 'vscode-languageserver';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
-import type { ProjectIndex, PartialDef } from './index.js';
+import type { ProjectIndex, PartialDef, PartialRef } from './index.js';
+import { matchingPartialRefs } from './references.js';
 import type { CssAnalysisResult, StrippedPseudo } from '@backflip/css';
 import type { CompiledFile } from '@backflip/html';
 import { resolveAt } from './resolve.js';
@@ -32,12 +33,12 @@ export function getHover(
 	return hoverCssSelector(line, position, filePath, cssAnalysis, cssPaths, templateRoot)
 		?? hoverAssetRef(line, position, assetDirs)
 		?? hoverBPart(line, position, filePath, index)
-		?? hoverBName(line, position, filePath, index)
+		?? hoverBName(line, position, filePath, index, templateRoot)
 		?? hoverBIn(doc, line, position, filePath, index)
 		?? hoverBSlot(doc, line, position, filePath, index)
 		?? hoverBData(doc, line, position, filePath, index)
 		?? hoverBAttrCallSite(doc, line, position, filePath, index)
-		?? hoverCustomElement(line, position, filePath, index)
+		?? hoverCustomElement(line, position, filePath, index, templateRoot)
 		?? hoverCssRules(filePath, cssAnalysis, cssPaths, compiledFile, offset)
 		?? null;
 }
@@ -75,16 +76,54 @@ function resolvePartialDef(
 	return defs.find(d => d.file === resolvedFile) ?? null;
 }
 
-function countRefs(partialName: string, defFile: string, index: ProjectIndex): number {
-	let count = 0;
-	for (const ref of index.partialRefs) {
-		if (ref.partialName !== partialName) continue;
-		const isMatch = ref.targetFile === null
-			? ref.file === defFile
-			: ref.targetFile === defFile;
-		if (isMatch) count++;
-	}
-	return count;
+/** How many references a definition hover lists before it stops and counts the rest. */
+const MAX_LISTED_REFS = 10;
+
+function formatRefCount(refs: PartialRef[]): string {
+	return `${refs.length} reference${refs.length !== 1 ? 's' : ''}`;
+}
+
+/**
+ * The reference list under a definition hover: one `file:line` per reference,
+ * linked to the `b-part` itself.
+ *
+ * The link needs an absolute path, so without a template root the same list
+ * renders as plain text. A reference the compiler gave no location is counted
+ * but has nowhere to jump to, so it is not listed — the same rule
+ * `findReferences` applies.
+ */
+function formatRefs(refs: PartialRef[], templateRoot?: string | null): string[] {
+	const located = refs.flatMap(ref => (ref.loc ? [{ file: ref.file, loc: ref.loc }] : []));
+	const lines = located.slice(0, MAX_LISTED_REFS).map(({ file, loc }) => {
+		const label = `${file}:${loc.startLine}`;
+		return templateRoot
+			? fileLink(label, path.join(templateRoot, file), loc.startLine, loc.startCol)
+			: label;
+	});
+	const hidden = located.length - lines.length;
+	if (hidden > 0) lines.push(`*…and ${hidden} more*`);
+	return lines;
+}
+
+/**
+ * A markdown link that opens a file at a position — every clickable location in
+ * a hover goes through here.
+ *
+ * `backflipHTML.openFileAtLocation` is the extension's own command, and it
+ * takes 0-based line/column, so the conversion from the compiler's 1-based
+ * positions happens here rather than at each call site. A command link is
+ * clickable only because the extension's hover middleware marks hover markdown
+ * trusted for that one command; it also keeps navigation working in a remote
+ * window, where the extension host resolves the path and a bare `file://` URI
+ * would point at the wrong machine.
+ */
+function fileLink(label: string, filePath: string, line: number, col: number): string {
+	// encodeURIComponent leaves parentheses alone, and a `)` in a path would end
+	// the markdown link early; the command decodes them back either way.
+	const args = encodeURIComponent(JSON.stringify({ path: filePath, line: line - 1, col: col - 1 }))
+		.replace(/\(/g, '%28')
+		.replace(/\)/g, '%29');
+	return `[${label}](command:backflipHTML.openFileAtLocation?${args})`;
 }
 
 function formatSlots(slots: string[]): string {
@@ -313,6 +352,7 @@ function hoverBPart(
 
 function hoverBName(
 	line: string, position: Position, filePath: string, index: ProjectIndex,
+	templateRoot?: string | null,
 ): Hover | null {
 	const value = matchAttr(line, 'b-name', position.character);
 	if (value === null) return null;
@@ -322,11 +362,12 @@ function hoverBName(
 		return mkHover([`**Partial** \`${value}\` — *definition not indexed*`]);
 	}
 
-	const refCount = countRefs(value, def.file, index);
+	const refs = matchingPartialRefs(value, def.file, index);
 	const lines: string[] = [];
 	const exportInfo = def.exported ? 'Exported' : 'Local';
 	lines.push(`**Partial** \`${value}\``);
-	lines.push(`${exportInfo} · ${refCount} reference${refCount !== 1 ? 's' : ''}`);
+	lines.push(`${exportInfo} · ${formatRefCount(refs)}`);
+	lines.push(...formatRefs(refs, templateRoot));
 	lines.push(formatSlots(def.slots));
 	lines.push(formatDataInfo(def));
 	return mkHover(lines);
@@ -598,6 +639,7 @@ export function findCustomElementTagAtCursor(
 
 function hoverCustomElement(
 	line: string, position: Position, filePath: string, index: ProjectIndex,
+	templateRoot?: string | null,
 ): Hover | null {
 	const tagInfo = findCustomElementTagAtCursor(line, position.character);
 	if (!tagInfo) return null;
@@ -615,10 +657,11 @@ function hoverCustomElement(
 
 	const lines: string[] = [];
 	if (isDefSite) {
-		const refCount = countRefs(tagName, def.file, index);
+		const refs = matchingPartialRefs(tagName, def.file, index);
 		const exportInfo = def.exported ? 'Exported' : 'Local';
 		lines.push(`**Custom element partial** \`<${tagName}>\``);
-		lines.push(`${exportInfo} · ${refCount} reference${refCount !== 1 ? 's' : ''}`);
+		lines.push(`${exportInfo} · ${formatRefCount(refs)}`);
+		lines.push(...formatRefs(refs, templateRoot));
 	} else {
 		const fileInfo = def.file !== filePath ? ` — \`${def.file}\`` : '';
 		const exportInfo = def.exported ? ' · exported' : '';
@@ -743,13 +786,8 @@ function hoverCssSelector(
 
 	for (const el of unique) {
 		const typeTag = el.matchType !== 'definite' ? ` · *${el.matchType}*` : '';
-		const fullPath = path.join(templateRoot, el.file);
-		const args = encodeURIComponent(JSON.stringify({
-			path: fullPath,
-			line: el.startLine - 1,
-			col: el.startCol - 1,
-		}));
-		lines.push(`\`${el.file}\` **${el.partialName}** · [line ${el.startLine}](command:backflipHTML.openFileAtLocation?${args})${typeTag}`);
+		const link = fileLink(`line ${el.startLine}`, path.join(templateRoot, el.file), el.startLine, el.startCol);
+		lines.push(`\`${el.file}\` **${el.partialName}** · ${link}${typeTag}`);
 	}
 
 	return mkHover(lines);
@@ -877,13 +915,8 @@ function hoverCssRules(
 
 		let locationLink = '';
 		if (primaryCssPath && m.sourceLine > 0) {
-			const fileName = path.basename(primaryCssPath);
-			const args = encodeURIComponent(JSON.stringify({
-				path: primaryCssPath,
-				line: m.sourceLine - 1,
-				col: m.sourceCol - 1,
-			}));
-			locationLink = ` · [${fileName}:${m.sourceLine}](command:backflipHTML.openFileAtLocation?${args})`;
+			const label = `${path.basename(primaryCssPath)}:${m.sourceLine}`;
+			locationLink = ` · ${fileLink(label, primaryCssPath, m.sourceLine, m.sourceCol)}`;
 		}
 
 		lines.push(`\`${m.selector}\` — ${spec}${typeTag}${locationLink}`);

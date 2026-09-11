@@ -1,10 +1,34 @@
 import { Location } from 'vscode-languageserver';
-import type { ProjectIndex } from './index.js';
+import type { ProjectIndex, PartialRef } from './index.js';
 import type { AssetReference } from '@backflip/assets';
 import * as path from 'node:path';
 
 /**
+ * Every indexed reference that resolves to one partial definition.
+ *
+ * A reference is matched to a definition by file: a same-file `b-part="#name"`
+ * (`targetFile === null`) matches a definition in the file it was written in,
+ * and a cross-file one matches the file it names. Find All References and the
+ * hover's count and link list all read this, so they cannot disagree.
+ */
+export function matchingPartialRefs(
+	partialName: string,
+	defFile: string,
+	index: ProjectIndex,
+): PartialRef[] {
+	return index.partialRefs.filter(ref => {
+		if (ref.partialName !== partialName) return false;
+		return ref.targetFile === null
+			? ref.file === defFile
+			: ref.targetFile === defFile;
+	});
+}
+
+/**
  * Given a partial definition name, find all reference locations (b-part usages).
+ *
+ * A reference the compiler gave no location has nowhere to jump to and is
+ * dropped.
  */
 export function findReferences(
 	partialName: string,
@@ -14,16 +38,7 @@ export function findReferences(
 ): Location[] {
 	const locations: Location[] = [];
 
-	for (const ref of index.partialRefs) {
-		if (ref.partialName !== partialName) continue;
-
-		// Match same-file refs (targetFile === null and ref is in same file)
-		// or cross-file refs (targetFile === defFile)
-		const isMatch = ref.targetFile === null
-			? ref.file === defFile
-			: ref.targetFile === defFile;
-
-		if (!isMatch) continue;
+	for (const ref of matchingPartialRefs(partialName, defFile, index)) {
 		if (!ref.loc) continue;
 
 		locations.push({

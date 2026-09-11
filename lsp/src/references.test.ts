@@ -331,4 +331,17 @@ describe('findReferences — end to end from a compiled project', () => {
 			ok(!value.includes('0 references'));
 		}
 	});
+
+	it('links hover references to the same place Find All References lands', async () => {
+		const index = await indexOf();
+		for (const name of ['leaderboard', 'mobile-menu-js']) {
+			const hits = findReferences(name, 'layout.html', index, '/workspace');
+			const doc = TextDocument.create(`file:///workspace/layout.html`, 'html', 1, `<b-unwrap b-name="${name}">`);
+			const hover = getHover(doc, { line: 0, character: 20 }, 'layout.html', index, null, null, '/workspace');
+			const value = (hover!.contents as { value: string }).value;
+			const start = hits[0].range.start;
+			const expected = `{"path":"${hits[0].uri.replace('file://', '')}","line":${start.line},"col":${start.character}}`;
+			ok(decodeURIComponent(value).includes(expected), `hover for ${name} said: ${value}`);
+		}
+	});
 });

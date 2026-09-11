@@ -8,7 +8,7 @@
 - **Go to Definition** — click a `b-part` reference to jump to the `b-name` definition, or click a custom element partial tag (e.g. `<my-card>`) to jump to its definition
 - **Find All References** — from a `b-name` definition, find all `b-part` usages; from an `@name/subpath` asset reference, find every use of that asset across templates and stylesheets
 - **Document Symbols** — lists partials in the editor outline/breadcrumbs, each spanning its whole definition so breadcrumbs track the cursor anywhere inside a partial
-- **Hover (HTML)** — hover over `b-part`, `b-name`, `b-in`, `b-slot`, `b-data:` attributes, custom element partial tags (e.g. `<my-card>`), or HTML elements to see directive info and matching CSS rules
+- **Hover (HTML)** — hover over `b-part`, `b-name`, `b-in`, `b-slot`, `b-data:` attributes, custom element partial tags (e.g. `<my-card>`), or HTML elements to see directive info and matching CSS rules; a definition's hover lists its references as links that jump to them
 - **Hover (CSS)** — hover over a selector in a CSS file to see which partials contain matching elements
 
 Both CSS hovers also name the pseudos that were stripped before matching, and what kind of thing each one is — see [Relaxed pseudos in CSS hover](#relaxed-pseudos-in-css-hover).
@@ -45,7 +45,7 @@ show every link, and a bare `::selection` shows every element.
 ### Indexing partial references
 
 `src/index.ts` builds the project index that answers "where is this partial
-used?" — the reference count in a `b-name` hover and the results of Find All
+used?" — a definition hover's reference list and the results of Find All
 References both read `index.partialRefs`.
 
 The traversal is the compiler's
@@ -57,7 +57,14 @@ layout's `<body>` included.
 
 A reference is matched to a definition by file: a same-file `b-part="#name"`
 (`targetFile === null`) matches a definition in the file it was written in, and
-a cross-file one matches the file it names.
+a cross-file one matches the file it names. `matchingPartialRefs` in
+`src/references.ts` is the one place that rule lives, so the hover and Find All
+References cannot disagree.
+
+Hovering a definition lists those references — the first ten, then a count of
+the rest — as `backflipHTML.openFileAtLocation` links that jump to the `b-part`.
+Like the CSS hovers' location links, they are clickable only because the
+extension's hover middleware marks hover markdown trusted for that command.
 
 ### Resolving the cursor
 

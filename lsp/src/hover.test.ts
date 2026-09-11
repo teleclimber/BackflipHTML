@@ -47,6 +47,11 @@ function pos(line: number, character: number): Position {
 	return { line, character };
 }
 
+/** Hover text with command-link arguments decoded, so a link assertion reads as the JSON it carries. */
+function decodedHover(hover: ReturnType<typeof getHover>): string {
+	return decodeURIComponent(hoverValue(hover));
+}
+
 function hoverValue(hover: ReturnType<typeof getHover>): string {
 	if (!hover) return '';
 	const contents = hover.contents as { kind: string; value: string };
@@ -162,6 +167,81 @@ describe('getHover', () => {
 			ok(v.includes('`default`'));
 			ok(v.includes('`footer`'));
 			ok(v.includes('`title`'));
+		});
+
+		it('lists each reference as a link that navigates to it', async () => {
+			const index = makeIndex(
+				[{ file: 'page.html', name: 'card', loc: makeLoc(1, 1, 1, 20), exported: true, slots: [], freeVars: [] }],
+				[
+					{ file: 'page.html', partialName: 'card', targetFile: null, loc: makeLoc(10, 3, 10, 20) },
+					{ file: 'other.html', partialName: 'card', targetFile: 'page.html', loc: makeLoc(5, 7, 5, 20) },
+				],
+			);
+			const doc = makeDoc(['<div b-name="card" b-export>']);
+			const result = getHover(doc, pos(0, 16), 'page.html', index, null, null, '/workspace');
+			const v = decodedHover(result);
+			ok(v.includes('2 references'));
+			ok(v.includes('[page.html:10](command:backflipHTML.openFileAtLocation?{"path":"/workspace/page.html","line":9,"col":2})'), v);
+			ok(v.includes('[other.html:5](command:backflipHTML.openFileAtLocation?{"path":"/workspace/other.html","line":4,"col":6})'), v);
+		});
+
+		it('lists references as plain text when the template root is unknown', async () => {
+			const index = makeIndex(
+				[{ file: 'page.html', name: 'card', loc: makeLoc(1, 1, 1, 20), exported: false, slots: [], freeVars: [] }],
+				[{ file: 'page.html', partialName: 'card', targetFile: null, loc: makeLoc(10, 3, 10, 20) }],
+			);
+			const doc = makeDoc(['<div b-name="card">']);
+			const result = getHover(doc, pos(0, 16), 'page.html', index);
+			const v = hoverValue(result);
+			ok(v.includes('page.html:10'), v);
+			ok(!v.includes('command:'), v);
+		});
+
+		it('encodes a link target that would otherwise break the markdown', async () => {
+			const index = makeIndex(
+				[{ file: 'page.html', name: 'card', loc: makeLoc(1, 1, 1, 20), exported: false, slots: [], freeVars: [] }],
+				[{ file: 'my pages/a)b.html', partialName: 'card', targetFile: 'page.html', loc: makeLoc(2, 1, 2, 20) }],
+			);
+			const doc = makeDoc(['<div b-name="card">']);
+			const result = getHover(doc, pos(0, 16), 'page.html', index, null, null, '/work space');
+			const v = hoverValue(result);
+			// A raw space or ')' inside the target would end the link early.
+			ok(!/\(command:[^)]*[ ]/.test(v), v);
+			ok(v.includes('%20') && v.includes('%29'), v);
+			ok(decodedHover(result).includes('"path":"/work space/my pages/a)b.html"'), v);
+		});
+
+		it('caps the list and says how many more there are', async () => {
+			const refs = Array.from({ length: 13 }, (_, i) => ({
+				file: `page${i}.html`, partialName: 'card', targetFile: 'page.html', loc: makeLoc(i + 1, 1, i + 1, 10),
+			}));
+			const index = makeIndex(
+				[{ file: 'page.html', name: 'card', loc: makeLoc(1, 1, 1, 20), exported: true, slots: [], freeVars: [] }],
+				refs,
+			);
+			const doc = makeDoc(['<div b-name="card" b-export>']);
+			const result = getHover(doc, pos(0, 16), 'page.html', index, null, null, '/workspace');
+			const v = hoverValue(result);
+			ok(v.includes('13 references'));
+			ok(v.includes('page9.html:10'), v);
+			ok(!v.includes('page10.html:11'), v);
+			ok(v.includes('3 more'), v);
+		});
+
+		it('counts a reference with no location but does not list it', async () => {
+			const index = makeIndex(
+				[{ file: 'page.html', name: 'card', loc: makeLoc(1, 1, 1, 20), exported: false, slots: [], freeVars: [] }],
+				[
+					{ file: 'page.html', partialName: 'card', targetFile: null, loc: makeLoc(10, 3, 10, 20) },
+					{ file: 'other.html', partialName: 'card', targetFile: 'page.html' },
+				],
+			);
+			const doc = makeDoc(['<div b-name="card">']);
+			const result = getHover(doc, pos(0, 16), 'page.html', index, null, null, '/workspace');
+			const v = hoverValue(result);
+			ok(v.includes('2 references'));
+			ok(v.includes('page.html:10'), v);
+			ok(!v.includes('other.html'), v);
 		});
 
 		it('shows 0 references and none for empty slots/data', async () => {
@@ -378,6 +458,24 @@ describe('getHover', () => {
 			ok(v.includes('`default`'));
 			ok(v.includes('`header`'));
 			ok(v.includes('`title`'));
+		});
+
+		it('lists the references on the def site', async () => {
+			const index = makeIndex(
+				[{
+					file: 'components.html', name: 'my-card',
+					loc: makeLoc(1, 1, 1, 10), exported: true, customElement: true,
+					slots: [], freeVars: [],
+				}],
+				[
+					{ file: 'page.html', partialName: 'my-card', targetFile: 'components.html', loc: makeLoc(3, 2, 3, 10) },
+				],
+			);
+			const doc = makeDoc(['<my-card b-export>', '  Body', '</my-card>']);
+			const result = getHover(doc, pos(0, 4), 'components.html', index, null, null, '/workspace');
+			const v = decodedHover(result);
+			ok(v.includes('1 reference'));
+			ok(v.includes('[page.html:3](command:backflipHTML.openFileAtLocation?{"path":"/workspace/page.html","line":2,"col":1})'), v);
 		});
 
 		it('shows partial info on call site (cross-file)', async () => {
