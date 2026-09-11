@@ -2,6 +2,7 @@ node_modules/
 dist/
 *.vsix
 vscode-backflip/server/
+vscode-backflip/LICENSE
 claude-specs/
 zznotes/
 

@@ -4,6 +4,12 @@
   "description": "Language support for BackflipHTML templates",
   "version": "0.1.0",
   "publisher": "backflip",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/teleclimber/BackflipHTML.git",
+    "directory": "vscode-backflip"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -102,7 +108,7 @@
   },
   "scripts": {
     "build": "npm run build:server && rollup -c rollup.config.mjs",
-    "package": "vsce package --no-dependencies",
+    "package": "cp ../LICENSE LICENSE && vsce package --no-dependencies",
     "build:server": "cd ../lsp && npm run build && mkdir -p ../vscode-backflip/server && cp dist/server.cjs ../vscode-backflip/server/server.cjs",
     "watch": "npx tsc --watch"
   },
