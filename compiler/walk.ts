@@ -14,27 +14,37 @@ import type { TNode, PartialRefTNode } from './types.js';
  * raw / comment / print / slot / attr-bind are leaves.
  */
 
+export interface VisitTNodesOptions {
+	/**
+	 * Descend into a `partial-ref`'s slot content. Default true. When false the
+	 * walk stops at the call and leaves its fills to the caller, for a consumer
+	 * that has to know which slot a node was written in.
+	 */
+	enterSlotFills?: boolean;
+}
+
 /**
  * Depth-first pre-order traversal. Calls `visit` on every node in `tnodes`,
  * then recurses into each node's child containers. `IfBranch` is not a TNode,
  * so `visit` is not called on branches themselves — only their `tnodes` are
  * traversed.
  */
-export function visitTNodes(tnodes: TNode[], visit: (n: TNode) => void): void {
+export function visitTNodes(tnodes: TNode[], visit: (n: TNode) => void, opts?: VisitTNodesOptions): void {
 	for (const n of tnodes) {
 		visit(n);
 		switch (n.type) {
 			case 'for':
-				visitTNodes(n.tnodes, visit);
+				visitTNodes(n.tnodes, visit, opts);
 				break;
 			case 'if':
-				for (const branch of n.branches) visitTNodes(branch.tnodes, visit);
+				for (const branch of n.branches) visitTNodes(branch.tnodes, visit, opts);
 				break;
 			case 'element':
-				visitTNodes(n.tnodes, visit);
+				visitTNodes(n.tnodes, visit, opts);
 				break;
 			case 'partial-ref':
-				for (const slotNodes of Object.values(n.slots)) visitTNodes(slotNodes, visit);
+				if (opts?.enterSlotFills === false) break;
+				for (const slotNodes of Object.values(n.slots)) visitTNodes(slotNodes, visit, opts);
 				break;
 			// raw / comment / print / slot / attr-bind: leaves
 		}
@@ -113,10 +123,10 @@ export function appendCoalesced(arr: TNode[], node: TNode): void {
  * partials, and the LSP indexes references. Route new callers through here so
  * the list of child containers stays in one place.
  */
-export function visitPartialRefs(tnodes: TNode[], visit: (ref: PartialRefTNode) => void): void {
+export function visitPartialRefs(tnodes: TNode[], visit: (ref: PartialRefTNode) => void, opts?: VisitTNodesOptions): void {
 	visitTNodes(tnodes, (n) => {
 		if (n.type === 'partial-ref') visit(n);
-	});
+	}, opts);
 }
 
 /** Every `PartialRefTNode` in `tnodes`, depth-first pre-order. See `visitPartialRefs`. */

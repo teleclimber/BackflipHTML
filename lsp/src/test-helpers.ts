@@ -1,4 +1,5 @@
 import type { ProjectIndex, PartialDef, PartialRef } from './index.js';
+import { partialKey } from '@backflip/html';
 import type { SourceLoc, DataShape } from '@backflip/html';
 
 export function makeLoc(startLine: number, startCol: number, endLine: number, endCol: number): SourceLoc {
@@ -6,7 +7,7 @@ export function makeLoc(startLine: number, startCol: number, endLine: number, en
 }
 
 export type PartialDefInput = Omit<PartialDef, 'slots' | 'freeVars' | 'dataShape' | 'customElement' | 'bAttrs'> & { slots?: string[]; freeVars?: string[]; dataShape?: Map<string, DataShape>; customElement?: boolean; bAttrs?: { name: string; isBool: boolean }[] };
-export type PartialRefInput = Omit<PartialRef, 'fromPartial' | 'dataBindings' | 'slotsFilled'> & { fromPartial?: string; dataBindings?: string[]; slotsFilled?: string[] };
+export type PartialRefInput = Omit<PartialRef, 'fromPartial' | 'target' | 'dataBindings' | 'slotsFilled'> & { fromPartial?: string; target?: string | null; dataBindings?: string[]; slotsFilled?: string[] };
 
 export function makeIndex(defs: PartialDefInput[], refs: PartialRefInput[]): ProjectIndex {
 	const partialDefs = new Map<string, PartialDef[]>();
@@ -19,6 +20,8 @@ export function makeIndex(defs: PartialDefInput[], refs: PartialRefInput[]): Pro
 	const partialRefs: PartialRef[] = refs.map(r => ({
 		...r,
 		fromPartial: r.fromPartial ?? '',
+		// A call names a file or resolves within the one it is written in.
+		target: r.target !== undefined ? r.target : partialKey(r.targetFile ?? r.file, r.partialName),
 		dataBindings: r.dataBindings ?? [],
 		slotsFilled: r.slotsFilled ?? [],
 	}));

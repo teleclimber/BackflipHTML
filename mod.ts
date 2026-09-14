@@ -10,6 +10,8 @@ export { resolvePartial } from './compiler/link.js';
 export { visitTNodes, mapTNodes, visitPartialRefs, collectPartialRefs } from './compiler/walk.js';
 export { collectRefSites, refSitesFor } from './compiler/partial-refs.js';
 export type { PartialRefSite } from './compiler/partial-refs.js';
+export { buildPartialGraph, partialKey, callsIn } from './compiler/partial-graph.js';
+export type { PartialGraph, PartialGraphNode, PartialCall, PartialBodyItem, SlotDecl, SlotFill } from './compiler/partial-graph.js';
 export { flattenStatics, flattenCompiledFile } from './compiler/flatten.js';
 export type { SourceLoc, CompiledFile, CompileOptions, RootTNode, NamedPartialRoot, CustomElementPartialRoot, TNode, PartialRefTNode, BPartCallTNode, CustomElementCallTNode, ForTNode, IfTNode, IfBranch, SlotTNode, PrintTNode, RawTNode, ElementTNode, AssetRef, AttrPart, PartialMeta, PartialScript } from './compiler/types.js';
 export { inferDataShape, inferFreeVars } from './compiler/data-shape.js';

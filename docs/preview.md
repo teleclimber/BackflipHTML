@@ -60,6 +60,38 @@ For nested partials referenced via `b-part`:
 
 ---
 
+## Usage tree
+
+Every partial in the server's index carries a **show tree** link to its usage
+tree at `/__usage/<file>/<partial>`, a page showing how that partial relates to
+the others. Elements, `b-if` and `b-for` do not appear: a row is a partial, a
+call, or a slot.
+
+Three views, chosen with the tabs (or `?view=`):
+
+| View | Shows |
+|---|---|
+| **Whole trees** (default) | Every tree in the project that reaches this partial, drawn in full from its root, with the partial marked wherever it appears |
+| **Callers** | What calls it, and what calls those, up to the partials nothing calls |
+| **Callees** | What it calls, and what those call |
+
+A call's slot fills are drawn where they render: under the callee's `b-slot`
+declaration, not where they were written. A `b-slot` inside a fill forwards to
+the slot its own caller was given, and the tree follows that chain. A slot no
+call fills reads `unfilled`; content with no partial in it reads `filled with
+markup`; and a `b-in` naming a slot the callee does not declare is drawn apart,
+since it renders nowhere.
+
+Every occurrence is expanded — a partial called from five places is drawn five
+times, because each position is a different context. What stops the drawing is a
+cycle: a call re-entering a partial already being drawn is marked and not
+followed.
+
+Each row links to that partial's own usage tree and to its preview, so the tree
+is navigable from any node.
+
+---
+
 ## dom-patch reactivity
 
 Custom-element partials with reactive attributes compile to a [dom-patch](../compiler/generate/dom-patch/README.md) JS class that updates specific elements in the browser. Each patchable element is tagged with a `data-bfid` marker that the class locates via `querySelector`.

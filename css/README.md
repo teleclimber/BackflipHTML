@@ -148,7 +148,7 @@ One expansion rule per TNode variant, each mirroring a `streamRender*` case:
 | `if` | every branch spliced in, each branch's top instances marked conditional |
 | `raw` / `comment` / `print` / `attr-bind` | none |
 
-Entry points are the partials nothing calls; everything else is reached through them. A partial left with no instances after that — one only reachable through a reference cycle, or one nothing uses — is expanded standalone against an empty environment.
+Entry points are the partials nothing calls — the compiler's call graph decides, so the analyzer and the editor agree on what is unreferenced. Everything else is reached through them. A partial left with no instances after that — one only reachable through a reference cycle, or one nothing uses — is expanded standalone against an empty environment.
 
 Two budgets keep a broken or pathological tree from running away, since the LSP analyses half-written templates: `MAX_DEPTH` (20) element levels, and `MAX_INSTANCES` (50 000) instances per run. On exhaustion expansion stops and matching finishes on what exists; nothing throws.
 
@@ -231,7 +231,7 @@ per-instance trace for any selector — use
 - **css-select** — CSS selector compilation and matching
 - **css-what** — CSS selector parsing
 - **specificity** — CSS specificity calculation
-- **@backflip/html** — compiler types, plus `resolvePartial` / `visitTNodes` for expansion (the test helpers also call `compileFiles`)
+- **@backflip/html** — compiler types, plus `resolvePartial` / `visitTNodes` for expansion and `buildPartialGraph` for root selection (the test helpers also call `compileFiles`)
 
 ## Setup
 

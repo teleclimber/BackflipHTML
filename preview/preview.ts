@@ -9,6 +9,7 @@ import { applyDomPatch, renderImportPathFor } from '../compiler/generate/dom-pat
 import { fileToJsModule } from '../compiler/generate/js/nodes2js.js';
 import { renderRoot } from '../runtime/js/render.js';
 import type { RootRNode } from '../runtime/js/render.js';
+import { escapeHtml } from '../lib/html-escape.js';
 import { generateMockData } from './mock-data.js';
 import { generateSlotPlaceholders } from './slot-placeholders.js';
 import { wrapInChrome } from './preview-chrome.js';
@@ -239,10 +240,6 @@ function evalModule(js: string): Record<string, RootRNode> {
 
 function sanitizeName(name: string): string {
 	return name.replace(/[^a-zA-Z0-9_$]/g, '_');
-}
-
-function escapeHtml(s: string): string {
-	return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function getTmpDir(): string {

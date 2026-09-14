@@ -30,6 +30,7 @@ The server watches for changes to templates, CSS, and `backflip.json`. When a fi
 - **CSS inclusion** — automatically includes CSS files from configured asset directories
 - **Live reload** — file changes trigger recompilation and browser reload via SSE
 - **Reference counts** — each partial in the index listing shows how many `b-part` / custom-element call sites across the project resolve to it, so unused partials and heavily shared ones stand out
+- **Usage tree** — a **show tree** link beside each partial opens a page drawing how it relates to the others: the whole trees it sits in, what calls it, or what it calls, with each call's slot fills drawn under the slot they render in
 
 ## Key files
 
@@ -38,6 +39,7 @@ The server watches for changes to templates, CSS, and `backflip.json`. When a fi
 | `server.ts` | HTTP server, request routing, file watching, SSE live reload |
 | `preview.ts` | Partial evaluation and rendering pipeline |
 | `mock-data.ts` | Mock data generation from DataShape |
+| `usage-tree.ts` | The usage tree page: partial relationships drawn as trees |
 | `preview-chrome.ts` | HTML wrapper with dev toolbar and context menu script |
 | `slot-placeholders.ts` | Placeholder content generation for unfilled slots |
 
@@ -49,4 +51,4 @@ Preview tests run via Deno from the repo root:
 deno task test
 ```
 
-Test files: `server_test.ts`, `preview_test.ts`, `mock-data_test.ts`, `preview-chrome_test.ts`, `slot-placeholders_test.ts`.
+Test files: `server_test.ts`, `preview_test.ts`, `usage-tree_test.ts`, `mock-data_test.ts`, `preview-chrome_test.ts`, `slot-placeholders_test.ts`.

@@ -36,7 +36,9 @@ children: `for.tnodes`, `if.branches[i].tnodes`, `element.tnodes`, and a
 `partial-ref`'s `slots[name]`. Miss one and the walk silently skips a subtree,
 so the container list lives in exactly one place:
 
-- `visitTNodes(tnodes, visit)` — depth-first pre-order visit of every node.
+- `visitTNodes(tnodes, visit, opts)` — depth-first pre-order visit of every
+  node. `enterSlotFills: false` stops at a `partial-ref`, leaving its fills to
+  the caller.
 - `mapTNodes(tnodes, fn, opts)` — structural copy-transform, rebuilt bottom-up.
   Copies are spreads, so fields this utility does not know about survive.
 - `visitPartialRefs(tnodes, visit)` / `collectPartialRefs(tnodes)` — the
@@ -44,19 +46,39 @@ so the container list lives in exactly one place:
 
 `collectPartialRefs` has five callers and no reimplementations: both code
 generators (to topologically order same-file partials and gather cross-file
-imports), `link.ts` (custom-element calls and `b-attr:` bindings), the CSS
-analyzer (which partials are reachable), and `partial-refs.ts` (the reference
-index below). A second copy of that recursion is a subtree the editor and the
-generated output can disagree about, so new callers route through here.
+imports), `link.ts` (custom-element calls and `b-attr:` bindings), and
+`partial-graph.ts` (the call graph below). A second copy of that recursion is a
+subtree the editor and the generated output can disagree about, so new callers
+route through here.
+
+### The partial call graph (`partial-graph.ts`)
+
+`buildPartialGraph(files)` is the one answer to how partials relate. Per
+definition it records what the partial calls, what calls it, the slots it
+declares, and — because a fill is written in the caller — what each call writes
+into each slot. Each call is resolved once, with `resolvePartial`, so every
+consumer agrees on which definition a call names:
+
+- `nodes` — one `PartialGraphNode` per definition: `body` (its calls and
+  `b-slot` declarations in source order, element / `b-if` / `b-for` nesting
+  flattened away), `slots`, `callers`, and whether it is an entry point.
+- `calls` — every call site, flat and in source order.
+- `referenced` — the roots some resolvable call targets, which is how the CSS
+  analyzer picks the partials to grow its render forest from.
+- `entries` / `unreached` — the partials nothing calls, and the ones no entry
+  point reaches (a cycle nothing enters).
+
+Consumers: `partial-refs.ts`, the CSS analyzer's root selection, and the
+preview's usage tree.
 
 ### Partial references (`partial-refs.ts`)
 
-`collectRefSites(files)` flattens a compiled directory to one `PartialRefSite`
-per call site, recording both ends of the relation: the partial the call sits
-inside, and the partial and file it names. `refSitesFor(sites, name, defFile)`
-then selects the sites that resolve to one definition, matching by file the way
-`resolvePartial` does — a call naming no file resolves within its own file, one
-naming a file resolves there.
+The flat view of the graph, for consumers that only count call sites.
+`collectRefSites(files)` gives one `PartialRefSite` per call site, recording
+both ends of the relation: the partial the call sits inside, and the partial it
+resolves to. `refSitesFor(sites, name, defFile)` selects the sites resolving to
+one definition — the LSP's Find All References and the preview's reference
+counts, from one list.
 
 ### Expression language (`backcode.ts`)
 
@@ -106,6 +128,7 @@ Test files:
 |------|--------|
 | `compiler_test.ts` | HTML parsing, directive recognition, AST structure |
 | `partials_test.ts` | Cross-file compilation, dependency resolution, cycle detection |
+| `partial-graph_test.ts` | The call graph: bodies, fills, callers, entry points, cycles |
 | `data-shape_test.ts` | Variable usage inference |
 | `data-shape-integration_test.ts` | Data shape across partials |
 | `generate/js/generatejs_test.ts` | Expression → JS function |

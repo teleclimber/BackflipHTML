@@ -8,6 +8,8 @@ import { collectRefSites, refSitesFor } from '../compiler/partial-refs.js';
 import { previewPartial } from './preview.js';
 import type { CompiledFile } from '../compiler/types.js';
 import { createWatcher, type WatchCallback, type WatchOptions } from '../lib/watch.js';
+import { escapeHtml } from '../lib/html-escape.js';
+import { renderUsageTree, parseUsageView, usageHref, previewHref } from './usage-tree.js';
 import { discoverCssFiles } from '../css/src/discover.js';
 import { discoverAssetFileInfos, collectAllAssetReferences, validateAssetFiles, buildAssetUsageReport, renderAssetReportHtml } from '../assets/src/index.js';
 
@@ -138,11 +140,6 @@ function refBadge(refCount: number): string {
 	return `<span class="${cls}" title="${title}">${label}</span>`;
 }
 
-function escapeHtml(s: string): string {
-	return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-		.replace(/"/g, '&quot;');
-}
-
 /** Render the index page listing all files and partials. */
 export function renderIndex(files: Map<string, CompiledFile>, liveReload = false, hasAssets = false): string {
 	const tree = buildTree(files);
@@ -150,8 +147,10 @@ export function renderIndex(files: Map<string, CompiledFile>, liveReload = false
 	for (const entry of tree) {
 		list += `<li><strong>${escapeHtml(entry.file)}</strong><ul>`;
 		for (const { name, refCount } of entry.partials) {
-			const href = `/preview/${encodeURIComponent(entry.file)}/${encodeURIComponent(name)}`;
-			list += `<li><a href="${escapeHtml(href)}">${escapeHtml(name)}</a> ${refBadge(refCount)}</li>`;
+			const href = previewHref(entry.file, name);
+			const treeHref = usageHref(entry.file, name);
+			list += `<li><a href="${escapeHtml(href)}">${escapeHtml(name)}</a> ${refBadge(refCount)}`
+				+ ` <a class="tree" href="${escapeHtml(treeHref)}">show tree</a></li>`;
 		}
 		list += `</ul></li>`;
 	}
@@ -173,6 +172,7 @@ a:hover { text-decoration: underline; }
 strong { font-weight: 600; }
 .refs { color: #656d76; font-size: 0.85em; }
 .refs.none { color: #adb3ba; }
+.tree { color: #8c959f; font-size: 0.85em; }
 </style>
 </head>
 <body>
@@ -267,6 +267,25 @@ export async function handleRequest(
 			res.writeHead(404, { 'Content-Type': 'text/plain' });
 			res.end('Asset not found');
 		}
+		return;
+	}
+
+	// Match /__usage/<file>/<partial>
+	const usage = pathname.match(/^\/__usage\/(.+?)\/([^/]+)$/);
+	if (usage) {
+		const [, usageFile, usageName] = usage;
+		const file = ctx.directory.files.get(usageFile);
+		if (!file || !file.partials.has(usageName)) {
+			res.writeHead(404, { 'Content-Type': 'text/plain' });
+			res.end(`Partial not found: ${usageName} in ${usageFile}`);
+			return;
+		}
+		const html = renderUsageTree(ctx.directory.files, usageFile, usageName, {
+			view: parseUsageView(url.searchParams.get('view')),
+			liveReload,
+		});
+		res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+		res.end(html);
 		return;
 	}
 

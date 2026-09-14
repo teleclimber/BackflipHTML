@@ -1,3 +1,5 @@
+import { escapeHtml } from '../lib/html-escape.js';
+
 export interface ChromeOptions {
 	cssHrefs?: string[];
 	fileName?: string;
@@ -162,9 +164,4 @@ function wrapDocumentLevel(html: string, liveReload: boolean, nonce?: string): s
 	}
 
 	return result;
-}
-
-function escapeHtml(s: string): string {
-	return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-		.replace(/"/g, '&quot;');
 }

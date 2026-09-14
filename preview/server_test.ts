@@ -83,6 +83,48 @@ Deno.test("index page marks an unreferenced partial", () => {
 	assertEquals(refBadgeFor(html, 'page.html', 'full-page'), 'refs none|0 refs');
 });
 
+Deno.test("index page links each partial to its usage tree", () => {
+	const html = renderIndex(ctx.directory.files);
+	assertStringIncludes(html, '<a class="tree" href="/__usage/ui.html/btn">show tree</a>');
+});
+
+// --- Usage tree page ---
+
+Deno.test("usage tree page draws the partial and what it calls", async () => {
+	const res = mockRes();
+	await handleRequest(mockReq('/__usage/page.html/full-page?view=callees'), res, ctx);
+	assertEquals(res._status, 200);
+	assertStringIncludes(res._headers['Content-Type'], 'text/html');
+	assertStringIncludes(res._body, '<title>Usage · full-page</title>');
+	// full-page calls layout.html#shell and fills its content slot.
+	assertStringIncludes(res._body, 'href="/__usage/layout.html/shell"');
+	assertStringIncludes(res._body, 'slot "content"');
+});
+
+Deno.test("usage tree page switches view from the query string", async () => {
+	const callers = mockRes();
+	await handleRequest(mockReq('/__usage/layout.html/shell?view=callers'), callers, ctx);
+	assertEquals(callers._status, 200);
+	assertStringIncludes(callers._body, 'Called from 1 call site.');
+	assertStringIncludes(callers._body, 'href="/__usage/page.html/full-page"');
+
+	// No view named: whole trees, which is the default.
+	const trees = mockRes();
+	await handleRequest(mockReq('/__usage/layout.html/shell'), trees, ctx);
+	assertStringIncludes(trees._body, 'trees in this project reaches it.');
+	assertStringIncludes(trees._body, 'class="on" href="/__usage/layout.html/shell?view=trees"');
+});
+
+Deno.test("usage tree page 404s on a partial or file that does not exist", async () => {
+	const noPartial = mockRes();
+	await handleRequest(mockReq('/__usage/page.html/nope'), noPartial, ctx);
+	assertEquals(noPartial._status, 404);
+
+	const noFile = mockRes();
+	await handleRequest(mockReq('/__usage/nope.html/full-page'), noFile, ctx);
+	assertEquals(noFile._status, 404);
+});
+
 Deno.test("index page counts repeated calls from one partial separately", async () => {
 	const { directory: dir } = await compileFiles(new Map([
 		['ui.html', `<button b-name="btn"><b-unwrap b-slot /></button>

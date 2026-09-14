@@ -1,7 +1,7 @@
 import type {
 	CompiledFile, CustomElementCallTNode, ElementTNode, PartialRefTNode, RootTNode, TNode,
 } from '@backflip/html';
-import { resolvePartial, visitPartialRefs } from '@backflip/html';
+import { buildPartialGraph, resolvePartial } from '@backflip/html';
 import { attrIndexOf, buildAttrIndex, type AttrIndex, type ElementLikeTNode } from './tnode-view.js';
 
 /**
@@ -367,20 +367,6 @@ function expandRoot(root: RootTNode, file: string, name: string, ctx: ExpandCtx)
 	return out;
 }
 
-/** Every partial that some resolvable `partial-ref` targets. */
-function collectReferenced(files: Map<string, CompiledFile>): Set<RootTNode> {
-	const referenced = new Set<RootTNode>();
-	for (const compiled of files.values()) {
-		for (const root of compiled.partials.values()) {
-			visitPartialRefs(root.tnodes, (ref) => {
-				const target = resolvePartial(ref, compiled, files);
-				if (target) referenced.add(target);
-			});
-		}
-	}
-	return referenced;
-}
-
 function materialize(nodes: InstanceNode[], out: InstanceNode[], ctx: ExpandCtx): void {
 	for (const node of nodes) {
 		out.push(node);
@@ -410,7 +396,9 @@ export function buildInstanceForest(files: Map<string, CompiledFile>): InstanceF
 		for (const [name, root] of compiled.partials) ctx.rootInfo.set(root, { file, name });
 	}
 
-	const referenced = collectReferenced(files);
+	// Which partials are called is the compiler's call graph, so the roots grown
+	// here are the ones its consumers report as unreferenced.
+	const referenced = buildPartialGraph(files).referenced;
 	const tops: InstanceNode[] = [];
 	const all: InstanceNode[] = [];
 	const roots: RootSelection[] = [];
