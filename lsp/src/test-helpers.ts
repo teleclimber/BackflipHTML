@@ -6,7 +6,7 @@ export function makeLoc(startLine: number, startCol: number, endLine: number, en
 }
 
 export type PartialDefInput = Omit<PartialDef, 'slots' | 'freeVars' | 'dataShape' | 'customElement' | 'bAttrs'> & { slots?: string[]; freeVars?: string[]; dataShape?: Map<string, DataShape>; customElement?: boolean; bAttrs?: { name: string; isBool: boolean }[] };
-export type PartialRefInput = Omit<PartialRef, 'dataBindings' | 'slotsFilled'> & { dataBindings?: string[]; slotsFilled?: string[] };
+export type PartialRefInput = Omit<PartialRef, 'fromPartial' | 'dataBindings' | 'slotsFilled'> & { fromPartial?: string; dataBindings?: string[]; slotsFilled?: string[] };
 
 export function makeIndex(defs: PartialDefInput[], refs: PartialRefInput[]): ProjectIndex {
 	const partialDefs = new Map<string, PartialDef[]>();
@@ -18,6 +18,7 @@ export function makeIndex(defs: PartialDefInput[], refs: PartialRefInput[]): Pro
 	}
 	const partialRefs: PartialRef[] = refs.map(r => ({
 		...r,
+		fromPartial: r.fromPartial ?? '',
 		dataBindings: r.dataBindings ?? [],
 		slotsFilled: r.slotsFilled ?? [],
 	}));

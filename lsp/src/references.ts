@@ -1,4 +1,5 @@
 import { Location } from 'vscode-languageserver';
+import { refSitesFor } from '@backflip/html';
 import type { ProjectIndex, PartialRef } from './index.js';
 import type { AssetReference } from '@backflip/assets';
 import * as path from 'node:path';
@@ -6,22 +7,16 @@ import * as path from 'node:path';
 /**
  * Every indexed reference that resolves to one partial definition.
  *
- * A reference is matched to a definition by file: a same-file `b-part="#name"`
- * (`targetFile === null`) matches a definition in the file it was written in,
- * and a cross-file one matches the file it names. Find All References and the
- * hover's count and link list all read this, so they cannot disagree.
+ * Find All References and the hover's count and link list all read this, so
+ * they cannot disagree; the matching rule is the compiler's `refSitesFor`, so
+ * they cannot disagree with the preview's counts either.
  */
 export function matchingPartialRefs(
 	partialName: string,
 	defFile: string,
 	index: ProjectIndex,
 ): PartialRef[] {
-	return index.partialRefs.filter(ref => {
-		if (ref.partialName !== partialName) return false;
-		return ref.targetFile === null
-			? ref.file === defFile
-			: ref.targetFile === defFile;
-	});
+	return refSitesFor(index.partialRefs, partialName, defFile);
 }
 
 /**

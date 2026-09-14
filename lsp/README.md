@@ -48,18 +48,9 @@ show every link, and a bare `::selection` shows every element.
 used?" — a definition hover's reference list and the results of Find All
 References both read `index.partialRefs`.
 
-The traversal is the compiler's
-[`collectPartialRefs`](../compiler/README.md#tree-traversal-walkts), the same
-one codegen and `link.ts` use, so what the editor counts is what the generated
-output resolves. It reaches references wherever they are written — including
-inside ordinary markup, which is where most of them live, anything under a
-layout's `<body>` included.
-
 A reference is matched to a definition by file: a same-file `b-part="#name"`
 (`targetFile === null`) matches a definition in the file it was written in, and
-a cross-file one matches the file it names. `matchingPartialRefs` in
-`src/references.ts` is the one place that rule lives, so the hover and Find All
-References cannot disagree.
+a cross-file one matches the file it names.
 
 Hovering a definition lists those references — the first ten, then a count of
 the rest — as `backflipHTML.openFileAtLocation` links that jump to the `b-part`.
@@ -164,7 +155,7 @@ File changes trigger recompilation with a 300ms debounce. The server runs its ow
 | File | Purpose |
 |------|---------|
 | `src/server.ts` | LSP connection setup, all request/notification handlers |
-| `src/index.ts` | Project indexing: maps partial definitions and references (walk shared with the compiler) |
+| `src/index.ts` | Project indexing: maps partial definitions and references (collection shared with the compiler) |
 | `src/resolve.ts` | Cursor position → the element/directive under it, from the compiled tree |
 | `src/hover.ts` | Hover information for directives and CSS selectors |
 | `src/definition.ts` | Go-to-definition for `b-part` → `b-name` |

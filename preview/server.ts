@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { loadConfig, resolveConfigRoot, resolveAssetDirs, resolveDomPatchOutputDirs, type BackflipConfig } from '../compiler/config.js';
 import { compileDirectory, type CompiledDirectory } from '../compiler/partials.js';
+import { collectRefSites, refSitesFor } from '../compiler/partial-refs.js';
 import { previewPartial } from './preview.js';
 import type { CompiledFile } from '../compiler/types.js';
 import { createWatcher, type WatchCallback, type WatchOptions } from '../lib/watch.js';
@@ -104,17 +105,37 @@ export async function buildContext(projectDir: string, opts?: { domPatchTmpDir?:
 	return { directory, cssHrefs, templateRoot: inputDir, assetDirs: assetDirsMap, assetMap, domPatchOutputDirs, domPatchTmpDir, domPatchAssets: new Map(), previewConfig, projectDir };
 }
 
+interface IndexPartial {
+	name: string;
+	/** How many `b-part` / custom-element calls across the project resolve here. */
+	refCount: number;
+}
+
 /** Build a tree structure from the compiled directory for the index page. */
-function buildTree(files: Map<string, CompiledFile>): { file: string; partials: string[] }[] {
-	const entries: { file: string; partials: string[] }[] = [];
+function buildTree(files: Map<string, CompiledFile>): { file: string; partials: IndexPartial[] }[] {
+	const refSites = collectRefSites(files);
+	const entries: { file: string; partials: IndexPartial[] }[] = [];
 	for (const [filePath, compiled] of files) {
-		const partials = Array.from(compiled.partials.keys());
+		const partials = Array.from(compiled.partials.keys()).map(name => ({
+			name,
+			refCount: refSitesFor(refSites, name, filePath).length,
+		}));
 		if (partials.length > 0) {
 			entries.push({ file: filePath, partials });
 		}
 	}
 	entries.sort((a, b) => a.file.localeCompare(b.file));
 	return entries;
+}
+
+/** The reference-count badge shown beside a partial. */
+function refBadge(refCount: number): string {
+	const label = `${refCount} ref${refCount === 1 ? '' : 's'}`;
+	const title = refCount === 0
+		? 'No partial references this one'
+		: `Referenced from ${refCount} call site${refCount === 1 ? '' : 's'}`;
+	const cls = refCount === 0 ? 'refs none' : 'refs';
+	return `<span class="${cls}" title="${title}">${label}</span>`;
 }
 
 function escapeHtml(s: string): string {
@@ -128,9 +149,9 @@ export function renderIndex(files: Map<string, CompiledFile>, liveReload = false
 	let list = '';
 	for (const entry of tree) {
 		list += `<li><strong>${escapeHtml(entry.file)}</strong><ul>`;
-		for (const name of entry.partials) {
+		for (const { name, refCount } of entry.partials) {
 			const href = `/preview/${encodeURIComponent(entry.file)}/${encodeURIComponent(name)}`;
-			list += `<li><a href="${escapeHtml(href)}">${escapeHtml(name)}</a></li>`;
+			list += `<li><a href="${escapeHtml(href)}">${escapeHtml(name)}</a> ${refBadge(refCount)}</li>`;
 		}
 		list += `</ul></li>`;
 	}
@@ -150,6 +171,8 @@ li { margin: 4px 0; }
 a { color: #0969da; text-decoration: none; }
 a:hover { text-decoration: underline; }
 strong { font-weight: 600; }
+.refs { color: #656d76; font-size: 0.85em; }
+.refs.none { color: #adb3ba; }
 </style>
 </head>
 <body>

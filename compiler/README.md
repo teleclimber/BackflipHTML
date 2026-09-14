@@ -45,10 +45,18 @@ so the container list lives in exactly one place:
 `collectPartialRefs` has five callers and no reimplementations: both code
 generators (to topologically order same-file partials and gather cross-file
 imports), `link.ts` (custom-element calls and `b-attr:` bindings), the CSS
-analyzer (which partials are reachable), and the LSP (reference indexing for
-hover counts and Find All References). A second copy of that recursion is a
-subtree the editor and the generated output can disagree about, so new callers
-route through here.
+analyzer (which partials are reachable), and `partial-refs.ts` (the reference
+index below). A second copy of that recursion is a subtree the editor and the
+generated output can disagree about, so new callers route through here.
+
+### Partial references (`partial-refs.ts`)
+
+`collectRefSites(files)` flattens a compiled directory to one `PartialRefSite`
+per call site, recording both ends of the relation: the partial the call sits
+inside, and the partial and file it names. `refSitesFor(sites, name, defFile)`
+then selects the sites that resolve to one definition, matching by file the way
+`resolvePartial` does — a call naming no file resolves within its own file, one
+naming a file resolves there.
 
 ### Expression language (`backcode.ts`)
 

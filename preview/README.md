@@ -29,6 +29,7 @@ The server watches for changes to templates, CSS, and `backflip.json`. When a fi
 - **Slot placeholders** — unfilled slots render as grey placeholder blocks
 - **CSS inclusion** — automatically includes CSS files from configured asset directories
 - **Live reload** — file changes trigger recompilation and browser reload via SSE
+- **Reference counts** — each partial in the index listing shows how many `b-part` / custom-element call sites across the project resolve to it, so unused partials and heavily shared ones stand out
 
 ## Key files
 

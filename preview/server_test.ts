@@ -1,5 +1,5 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
-import { compileDirectory } from "../compiler/partials.ts";
+import { compileDirectory, compileFiles } from "../compiler/partials.ts";
 import { compilePartial } from "../compiler/compiler.ts";
 import type { CompiledFile, PartialDef } from "../compiler/types.ts";
 import { renderIndex, handleRequest, broadcastReload, type ServerContext } from "./server.ts";
@@ -54,6 +54,53 @@ Deno.test("index page links are properly encoded", () => {
 	assertStringIncludes(html, 'href="/preview/');
 });
 
+// --- Index page reference counts ---
+
+/** The badge text rendered beside `name` on the index page. */
+function refBadgeFor(html: string, file: string, name: string): string | null {
+	const href = `/preview/${encodeURIComponent(file)}/${encodeURIComponent(name)}`;
+	const m = html.match(new RegExp(`href="${href}"[^>]*>[^<]*</a> <span class="([^"]*)"[^>]*>([^<]*)</span>`));
+	return m ? `${m[1]}|${m[2]}` : null;
+}
+
+Deno.test("index page counts every call site, not every calling partial", () => {
+	const html = renderIndex(ctx.directory.files);
+	// ui.html#btn is called once each from demo, slot_interp, slot_for, slot_if
+	// and dyn_attr_on_wrapper.
+	assertEquals(refBadgeFor(html, 'ui.html', 'btn'), 'refs|5 refs');
+});
+
+Deno.test("index page counts cross-file references against the defining file", () => {
+	const html = renderIndex(ctx.directory.files);
+	// page.html#labeled calls components.html#label.
+	assertEquals(refBadgeFor(html, 'components.html', 'label'), 'refs|1 ref');
+});
+
+Deno.test("index page marks an unreferenced partial", () => {
+	const html = renderIndex(ctx.directory.files);
+	// Nothing calls the top-level page partial.
+	assertEquals(refBadgeFor(html, 'page.html', 'full-page'), 'refs none|0 refs');
+});
+
+Deno.test("index page counts repeated calls from one partial separately", async () => {
+	const { directory: dir } = await compileFiles(new Map([
+		['ui.html', `<button b-name="btn"><b-unwrap b-slot /></button>
+<b-unwrap b-name="demo"><div b-part="#btn">a</div><div b-part="#btn">b</div><div b-part="#btn">c</div></b-unwrap>`],
+	]));
+	assertEquals(refBadgeFor(renderIndex(dir.files), 'ui.html', 'btn'), 'refs|3 refs');
+});
+
+Deno.test("index page counts a partial named the same in two files separately", async () => {
+	const { directory: dir } = await compileFiles(new Map([
+		['a.html', `<div b-name="card">a</div>
+<b-unwrap b-name="a_caller"><b-unwrap b-part="#card"></b-unwrap></b-unwrap>`],
+		['b.html', `<div b-name="card">b</div>`],
+	]));
+	const html = renderIndex(dir.files);
+	assertEquals(refBadgeFor(html, 'a.html', 'card'), 'refs|1 ref');
+	assertEquals(refBadgeFor(html, 'b.html', 'card'), 'refs none|0 refs');
+});
+
 // --- GET / ---
 
 Deno.test("GET / returns index page", async () => {
@@ -62,6 +109,7 @@ Deno.test("GET / returns index page", async () => {
 	assertEquals(res._status, 200);
 	assertStringIncludes(res._headers['Content-Type'], 'text/html');
 	assertStringIncludes(res._body, 'Backflip Previews');
+	assertEquals(refBadgeFor(res._body, 'ui.html', 'btn'), 'refs|5 refs');
 });
 
 // --- GET /preview/:file/:partial ---

@@ -1,5 +1,5 @@
-import { collectSlots, inferDataShape, inferFreeVars, visitPartialRefs } from '@backflip/html';
-import type { CompiledDirectory, RootTNode, TNode, SourceLoc, DataShape } from '@backflip/html';
+import { collectSlots, collectRefSites, inferDataShape, inferFreeVars } from '@backflip/html';
+import type { CompiledDirectory, RootTNode, SourceLoc, DataShape, PartialRefSite } from '@backflip/html';
 
 export interface PartialDef {
 	file: string;
@@ -28,14 +28,12 @@ export interface PartialDef {
 	bAttrs?: { name: string; isBool: boolean }[];
 }
 
-export interface PartialRef {
-	file: string;
-	partialName: string;
-	targetFile: string | null; // null = same-file
-	loc?: SourceLoc;
-	dataBindings: string[];
-	slotsFilled: string[];
-}
+/**
+ * One indexed `b-part` / custom-element call site. The compiler's type: the
+ * editor counts the same references the preview does and the generated output
+ * resolves.
+ */
+export type PartialRef = PartialRefSite;
 
 export interface ProjectIndex {
 	partialDefs: Map<string, PartialDef[]>; // key: partial name
@@ -44,7 +42,7 @@ export interface ProjectIndex {
 
 export function buildIndex(directory: CompiledDirectory): ProjectIndex {
 	const partialDefs = new Map<string, PartialDef[]>();
-	const partialRefs: PartialRef[] = [];
+	const partialRefs = collectRefSites(directory.files);
 
 	for (const [filePath, compiledFile] of directory.files) {
 		for (const [name, root] of compiledFile.partials) {
@@ -67,8 +65,6 @@ export function buildIndex(directory: CompiledDirectory): ProjectIndex {
 			} else {
 				partialDefs.set(name, [def]);
 			}
-
-			collectRefs(root.tnodes, filePath, partialRefs);
 		}
 	}
 
@@ -85,24 +81,4 @@ function partialExtent(root: RootTNode): { startOffset: number; endOffset: numbe
 	const meta = root.meta;
 	if (!meta || meta.endOffset <= meta.startOffset) return undefined;
 	return { startOffset: meta.startOffset, endOffset: meta.endOffset };
-}
-
-/**
- * Record every `b-part` / custom-element call under `tnodes` as a PartialRef.
- *
- * The traversal is the compiler's `visitPartialRefs`, the same one codegen and
- * `link.ts` use, so the references the editor counts are the ones the generated
- * output resolves.
- */
-function collectRefs(tnodes: TNode[], filePath: string, refs: PartialRef[]): void {
-	visitPartialRefs(tnodes, (ref) => {
-		refs.push({
-			file: filePath,
-			partialName: ref.partialName,
-			targetFile: ref.file,
-			loc: ref.loc,
-			dataBindings: ref.bindings.map(b => b.name),
-			slotsFilled: Object.keys(ref.slots),
-		});
-	});
 }
