@@ -9,6 +9,7 @@ import { resolveAt } from './resolve.js';
 import type { DataShape } from '@backflip/html';
 import { parseBPartValue } from '@backflip/html';
 import * as path from 'node:path';
+import { assetAttrAtCursor, assetRefInValue } from './asset-attr.js';
 
 /**
  * Provide hover info for BackflipHTML b-directives.
@@ -276,52 +277,29 @@ function hoverAssetRef(
 ): Hover | null {
 	if (!assetDirs || assetDirs.size === 0) return null;
 
-	// Match attributes with ~ suffix: attr~="value" or attr~='value' or :attr~="..."
-	const regex = /:?([a-zA-Z][a-zA-Z0-9-]*)~=(["'])([^"']*)\2/g;
-	let m;
-	while ((m = regex.exec(line)) !== null) {
-		const attrStart = m.index;
-		const attrEnd = attrStart + m[0].length;
-		if (position.character < attrStart || position.character > attrEnd) continue;
+	const attr = assetAttrAtCursor(line, position.character);
+	if (!attr) return null;
 
-		const attrName = m[1];
-		const quote = m[2];
-		const value = m[3];
-		const valueStart = m.index + m[0].indexOf(quote) + 1;
-
-		// Find which @name the cursor is on
-		const assetRefRegex = /@([a-zA-Z0-9_-]+)\//g;
-		let refMatch;
-		while ((refMatch = assetRefRegex.exec(value)) !== null) {
-			const refStart = valueStart + refMatch.index;
-			// Find end of this asset path (next comma for srcset, or end of value)
-			const afterRef = refMatch.index + refMatch[0].length;
-			const rest = value.substring(afterRef);
-			const subpath = attrName === 'srcset'
-				? rest.split(',')[0].split(/\s/)[0]
-				: rest;
-			const refEnd = valueStart + afterRef + subpath.length;
-
-			if (position.character >= refStart && position.character <= refEnd) {
-				const dirName = refMatch[1];
-				const dirPath = assetDirs.get(dirName);
-				if (!dirPath) {
-					return mkHover([`**Asset** \`@${dirName}\` — *unknown asset directory*`]);
-				}
-				const resolvedPath = path.join(dirPath, subpath);
-				const lines: string[] = [];
-				lines.push(`**Asset** \`@${dirName}/${subpath}\``);
-				lines.push(`**Directory:** \`${dirPath}\``);
-				lines.push(`**File:** \`${resolvedPath}\``);
-				return mkHover(lines);
-			}
-		}
-
-		// Cursor is on the ~= attribute but not on a specific @ref
-		return mkHover([`**Asset attribute** \`${attrName}~\``]);
+	const ref = assetRefInValue(attr, position.character);
+	if (!ref) {
+		// On the attribute, but not on one of its paths.
+		return attr.name === 'b-script'
+			? mkHover([
+				'**`b-script`** — client module for this custom element partial',
+				'Auto-included as `<script type="module">` when the partial renders.',
+			])
+			: mkHover([`**Asset attribute** \`${attr.name}\``]);
 	}
 
-	return null;
+	const dirPath = assetDirs.get(ref.name);
+	if (!dirPath) {
+		return mkHover([`**Asset** \`@${ref.name}\` — *unknown asset directory*`]);
+	}
+	return mkHover([
+		`**Asset** \`@${ref.name}/${ref.subpath}\``,
+		`**Directory:** \`${dirPath}\``,
+		`**File:** \`${path.join(dirPath, ref.subpath)}\``,
+	]);
 }
 
 // --- b-part hover ---

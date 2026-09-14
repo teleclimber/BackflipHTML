@@ -276,15 +276,20 @@ Deno.test("asset: resolveAssetRefs preserves and rewrites a custom-element root'
 	const root = compiled.partials.get("my-badge")! as CustomElementPartialRoot;
 	assertEquals(root.kind, 'custom-element');
 	// The entry from b-script is stored unresolved (an @-path) until resolveAssetRefs runs.
-	assertEquals(root.scripts, [{ url: '@script/badge.js', kind: 'entry' }]);
+	assertEquals(root.scripts!.map(s => [s.url, s.kind]), [['@script/badge.js', 'entry']]);
 	// Append a dependency the way applyDomPatch does (already an absolute URL).
 	root.scripts!.push({ url: '/static-bfdom/test.js', kind: 'dependency' });
+	const entryLoc = root.scripts![0].loc;
 
 	const resolved = resolveAssetRefs(compiled, assetMap);
 	const resolvedRoot = resolved.partials.get("my-badge")! as CustomElementPartialRoot;
 	// The entry's @-prefix is rewritten; the absolute dependency URL is untouched.
-	assertEquals(resolvedRoot.scripts, [
-		{ url: '/js/badge.js', kind: 'entry' },
-		{ url: '/static-bfdom/test.js', kind: 'dependency' },
+	assertEquals(resolvedRoot.scripts!.map(s => [s.url, s.kind]), [
+		['/js/badge.js', 'entry'],
+		['/static-bfdom/test.js', 'dependency'],
 	]);
+	// Rewriting the URL keeps the entry's source spans: they point at the
+	// authored @-path, which the rewrite does not move.
+	assertEquals(resolvedRoot.scripts![0].loc, entryLoc);
+	assertEquals(resolvedRoot.scripts![1].loc, undefined);
 });

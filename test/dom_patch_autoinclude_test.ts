@@ -272,3 +272,43 @@ Deno.test("integration CLI: b-script entry + generated dependency both emitted, 
 		await fs.rm(workDir, { recursive: true, force: true });
 	}
 });
+
+// A b-script naming a file that is not on disk is an error like any other bad
+// asset path, and must point at the path inside the attribute — a location of
+// 0:0 is no location at all, and the editor cannot underline it.
+Deno.test("integration CLI: a missing b-script file is reported at the asset path", async () => {
+	const workDir = path.join(TMPDIR, `cli_bscript_missing_${Date.now()}`);
+	const templatesDir = path.join(workDir, "templates");
+	await fs.mkdir(templatesDir, { recursive: true });
+	await fs.writeFile(path.join(templatesDir, "app.html"), APP_WITH_BSCRIPT);
+	// scripts/ exists but count-badge.js does not.
+	await fs.mkdir(path.join(workDir, "scripts"), { recursive: true });
+	const config = {
+		root: "templates",
+		output: [{ lang: "dom-patch", path: "bfdom" }, { lang: "js", path: "dist" }],
+		assets: [
+			{ name: "bfdom", path: "bfdom", prefix: "/bfdom/" },
+			{ name: "scripts", path: "scripts", prefix: "/scripts/" },
+		],
+	};
+	await fs.mkdir(path.join(workDir, "bfdom"), { recursive: true });
+	await fs.writeFile(path.join(workDir, "backflip.json"), JSON.stringify(config));
+
+	try {
+		const cmd = new Deno.Command("deno", {
+			args: ["run", "--allow-read", "--allow-write", CLI_PATH],
+			cwd: workDir,
+			stdout: "piped",
+			stderr: "piped",
+		});
+		const out = await cmd.output();
+		const stderr = new TextDecoder().decode(out.stderr);
+		assertEquals(out.code === 0, false, "expected a non-zero exit for a missing asset");
+		assertStringIncludes(stderr, "asset file not found: @scripts/count-badge.js");
+		// Line 1, at the subpath within `b-script="@scripts/count-badge.js"`.
+		const col = APP_WITH_BSCRIPT.split("\n")[0].indexOf("count-badge.js") + 1;
+		assertStringIncludes(stderr, `app.html:1:${col}:`);
+	} finally {
+		await fs.rm(workDir, { recursive: true, force: true });
+	}
+});

@@ -65,6 +65,14 @@ The `srcset` attribute is fully supported. BackflipHTML parses the `srcset` valu
 
 *Note: Attributes with multiple URLs other than `srcset` (like inline `style`) are not currently supported for asset resolution.*
 
+### `b-script`
+
+[`b-script`](partials.md#client-script-b-script) also takes an asset path, and is the one attribute that does so without a `~` — it names a module rather than setting an attribute value, so there is no attribute to suffix. It resolves, validates and appears in editor tooling exactly like the attributes above.
+
+```html
+<my-widget b-attr:count b-script="@scripts/my-widget.js">
+```
+
 ## Tooling Integration
 
 By declaring your assets, BackflipHTML provides compile-time guarantees and editor assistance:

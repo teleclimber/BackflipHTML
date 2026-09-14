@@ -2,6 +2,7 @@ import { Location } from 'vscode-languageserver';
 import { refSitesFor } from '@backflip/html';
 import type { ProjectIndex, PartialRef } from './index.js';
 import type { AssetReference } from '@backflip/assets';
+import { assetRefAtCursor } from './asset-attr.js';
 import * as path from 'node:path';
 
 /**
@@ -62,35 +63,8 @@ export function parseAssetRefAtCursor(
 	line: string,
 	character: number,
 ): { name: string; subpath: string } | null {
-	const regex = /:?([a-zA-Z][a-zA-Z0-9-]*)~=(["'])([^"']*)\2/g;
-	let m;
-	while ((m = regex.exec(line)) !== null) {
-		const quote = m[2];
-		const valueStart = m.index + m[0].indexOf(quote) + 1;
-		const valueEnd = valueStart + m[3].length;
-		if (character < valueStart || character > valueEnd) continue;
-
-		const attrName = m[1];
-		const value = m[3];
-
-		const assetRefRegex = /@([a-zA-Z0-9_-]+)\//g;
-		let refMatch;
-		while ((refMatch = assetRefRegex.exec(value)) !== null) {
-			const refStart = valueStart + refMatch.index;
-			const afterRef = refMatch.index + refMatch[0].length;
-			const rest = value.substring(afterRef);
-			const subpath = attrName === 'srcset'
-				? rest.split(',')[0].split(/\s/)[0]
-				: rest;
-			const refEnd = valueStart + afterRef + subpath.length;
-
-			if (character >= refStart && character <= refEnd) {
-				return { name: refMatch[1], subpath };
-			}
-		}
-	}
-
-	return null;
+	const ref = assetRefAtCursor(line, character);
+	return ref ? { name: ref.name, subpath: ref.subpath } : null;
 }
 
 /**
@@ -99,15 +73,14 @@ export function parseAssetRefAtCursor(
  * `refs` comes from `collectAllAssetReferences`, which walks the compiled
  * trees and the stylesheets rather than the raw source, so what is listed here
  * is what actually renders: an `@name/subpath` sitting in text content, in a
- * comment, or on an attribute without the `~` suffix is not a reference and
+ * comment, or on a plain attribute that names no asset is not a reference and
  * does not appear, and one written across a line break does. Matching is on the
  * parsed name/subpath pair, so `photo.jpg` never matches `photo.jpg.bak`.
  *
  * Template references resolve against `templateRoot`; stylesheet references —
  * which carry no `partialName`, and whose `sourceFile` is relative to an asset
  * directory rather than the template root — resolve against that directory.
- * References with no source position (a `b-script` entry names an asset but has
- * nowhere to jump to) are dropped.
+ * References with no source position are dropped — there is nowhere to jump to.
  */
 export function findAssetReferences(
 	assetName: string,

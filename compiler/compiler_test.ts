@@ -1435,7 +1435,26 @@ Deno.test("b-script: stored as an unresolved 'entry' script on the definition", 
 	);
 	assertEquals(errors.length, 0);
 	const root = compiled.partials.get('my-widget')! as CustomElementPartialRoot;
-	assertEquals(root.scripts, [{ url: '@scripts/my-widget.js', kind: 'entry' }]);
+	assertEquals(root.scripts!.length, 1);
+	assertEquals(root.scripts![0].url, '@scripts/my-widget.js');
+	assertEquals(root.scripts![0].kind, 'entry');
+});
+
+Deno.test("b-script: the stored script carries the asset path's source location", async () => {
+	const assetMap = new Map([['scripts', '/js/']]);
+	const src = `<my-widget b-attr:title b-script="@scripts/my-widget.js"><span>x</span></my-widget>`;
+	const { compiled, errors } = await compileFile(src, undefined, 'test.html', { assetMap });
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('my-widget')! as CustomElementPartialRoot;
+	const script = root.scripts![0];
+	// 1-based columns, matching what asset attributes record: the whole
+	// @name/subpath, then the subpath alone.
+	const valueCol = src.indexOf('@scripts/my-widget.js') + 1;
+	assertEquals(script.loc?.startLine, 1);
+	assertEquals(script.loc?.startCol, valueCol);
+	assertEquals(script.loc?.endCol, valueCol + '@scripts/my-widget.js'.length);
+	assertEquals(script.subpathLoc?.startCol, valueCol + '@scripts/'.length);
+	assertEquals(script.subpathLoc?.endCol, valueCol + '@scripts/my-widget.js'.length);
 });
 
 Deno.test("b-script: directive does not leak into the rendered definition tag", async () => {

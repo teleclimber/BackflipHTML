@@ -31,7 +31,7 @@
       "patterns": [
         {
           "name": "entity.other.attribute-name.directive.backflip",
-          "match": "\\bb-(name|part|for|if|else-if|else|slot|in|export|unwrap|data:[a-zA-Z0-9_-]+|bind:[a-zA-Z0-9_-]+)\\b"
+          "match": "\\bb-(name|part|for|if|else-if|else|slot|in|export|unwrap|script|data:[a-zA-Z0-9_-]+|bind:[a-zA-Z0-9_-]+|attr:[a-zA-Z0-9_.-]+)\\b"
         },
         {
           "name": "entity.other.attribute-name.shorthand-bind.backflip",

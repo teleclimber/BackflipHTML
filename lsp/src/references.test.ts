@@ -84,6 +84,12 @@ describe('parseAssetRefAtCursor', () => {
 		const result = parseAssetRefAtCursor(line, 35);
 		strictEqual(result, null);
 	});
+
+	it('parses @name/subpath from b-script, which has no ~ suffix', () => {
+		const line = '<my-widget b-attr:count b-script="@scripts/my-widget.js">';
+		const result = parseAssetRefAtCursor(line, line.indexOf('my-widget.js'));
+		deepStrictEqual(result, { name: 'scripts', subpath: 'my-widget.js' });
+	});
 });
 
 describe('findAssetReferences', () => {
@@ -150,8 +156,8 @@ describe('findAssetReferences', () => {
 	});
 
 	it('skips references that carry no source position', () => {
-		// b-script entries are collected with line 0: they name an asset but
-		// have no span to jump to.
+		// Nothing collected from a template lands here now, but a reference
+		// without a span has nowhere to jump to and must not be listed.
 		const refs = [templateRef({ line: 0, column: 0, endLine: undefined, endColumn: undefined })];
 		deepStrictEqual(findAssetReferences('images', 'photo.jpg', refs, templateRoot, assetDirs), []);
 	});
@@ -274,6 +280,49 @@ describe('findAssetReferences — against compiled templates', () => {
 		// `    <img src~="@images/photo.jpg" />` — the span covers @images/photo.jpg
 		strictEqual(first.range.start.character, 15);
 		strictEqual(first.range.end.character, 15 + '@images/photo.jpg'.length);
+	});
+});
+
+describe('findAssetReferences — b-script uses', () => {
+	// A b-script entry is a real use of the asset: find-references must list it
+	// alongside the attribute uses, and jump to the path in the attribute.
+	const TEMPLATE = [
+		'<my-widget b-attr:count b-script="@scripts/widget.js">', // 1
+		'\t<span>{{ count }}</span>',                             // 2
+		'</my-widget>',                                           // 3
+		'<div b-name="page">',                                    // 4
+		'\t<script src~="@scripts/widget.js"></script>',          // 5
+		'</div>',                                                 // 6
+	].join('\n');
+
+	async function locate() {
+		const dir = path.join('/tmp/claude-1000', `lsp_bscript_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+		const scriptsDir = path.join(dir, 'scripts');
+		await fs.mkdir(scriptsDir, { recursive: true });
+		try {
+			await fs.writeFile(path.join(dir, 'page.html'), TEMPLATE, 'utf-8');
+			await fs.writeFile(path.join(scriptsDir, 'widget.js'), '', 'utf-8');
+			const assetDirs = new Map([['scripts', scriptsDir]]);
+			const assetMap = new Map([['scripts', '/__assets/scripts/']]);
+			const { directory } = await compileDirectory(dir, { assetMap, assetDirs });
+			const refs = collectAllAssetReferences(directory.files, assetDirs);
+			return findAssetReferences('scripts', 'widget.js', refs, dir, assetDirs);
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	}
+
+	it('lists the b-script use alongside the attribute use', async () => {
+		const lines = (await locate()).map(l => l.range.start.line + 1).sort((a, b) => a - b);
+		deepStrictEqual(lines, [1, 5]);
+	});
+
+	it('spans the @name/subpath inside the b-script value', async () => {
+		const hit = (await locate()).find(l => l.range.start.line === 0)!;
+		ok(hit, 'expected a hit on the b-script line');
+		const col = TEMPLATE.split('\n')[0].indexOf('@scripts/widget.js');
+		strictEqual(hit.range.start.character, col);
+		strictEqual(hit.range.end.character, col + '@scripts/widget.js'.length);
 	});
 });
 

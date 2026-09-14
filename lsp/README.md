@@ -7,8 +7,9 @@
 - **Diagnostics** — red underlines for template compilation errors, and warnings on CSS files whose syntax stopped the analyzer
 - **Go to Definition** — click a `b-part` reference to jump to the `b-name` definition, or click a custom element partial tag (e.g. `<my-card>`) to jump to its definition
 - **Find All References** — from a `b-name` definition, find all `b-part` usages; from an `@name/subpath` asset reference, find every use of that asset across templates and stylesheets
+- **Completion** — asset directory names and file paths, offered while an asset path is being typed
 - **Document Symbols** — lists partials in the editor outline/breadcrumbs, each spanning its whole definition so breadcrumbs track the cursor anywhere inside a partial
-- **Hover (HTML)** — hover over `b-part`, `b-name`, `b-in`, `b-slot`, `b-data:` attributes, custom element partial tags (e.g. `<my-card>`), or HTML elements to see directive info and matching CSS rules; a definition's hover lists its references as links that jump to them
+- **Hover (HTML)** — hover over `b-part`, `b-name`, `b-in`, `b-slot`, `b-data:` attributes, asset paths, custom element partial tags (e.g. `<my-card>`), or HTML elements to see directive info and matching CSS rules; a definition's hover lists its references as links that jump to them
 - **Hover (CSS)** — hover over a selector in a CSS file to see which partials contain matching elements
 
 Both CSS hovers also name the pseudos that were stripped before matching, and what kind of thing each one is — see [Relaxed pseudos in CSS hover](#relaxed-pseudos-in-css-hover).
@@ -91,6 +92,16 @@ compile to no tree at all.
 
 ### Asset references
 
+Two attribute forms name an asset: any attribute with the `~` suffix (`src~=`,
+`:srcset~=`), and [`b-script=`](../docs/partials.md#client-script-b-script) on a
+custom element partial definition, which names a module rather than setting an
+attribute value and so carries no `~`. Hover, go-to-definition, find-references
+and completion all decide what the cursor is on through `src/asset-attr.ts`.
+
+Those probes read the line's text rather than the compiled tree, which is what
+lets completion answer while the attribute is still being typed and the document
+does not yet compile.
+
 Find-all-references on an `@name/subpath` reads the asset references collected
 from the last compile — `collectAllAssetReferences`, which walks the compiled
 trees and the discovered stylesheets.
@@ -157,6 +168,7 @@ File changes trigger recompilation with a 300ms debounce. The server runs its ow
 | `src/server.ts` | LSP connection setup, all request/notification handlers |
 | `src/index.ts` | Project indexing: maps partial definitions and references (collection shared with the compiler) |
 | `src/resolve.ts` | Cursor position → the element/directive under it, from the compiled tree |
+| `src/asset-attr.ts` | Cursor position → the asset attribute and `@name/subpath` under it, from the line's text |
 | `src/hover.ts` | Hover information for directives and CSS selectors |
 | `src/definition.ts` | Go-to-definition for `b-part` → `b-name` |
 | `src/references.ts` | Find-references for partial usage and asset references |

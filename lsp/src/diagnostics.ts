@@ -7,10 +7,18 @@ export function errorsToDiagnostics(errors: BackflipError[]): Map<string, Diagno
 
 	for (const err of errors) {
 		const file = err.filename ?? '';
-		const line = (err.line ?? 1) - 1; // LSP is 0-based
-		const col = (err.col ?? 1) - 1;
-		const endLine = err.endLine != null ? err.endLine - 1 : line;
-		const endCol = err.endCol != null ? err.endCol - 1 : col + 1;
+		// Errors are 1-based and the protocol is 0-based, so anything the compiler
+		// could not place (a 0) would underflow to -1. A negative position is
+		// invalid and the client drops the diagnostic whole, hiding the message;
+		// clamping costs only precision.
+		const line = Math.max(0, (err.line ?? 1) - 1);
+		const col = Math.max(0, (err.col ?? 1) - 1);
+		let endLine = err.endLine != null ? err.endLine - 1 : line;
+		let endCol = err.endCol != null ? err.endCol - 1 : col + 1;
+		if (endLine < line || (endLine === line && endCol <= col)) {
+			endLine = line;
+			endCol = col + 1;
+		}
 
 		const diag: Diagnostic = {
 			severity: err.severity === 'warning' ? DiagnosticSeverity.Warning : DiagnosticSeverity.Error,

@@ -20,6 +20,7 @@ import { analyzeCss, discoverCssFiles, type CssAnalysisResult, type CssSourceFil
 import { discoverAssetFileInfos, collectAllAssetReferences, validateAssetFiles, buildAssetUsageReport, filterReport, renderAssetReportHtml, type AssetReference } from '@backflip/assets';
 import { buildIndex, type ProjectIndex } from './index.js';
 import { errorsToDiagnostics, cssFailuresToDiagnostics } from './diagnostics.js';
+import { assetAttrAtCursor, openAssetAttrValue } from './asset-attr.js';
 import { findDefinition, findAssetDefinition, findCustomElementDefinition } from './definition.js';
 import { findReferences, parseAssetRefAtCursor, findAssetReferences } from './references.js';
 import { getDocumentSymbols } from './symbols.js';
@@ -436,7 +437,7 @@ connection.onHover((params: HoverParams) => {
 		end: { line: params.position.line + 1, character: 0 },
 	});
 	const ch = params.position.character;
-	const hasAssetAttr = /~=["']/.test(line);
+	const hasAssetAttr = assetAttrAtCursor(line, ch) !== null;
 	connection.console.log(`[hover] file=${relPath} line=${params.position.line} ch=${ch} assetDirs=${assetDirs ? assetDirs.size : 'null'} hasAssetAttr=${hasAssetAttr} line=${JSON.stringify(line.trimEnd())}`);
 
 	const result = getHover(doc, params.position, relPath, projectIndex, cssAnalysis, cssPaths, templateRoot, assetDirs, compiledFiles.get(relPath));
@@ -463,12 +464,10 @@ connection.onCompletion(async (params: CompletionParams): Promise<CompletionItem
 		end: { line: params.position.line, character: params.position.character },
 	});
 
-	// Only complete inside ~ attributes
-	// Check if we're inside a ~=" or ~=' context
-	const tildeAttrMatch = line.match(/:?[a-zA-Z][a-zA-Z0-9-]*~=["']([^"']*)$/);
-	if (!tildeAttrMatch) return [];
-
-	const valueTyped = tildeAttrMatch[1];
+	// Only complete inside an attribute that names an asset, and only while its
+	// quote is still open.
+	const valueTyped = openAssetAttrValue(line);
+	if (valueTyped === null) return [];
 
 	// If user typed @ or part of @name, complete asset dir names
 	if (valueTyped === '@' || (valueTyped.startsWith('@') && !valueTyped.includes('/'))) {

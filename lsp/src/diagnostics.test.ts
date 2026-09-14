@@ -35,6 +35,39 @@ describe('errorsToDiagnostics', () => {
 		});
 	});
 
+	it('never emits a negative position for a zero line or column', () => {
+		// 0 is not a valid 1-based position, so converting it blindly underflows
+		// to -1 and the client drops the whole diagnostic. Clamp instead: an
+		// imprecise range at the top of the file still shows the message.
+		const err = new BackflipError('asset file not found: @scripts/missing.js');
+		err.filename = 'page.html';
+		err.line = 0;
+		err.col = 0;
+
+		const diags = errorsToDiagnostics([err]).get('page.html');
+		strictEqual(diags?.length, 1);
+		deepStrictEqual(diags![0].range, {
+			start: { line: 0, character: 0 },
+			end: { line: 0, character: 1 },
+		});
+	});
+
+	it('clamps an end that would precede the start', () => {
+		const err = new BackflipError('bad span');
+		err.filename = 'page.html';
+		err.line = 4;
+		err.col = 8;
+		err.endLine = 0;
+		err.endCol = 0;
+
+		const diags = errorsToDiagnostics([err]).get('page.html');
+		const range = diags![0].range;
+		ok(
+			range.end.line > range.start.line || range.end.character >= range.start.character,
+			`end ${JSON.stringify(range.end)} precedes start ${JSON.stringify(range.start)}`,
+		);
+	});
+
 	it('groups errors by file', () => {
 		const err1 = new BackflipError('error 1');
 		err1.filename = 'a.html';

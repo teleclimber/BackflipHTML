@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
+import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { compileDirectory } from '@backflip/html';
 import { collectAssetReferences } from './references.js';
@@ -64,5 +65,58 @@ describe('collectAssetReferences', () => {
 		const refs = collectAssetReferences(directory.files);
 		// Refs may or may not exist depending on compilation mode, but should not throw
 		assert.ok(Array.isArray(refs));
+	});
+});
+
+describe('collectAssetReferences — b-script entries', () => {
+	// A b-script entry names an asset like any attribute does, so it must be
+	// collected with the same spans: without them the missing-file diagnostic,
+	// find-references and the usage report have nowhere to point.
+	const TEMPLATE = [
+		'<my-widget b-attr:count b-script="@scripts/my-widget.js">', // 1
+		'\t<span>{{ count }}</span>',                                // 2
+		'</my-widget>',                                              // 3
+	].join('\n');
+
+	async function collect() {
+		const dir = path.join('/tmp/claude-1000', `assets_bscript_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+		const scriptsDir = path.join(dir, 'scripts');
+		await fs.mkdir(scriptsDir, { recursive: true });
+		try {
+			await fs.writeFile(path.join(dir, 'w.html'), TEMPLATE, 'utf-8');
+			await fs.writeFile(path.join(scriptsDir, 'my-widget.js'), '', 'utf-8');
+			const assetDirs = new Map([['scripts', scriptsDir]]);
+			const assetMap = new Map([['scripts', '/__assets/scripts/']]);
+			const { directory } = await compileDirectory(dir, { assetMap, assetDirs });
+			return collectAssetReferences(directory.files);
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	}
+
+	it('collects the entry as a reference to the named asset', async () => {
+		const refs = await collect();
+		const ref = refs.find(r => r.assetSubpath === 'my-widget.js');
+		assert.ok(ref, `expected a reference to my-widget.js, got ${JSON.stringify(refs)}`);
+		assert.equal(ref.assetName, 'scripts');
+		assert.equal(ref.sourceFile, 'w.html');
+		assert.equal(ref.partialName, 'my-widget');
+	});
+
+	it('spans the whole @name/subpath in the attribute value', async () => {
+		const ref = (await collect()).find(r => r.assetSubpath === 'my-widget.js')!;
+		const col = TEMPLATE.indexOf('@scripts/my-widget.js') + 1; // 1-based
+		assert.equal(ref.line, 1);
+		assert.equal(ref.column, col);
+		assert.equal(ref.endLine, 1);
+		assert.equal(ref.endColumn, col + '@scripts/my-widget.js'.length);
+	});
+
+	it('spans the subpath alone for the missing-file diagnostic', async () => {
+		const ref = (await collect()).find(r => r.assetSubpath === 'my-widget.js')!;
+		const col = TEMPLATE.indexOf('@scripts/my-widget.js') + 1;
+		assert.equal(ref.subpathLine, 1);
+		assert.equal(ref.subpathColumn, col + '@scripts/'.length);
+		assert.equal(ref.subpathEndColumn, col + '@scripts/my-widget.js'.length);
 	});
 });

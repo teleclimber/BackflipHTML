@@ -1696,3 +1696,30 @@ describe('asset ref hover', () => {
 		ok(v.includes('/workspace/assets/images'));
 	});
 });
+
+describe('b-script hover', () => {
+	// b-script names an asset with a plain `=`, so it needs the same hover the
+	// `~` attributes get.
+	const assetDirs = new Map([['scripts', '/workspace/assets/scripts']]);
+	const line = '<my-widget b-attr:count b-script="@scripts/my-widget.js">';
+
+	it('shows the resolved path for the asset it names', async () => {
+		const doc = makeDoc([line]);
+		const v = hoverValue(getHover(doc, pos(0, line.indexOf('my-widget.js')), 'page.html', makeIndex([], []), null, null, null, assetDirs));
+		ok(v.includes('**Asset**'), v);
+		ok(v.includes('@scripts/my-widget.js'), v);
+		ok(v.includes('/workspace/assets/scripts/my-widget.js'), v);
+	});
+
+	it('reports an unknown asset directory', async () => {
+		const doc = makeDoc(['<my-widget b-script="@nope/x.js">']);
+		const v = hoverValue(getHover(doc, pos(0, 25), 'page.html', makeIndex([], []), null, null, null, assetDirs));
+		ok(v.includes('unknown asset directory'), v);
+	});
+
+	it('describes the directive when the cursor is on the name rather than the path', async () => {
+		const doc = makeDoc([line]);
+		const v = hoverValue(getHover(doc, pos(0, line.indexOf('b-script')), 'page.html', makeIndex([], []), null, null, null, assetDirs));
+		ok(v.includes('b-script'), v);
+	});
+});

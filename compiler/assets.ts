@@ -90,7 +90,7 @@ export function validateStaticAssetAttr(
 	const { assetMap, assetDirs, filename } = ctx;
 	const { value, loc: attrLocation, valueLoc } = attr;
 	if (!assetMap) {
-		return { refs: [], originalValue: value, error: new BackflipError(`${attrName}~ used but no asset directories are configured`, attrErrorLoc(attrLocation, openLoc, filename)) };
+		return { refs: [], originalValue: value, error: new BackflipError(`${attrName} names an asset but no asset directories are configured`, attrErrorLoc(attrLocation, openLoc, filename)) };
 	}
 	if (attrName === 'style') {
 		return { refs: [], originalValue: value, error: new BackflipError(`style~ is not supported`, attrErrorLoc(attrLocation, openLoc, filename)) };

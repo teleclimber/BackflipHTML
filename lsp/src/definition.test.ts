@@ -114,6 +114,7 @@ describe('findAssetDefinition', () => {
 	const assetDirs = new Map([
 		['images', '/workspace/assets/images'],
 		['icons', '/workspace/assets/icons'],
+		['scripts', '/workspace/assets/scripts'],
 	]);
 
 	it('resolves src~ to file path', () => {
@@ -166,5 +167,19 @@ describe('findAssetDefinition', () => {
 		const result = findAssetDefinition(line, 15, assetDirs);
 		ok(result !== null, 'expected a definition');
 		ok(result!.uri.includes('/workspace/assets/images/photo.jpg'));
+	});
+
+	it('resolves a b-script asset path', () => {
+		const line = '<my-widget b-attr:count b-script="@scripts/my-widget.js">';
+		const result = findAssetDefinition(line, line.indexOf('my-widget.js'), assetDirs);
+		deepStrictEqual(result, {
+			uri: 'file:///workspace/assets/scripts/my-widget.js',
+			range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+		});
+	});
+
+	it('returns null for a b-script naming an unknown asset dir', () => {
+		const line = '<my-widget b-script="@unknown/x.js">';
+		strictEqual(findAssetDefinition(line, 25, assetDirs), null);
 	});
 });

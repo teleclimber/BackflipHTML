@@ -617,7 +617,14 @@ function lowerCustomElementDefinition(el: SourceElement, ctx: Ctx): void {
 		if (error) {
 			ctx.errors.push(error);
 		} else if (refs.length > 0) {
-			(partialRoot.scripts ??= []).push({ url: originalValue, kind: 'entry' });
+			// The ref's spans come along: a missing file is reported against the
+			// path, and the editor lists and jumps to this use like any other.
+			(partialRoot.scripts ??= []).push({
+				url: originalValue,
+				kind: 'entry',
+				...(refs[0].loc ? { loc: refs[0].loc } : {}),
+				...(refs[0].subpathLoc ? { subpathLoc: refs[0].subpathLoc } : {}),
+			});
 		}
 	}
 

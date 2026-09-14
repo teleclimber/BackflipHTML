@@ -1,4 +1,4 @@
-import type { CompiledFile, TNode, ElementTNode, AttrPart, CustomElementCallTNode, RootTNode, CustomElementPartialRoot } from '@backflip/html';
+import type { CompiledFile, TNode, ElementTNode, AttrPart, AssetRef, SourceLoc, CustomElementCallTNode, RootTNode, CustomElementPartialRoot } from '@backflip/html';
 import { parseAssetRef } from '@backflip/html';
 import type { AssetReference } from './types.js';
 import { collectCssAssetReferences } from './css-references.js';
@@ -38,18 +38,16 @@ function walkRoot(root: RootTNode, sourceFile: string, partialName: string, out:
 	if (root.kind === 'custom-element') {
 		const cer = root as CustomElementPartialRoot;
 		if (cer.definitionAttrs) collectFromAttrParts(cer.definitionAttrs, sourceFile, partialName, out);
-		// b-script entry scripts are stored as unresolved @name/... paths; validate they exist on disk.
+		// b-script entry scripts are stored as unresolved @name/... paths, with the
+		// spans of the path they were written as.
 		for (const script of cer.scripts ?? []) {
 			const ref = parseAssetRef(script.url);
 			if (!ref) continue;  // already-resolved (absolute) dependency URLs aren't asset refs
-			out.push({
+			out.push(toAssetReference(
+				{ ...ref, loc: script.loc, subpathLoc: script.subpathLoc },
 				sourceFile,
 				partialName,
-				line: 0,
-				column: 0,
-				assetName: ref.name,
-				assetSubpath: ref.subpath,
-			});
+			));
 		}
 	}
 }
@@ -96,21 +94,36 @@ function collectFromAttrParts(
 	for (const part of parts) {
 		if (part.type === 'asset') {
 			for (const ref of part.refs) {
-				out.push({
-					sourceFile,
-					partialName,
-					line: ref.loc?.startLine ?? part.loc?.startLine ?? 0,
-					column: ref.loc?.startCol ?? part.loc?.startCol ?? 0,
-					endLine: ref.loc?.endLine,
-					endColumn: ref.loc?.endCol,
-					subpathLine: ref.subpathLoc?.startLine,
-					subpathColumn: ref.subpathLoc?.startCol,
-					subpathEndLine: ref.subpathLoc?.endLine,
-					subpathEndColumn: ref.subpathLoc?.endCol,
-					assetName: ref.name,
-					assetSubpath: ref.subpath,
-				});
+				out.push(toAssetReference(ref, sourceFile, partialName, part.loc));
 			}
 		}
 	}
+}
+
+/**
+ * One asset use, as the editor and the report read it: the span of the whole
+ * `@name/subpath`, and the span of the subpath alone (what a missing-file error
+ * underlines). `fallbackLoc` covers a ref the compiler located only as far as
+ * its containing attribute.
+ */
+function toAssetReference(
+	ref: Pick<AssetRef, 'name' | 'subpath' | 'loc' | 'subpathLoc'>,
+	sourceFile: string,
+	partialName: string,
+	fallbackLoc?: SourceLoc,
+): AssetReference {
+	return {
+		sourceFile,
+		partialName,
+		line: ref.loc?.startLine ?? fallbackLoc?.startLine ?? 0,
+		column: ref.loc?.startCol ?? fallbackLoc?.startCol ?? 0,
+		endLine: ref.loc?.endLine,
+		endColumn: ref.loc?.endCol,
+		subpathLine: ref.subpathLoc?.startLine,
+		subpathColumn: ref.subpathLoc?.startCol,
+		subpathEndLine: ref.subpathLoc?.endLine,
+		subpathEndColumn: ref.subpathLoc?.endCol,
+		assetName: ref.name,
+		assetSubpath: ref.subpath,
+	};
 }

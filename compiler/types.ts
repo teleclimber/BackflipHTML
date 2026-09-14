@@ -40,9 +40,14 @@ export interface CustomElementPartialRoot extends BaseRoot {
 //  - 'entry'      → <script type="module" src> (an executed module, e.g. the hand-coded web component)
 //  - 'dependency' → <link rel="modulepreload" href> (a module imported by an entry, preloaded for performance)
 // `url` may be an unresolved "@name/subpath" asset path until resolveAssetRefs rewrites it.
+// `loc`/`subpathLoc` are carried only by an 'entry' from b-script, and name the
+// same spans an asset attribute records: the whole "@name/subpath", and the
+// subpath alone. A 'dependency' is generated, so it has no source to point at.
 export interface PartialScript {
 	url: string,
 	kind: 'entry' | 'dependency',
+	loc?: SourceLoc,
+	subpathLoc?: SourceLoc,
 }
 export type RootTNode = NamedPartialRoot | CustomElementPartialRoot;
 export interface RawTNode {
