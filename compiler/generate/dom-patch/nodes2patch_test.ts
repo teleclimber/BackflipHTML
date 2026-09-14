@@ -209,6 +209,52 @@ Deno.test("end-to-end: two custom elements in one file both emit classes", async
 	assertEquals(js.includes('export class BackflipChildEl'), true);
 });
 
+// Two unrelated partials in one file. Everything each one generates — class names,
+// bfids, marker ids, if-set symbols — has to stay distinct, since they share a file
+// (and one bfid generator).
+Deno.test("end-to-end: two independent custom elements in one file keep distinct bfids", async () => {
+	const file = await compileCustomElements(
+		`<first-el b-attr:title><span :data-x="title">{{ title }}</span></first-el>`,
+		`<second-el b-attr:label><span :data-y="label">{{ label }}</span></second-el>`,
+	);
+	const { js } = applyDomPatch(file, { bfidGen: makeSequentialBfidGen() });
+	if (!js) throw new Error('expected js');
+	assertEquals(js.includes('export class BackflipFirstEl'), true);
+	assertEquals(js.includes('export class BackflipSecondEl'), true);
+	// Each partial keeps its own element lookup, print markers and expression fns.
+	assertEquals(js.match(/sel_bf\d+\(\) \{/g)?.length, 2);
+	assertEquals(js.match(/replaceBetween\(elem, '(bfid:bf\d+)'/g)?.length, 2);
+	assertEquals(js.includes('bc_bf0_data_x'), true);
+	assertEquals(js.includes('bc_bf3_data_y'), true);
+	// No id is reused across the two partials.
+	const ids = [...js.matchAll(/bf\d+/g)].map(m => m[0]);
+	assertEquals(new Set(ids).size, 6);
+});
+
+// Two if-sets in one file: their module-level snapshots, branch fns and nested
+// patch-branch classes are all keyed off the set id, so the ids must not collide.
+Deno.test("end-to-end: two custom elements with b-if sets in one file keep distinct set symbols", async () => {
+	const file = await compileCustomElements(
+		`<first-el b-attr:flag.bool><p b-if="flag">{{ flag }}</p><p b-else>n</p></first-el>`,
+		`<second-el b-attr:on.bool><em b-if="on">y</em><em b-else>n</em></second-el>`,
+	);
+	const { js, needsRender } = applyDomPatch(file, { bfidGen: makeSequentialBfidGen() });
+	if (!js) throw new Error('expected js');
+	assertEquals(needsRender, true);
+	// One render import for the file, not one per partial.
+	assertEquals(js.match(/^import \{ render \} from/gm)?.length, 1);
+	const setIds = [...js.matchAll(/^const bfif_(bf\d+) = /gm)].map(m => m[1]);
+	assertEquals(setIds.length, 2);
+	assertEquals(new Set(setIds).size, 2);
+	for (const id of setIds) {
+		assertEquals(js.includes(`branch_${id}(data) {`), true);
+		assertEquals(js.includes(`renderIf_${id}(data) {`), true);
+	}
+	// Class names are unique across the whole file, nested branch classes included.
+	const classNames = [...js.matchAll(/^(?:export )?class (\w+) \{/gm)].map(m => m[1]);
+	assertEquals(new Set(classNames).size, classNames.length);
+});
+
 Deno.test("end-to-end: nested custom-element call gets a data-bfid stamped into its callerAttrs", async () => {
 	const file = await compileCustomElement(
 		`<parent-el b-attr:show><child-el :show="show"></child-el></parent-el>`
