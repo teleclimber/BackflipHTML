@@ -25,3 +25,20 @@
 <b-unwrap b-name="dyn_attr_on_wrapper">
     <div b-part="#btn" :class="cls">Click me</div>
 </b-unwrap>
+
+<b-unwrap b-name="call_if">
+    <b-unwrap b-if="show" b-part="#btn">Save</b-unwrap>
+</b-unwrap>
+
+<b-unwrap b-name="call_for">
+    <b-unwrap b-for="x in items" b-part="#btn">{{ x }}</b-unwrap>
+</b-unwrap>
+
+<b-unwrap b-name="call_if_else">
+    <b-unwrap b-if="show" b-part="#btn">yes</b-unwrap>
+    <b-unwrap b-else b-part="#btn">no</b-unwrap>
+</b-unwrap>
+
+<b-unwrap b-name="call_if_wrapper">
+    <div class="w" b-if="show" b-part="#btn">Save</div>
+</b-unwrap>

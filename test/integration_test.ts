@@ -299,6 +299,64 @@ Deno.test("slot_if: b-else branch inside slot content", () => {
 });
 
 // ---------------------------------------------------------------------------
+// ui.html — flow directives on a b-part call site
+//
+// A b-if / b-for on the call tag wraps the call itself, the same way it does on
+// a custom element call site:
+//   <b-unwrap b-if="show" b-part="#btn">Save</b-unwrap>
+// ---------------------------------------------------------------------------
+
+Deno.test("call_if: b-if on a b-part call renders the call when true", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("ui.html").call_if, { show: true })),
+        "<button>Save</button>"
+    );
+});
+
+Deno.test("call_if: b-if on a b-part call renders nothing when false", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("ui.html").call_if, { show: false })),
+        ""
+    );
+});
+
+Deno.test("call_for: b-for on a b-part call repeats the call per item", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("ui.html").call_for, { items: ["A", "B"] })),
+        "<button>A</button><button>B</button>"
+    );
+});
+
+Deno.test("call_for: b-for on a b-part call with an empty list renders nothing", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("ui.html").call_for, { items: [] })),
+        ""
+    );
+});
+
+Deno.test("call_if_else: b-else on a b-part call chains onto the preceding b-if", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("ui.html").call_if_else, { show: true })),
+        "<button>yes</button>"
+    );
+    assertEquals(
+        normalize(renderRoot(getModule("ui.html").call_if_else, { show: false })),
+        "<button>no</button>"
+    );
+});
+
+Deno.test("call_if_wrapper: b-if on a non-b-unwrap b-part tag wraps the element", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("ui.html").call_if_wrapper, { show: true })),
+        '<div class="w"><button>Save</button></div>'
+    );
+    assertEquals(
+        normalize(renderRoot(getModule("ui.html").call_if_wrapper, { show: false })),
+        ""
+    );
+});
+
+// ---------------------------------------------------------------------------
 // data.html — b-data: passes expressions to partials
 //
 // badge template:  <b-unwrap b-name="badge">{{ label }}</b-unwrap>

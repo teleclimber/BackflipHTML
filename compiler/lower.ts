@@ -88,6 +88,10 @@ export function lowerSlice(
 
 // --- small shared helpers ---
 
+// The directives that wrap a tag rather than describe it: they say how many
+// times and under what condition it renders, never what it is.
+const FLOW_DIRECTIVES = ['b-for', 'b-if', 'b-else-if', 'b-else'];
+
 function isContainer(el: SourceElement): boolean {
 	return !el.selfClosing && !el.isVoid;
 }
@@ -241,7 +245,7 @@ function reportDirectiveMisplacement(el: SourceElement, ctx: Ctx): void {
 }
 
 function reportFlowOnDefinition(el: SourceElement, ctx: Ctx): void {
-	for (const flow of ['b-if', 'b-for', 'b-else-if', 'b-else'] as const) {
+	for (const flow of FLOW_DIRECTIVES) {
 		if (findAttr(el, flow)) {
 			ctx.errors.push(new BackflipError(`${flow} is not allowed on a partial definition`, attrErrLoc(el, flow, ctx)));
 		}
@@ -409,13 +413,39 @@ function lowerElement(el: SourceElement, pctx: PartialCtx, siblings: TNode[], ca
 
 /**
  * What the tag *is*, independent of any b-in that routed it somewhere.
- * Precedence: b-part → b-slot → document-level tracking → multi-flow error →
- * custom element call → flow → regular tag.
+ *
+ * A flow directive is resolved here, once, for every kind of tag: it wraps
+ * whatever `lowerTagBody` makes of the tag in the matching ForTNode / IfTNode,
+ * so a b-part call, a b-slot insertion point, a custom element call and a plain
+ * element all take b-for / b-if / b-else-if / b-else the same way. Writing the
+ * flow on the tag is therefore equivalent to wrapping it in <b-unwrap b-for|if|…>.
  *
  * `exclude` names attributes the caller already consumed and that must not
  * reach the rendered tag — `b-in`, when `lowerBIn` routed this tag into a slot.
  */
 function lowerTag(el: SourceElement, pctx: PartialCtx, siblings: TNode[], exclude: string[]): TNode[] {
+	const flow = el.attrs.filter(attr => FLOW_DIRECTIVES.includes(attr.name));
+	if (flow.length > 1) {
+		ctx_error(pctx, "more than one b-attr", tagErrLoc(el, pctx));
+		return lowerFallbackTag(el, pctx);
+	}
+	if (flow.length === 0) return lowerTagBody(el, pctx, exclude);
+
+	const fc = setupFlow(el, flow[0], pctx, siblings);
+	if (!fc) return lowerFallbackTag(el, pctx);
+	// The flow attr belongs to the wrapper, so it is excluded from the tag itself.
+	for (const n of lowerTagBody(el, pctx, [flow[0].name, ...exclude])) {
+		appendCoalesced(fc.container.tnodes!, n);
+	}
+	return fc.emit;
+}
+
+/**
+ * What the tag renders as, with any flow directive already peeled off by
+ * `lowerTag`. Precedence: b-part → b-slot → document-level tracking → custom
+ * element call → regular tag.
+ */
+function lowerTagBody(el: SourceElement, pctx: PartialCtx, exclude: string[]): TNode[] {
 	const bPartAttr = findAttr(el, 'b-part');
 	if (bPartAttr) return lowerBPart(el, bPartAttr, pctx, exclude);
 
@@ -427,23 +457,7 @@ function lowerTag(el: SourceElement, pctx: PartialCtx, siblings: TNode[], exclud
 		pctx.root.meta!.isDocumentLevel = true;
 	}
 
-	// --- b-for / b-if / b-else-if / b-else ---
-	const b_as = el.attrs.filter(attr => ['b-for', 'b-if', 'b-else-if', 'b-else'].includes(attr.name));
-	if (b_as.length > 1) {
-		ctx_error(pctx, "more than one b-attr", tagErrLoc(el, pctx));
-		return lowerFallbackTag(el, pctx);
-	}
-
-	// Custom element call site. With a single flow directive, the call is
-	// wrapped in the matching ForTNode / IfTNode (equivalent to wrapping in
-	// <b-unwrap b-for|if|...>). Without a flow directive, it's a plain call.
-	// b-part precedence already won above; this only runs for plain custom element tags.
-	if (isCustomElementTagName(el.tagName)) {
-		if (b_as.length === 1) return lowerCustomElementCallWithFlow(el, b_as[0], pctx, siblings, exclude);
-		return lowerCustomElementCall(el, pctx, exclude);
-	}
-
-	if (b_as.length === 1) return lowerFlowOnRegularTag(el, b_as[0], pctx, siblings, exclude);
+	if (isCustomElementTagName(el.tagName)) return lowerCustomElementCall(el, pctx, exclude);
 
 	return lowerRegularTag(el, pctx, exclude);
 }
@@ -688,22 +702,19 @@ function findPrecedingIf(siblings: TNode[]): IfTNode | null {
 	return null;
 }
 
-// Handle a flow directive (b-for, b-if, b-else-if, b-else) on a regular
-// (non-custom-element) tag. If the carrying tag isn't b-unwrap, an ElementTNode
-// nests inside the flow container so the tag renders inside each iteration /
-// branch.
-function lowerFlowOnRegularTag(el: SourceElement, flowAttr: SourceAttr, pctx: PartialCtx, siblings: TNode[], exclude: string[]): TNode[] {
-	const fc = setupFlow(el, flowAttr, pctx, siblings);
-	if (!fc) return lowerFallbackTag(el, pctx);
-	if (el.tagName === 'b-unwrap') {
-		// Body flows directly into the flow container (no wrapping element).
-		if (isContainer(el)) lowerInto(fc.container.tnodes!, el.children, pctx);
-	} else {
-		const elem = buildElement(el, [flowAttr.name, ...exclude], pctx);
-		if (isContainer(el)) lowerInto(elem.tnodes, el.children, pctx);
-		fc.container.tnodes!.push(elem);
-	}
-	return fc.emit;
+// --- what a tag contributes ---
+
+/**
+ * The single place that decides whether a tag puts an element in the output:
+ * `b-unwrap` is not a real tag, so it contributes only `inner`; every other tag
+ * wraps `inner` in its own ElementTNode. `exclude` strips the directives that
+ * belong to the wrapping construct rather than to the rendered tag.
+ */
+function wrapInTag(el: SourceElement, inner: TNode[], exclude: string[], pctx: PartialCtx): TNode[] {
+	if (el.tagName === 'b-unwrap') return inner;
+	const elem = buildElement(el, exclude, pctx);
+	for (const n of inner) appendCoalesced(elem.tnodes, n);
+	return [elem];
 }
 
 // --- call sites ---
@@ -712,11 +723,9 @@ function lowerFlowOnRegularTag(el: SourceElement, flowAttr: SourceAttr, pctx: Pa
 function buildCustomElementPartialRef(el: SourceElement, pctx: PartialCtx, exclude: string[]): CustomElementCallTNode {
 	const bindings = collectBDataBindings(el, pctx);
 
-	// Flow directives on the call site are consumed by the wrapping ForTNode /
-	// IfTNode (built in lowerCustomElementCallWithFlow) and must never appear in
-	// the rendered tag. They're excluded here so the AttrPart[] doesn't contain them.
-	// In the non-flow call path they're absent anyway, so the extra excludes are no-ops.
-	const callerAttrs = buildAttrPartsFromTag(el, ['b-export', 'b-if', 'b-for', 'b-else', 'b-else-if', ...exclude], pctx);
+	// A flow directive on the call site belongs to its wrapping ForTNode / IfTNode
+	// and reaches here in `exclude`, so it never lands in the caller's AttrPart[].
+	const callerAttrs = buildAttrPartsFromTag(el, ['b-export', ...exclude], pctx);
 
 	const callerAttrInfos: NonNullable<CustomElementCallTNode['callerAttrInfos']> = [];
 	for (const attr of el.attrs) {
@@ -789,22 +798,11 @@ function lowerCallBodyInto(children: SourceNode[], out: TNode[], partialRef: Par
 }
 
 function lowerCustomElementCall(el: SourceElement, pctx: PartialCtx, exclude: string[]): TNode[] {
-	// Pre-conditions: isCustomElementTagName, no b-name / b-part / flow directive
-	// (see lowerCustomElementCallWithFlow for flow), inside a partial.
+	// Pre-conditions: isCustomElementTagName, no b-name / b-part, inside a partial.
+	// A flow directive arrives in `exclude`, already consumed by its wrapper.
 	const partialRef = buildCustomElementPartialRef(el, pctx, exclude);
 	if (isContainer(el)) lowerCallBody(el.children, partialRef, 'default', pctx);
 	return [partialRef];
-}
-
-// `<my-elem b-for|if|else-if|else>` — the call site is wrapped in a ForTNode
-// or IfTNode (semantically identical to <b-unwrap b-for=...><my-elem>...</my-elem></b-unwrap>).
-function lowerCustomElementCallWithFlow(el: SourceElement, flowAttr: SourceAttr, pctx: PartialCtx, siblings: TNode[], exclude: string[]): TNode[] {
-	const fc = setupFlow(el, flowAttr, pctx, siblings);
-	if (!fc) return lowerFallbackTag(el, pctx);
-	const partialRef = buildCustomElementPartialRef(el, pctx, exclude);
-	fc.container.tnodes!.push(partialRef);
-	if (isContainer(el)) lowerCallBody(el.children, partialRef, 'default', pctx);
-	return fc.emit;
 }
 
 function lowerBPart(el: SourceElement, bPartAttr: SourceAttr, pctx: PartialCtx, exclude: string[]): TNode[] {
@@ -823,18 +821,9 @@ function lowerBPart(el: SourceElement, bPartAttr: SourceAttr, pctx: PartialCtx, 
 	};
 	partialRef.loc = findAttrLoc(el, 'b-part');
 
-	let out: TNode[];
-	if (el.tagName === 'b-unwrap') {
-		// No wrapping element; the partial-ref is emitted directly.
-		out = [partialRef];
-	} else {
-		// A wrapping ElementTNode whose single child is the partial-ref. Its attrs
-		// come from the source tag (excluding b-part / b-data:*).
-		const elem = buildElement(el, ['b-part', ...exclude], pctx);
-		elem.tnodes.push(partialRef);
-		out = [elem];
-	}
-
+	// The body is the call's slot content, so it goes to the partial-ref — not
+	// into the wrapping element, whose only child is the call itself.
+	const out = wrapInTag(el, [partialRef], ['b-part', ...exclude], pctx);
 	if (isContainer(el)) lowerCallBody(el.children, partialRef, 'default', pctx);
 	return out;
 }
@@ -846,20 +835,12 @@ function lowerBSlot(el: SourceElement, bSlotAttr: SourceAttr, pctx: PartialCtx, 
 	const slot_node: SlotTNode = { type: 'slot', name: slotName };
 	slot_node.loc = findAttrLoc(el, 'b-slot');
 
-	if (el.tagName === 'b-unwrap') {
-		// No wrapping element; the slot insertion point is emitted directly, and
-		// the tag's body follows as its siblings. The body is NOT fallback content:
-		// it renders whether or not the caller fills the slot.
-		const out: TNode[] = [slot_node];
-		if (isContainer(el)) lowerInto(out, el.children, pctx);
-		return out;
-	}
-	// Wrapping ElementTNode with the slot insertion point as its first child; any
-	// body content follows as later children of the element.
-	const elem = buildElement(el, ['b-slot', ...exclude], pctx);
-	elem.tnodes.push(slot_node);
-	if (isContainer(el)) lowerInto(elem.tnodes, el.children, pctx);
-	return [elem];
+	// The insertion point comes first and the tag's body follows it as siblings.
+	// That body is NOT fallback content: it renders whether or not the caller
+	// fills the slot.
+	const inner: TNode[] = [slot_node];
+	if (isContainer(el)) lowerInto(inner, el.children, pctx);
+	return wrapInTag(el, inner, ['b-slot', ...exclude], pctx);
 }
 
 /**
@@ -893,16 +874,15 @@ function lowerBIn(el: SourceElement, bInAttr: SourceAttr, partialRef: PartialRef
 	return [];
 }
 
-// The directives that decide what a tag *is* — i.e. everything lowerTag
-// dispatches on. A <b-unwrap b-in> carrying none of them is pure slot routing.
-const TAG_DIRECTIVES = ['b-part', 'b-slot', 'b-for', 'b-if', 'b-else-if', 'b-else'];
+// The directives that decide what a tag *is* or how it repeats — i.e. everything
+// lowerTag dispatches on. A <b-unwrap b-in> carrying none of them is pure slot routing.
+const TAG_DIRECTIVES = ['b-part', 'b-slot', ...FLOW_DIRECTIVES];
 
 function hasTagDirective(el: SourceElement): boolean {
 	return el.attrs.some(attr => TAG_DIRECTIVES.includes(attr.name));
 }
 
 function lowerRegularTag(el: SourceElement, pctx: PartialCtx, exclude: string[]): TNode[] {
-	const elem = buildElement(el, exclude, pctx);
-	if (isContainer(el)) lowerInto(elem.tnodes, el.children, pctx);
-	return [elem];
+	const children = isContainer(el) ? lowerChildren(el.children, pctx) : [];
+	return wrapInTag(el, children, exclude, pctx);
 }

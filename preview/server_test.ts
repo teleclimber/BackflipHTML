@@ -65,9 +65,10 @@ function refBadgeFor(html: string, file: string, name: string): string | null {
 
 Deno.test("index page counts every call site, not every calling partial", () => {
 	const html = renderIndex(ctx.directory.files);
-	// ui.html#btn is called once each from demo, slot_interp, slot_for, slot_if
-	// and dyn_attr_on_wrapper.
-	assertEquals(refBadgeFor(html, 'ui.html', 'btn'), 'refs|5 refs');
+	// ui.html#btn is called once each from demo, slot_interp, slot_for, slot_if,
+	// dyn_attr_on_wrapper, call_if, call_for and call_if_wrapper, and twice from
+	// call_if_else (one call per branch).
+	assertEquals(refBadgeFor(html, 'ui.html', 'btn'), 'refs|10 refs');
 });
 
 Deno.test("index page counts cross-file references against the defining file", () => {
@@ -109,7 +110,7 @@ Deno.test("GET / returns index page", async () => {
 	assertEquals(res._status, 200);
 	assertStringIncludes(res._headers['Content-Type'], 'text/html');
 	assertStringIncludes(res._body, 'Backflip Previews');
-	assertEquals(refBadgeFor(res._body, 'ui.html', 'btn'), 'refs|5 refs');
+	assertEquals(refBadgeFor(res._body, 'ui.html', 'btn'), 'refs|10 refs');
 });
 
 // --- GET /preview/:file/:partial ---

@@ -1664,6 +1664,159 @@ Deno.test("custom element call: existing b-unwrap b-for wrap continues to work (
 	assertEquals(ref.bindings[0].name, 'item');
 });
 
+// ---- compileFile: flow directives on b-part call sites and b-slot tags ----
+// A flow directive wraps whatever the tag turns out to be, so a `b-part` call
+// site and a `b-slot` insertion point take b-for / b-if / b-else-if / b-else
+// exactly like a custom element call site or a regular tag does.
+
+Deno.test("b-part call: b-if wraps the call in an IfTNode", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><b-unwrap b-if="show" b-part="#card" /></div>'
+	);
+	assertEquals(errors.length, 0);
+	const if_node = findIfNode(compiled.partials.get('page')!);
+	assertEquals(if_node.branches.length, 1);
+	assertEquals(if_node.branches[0].condition, interpretBackcode('show'));
+	const ref = if_node.branches[0].tnodes.find(n => n.type === 'partial-ref') as PartialRefTNode | undefined;
+	assertExists(ref);
+	assertEquals(ref!.kind, 'b-part');
+	assertEquals(ref!.partialName, 'card');
+});
+
+Deno.test("b-part call: b-for wraps the call in a ForTNode and keeps b-data bindings", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><b-unwrap b-for="item in items" b-part="#card" b-data:title="item.title"></b-unwrap></div>'
+	);
+	assertEquals(errors.length, 0);
+	const for_node = findForNode(compiled.partials.get('page')!);
+	assertEquals(for_node.valName, 'item');
+	assertEquals(for_node.iterable, interpretBackcode('items'));
+	const ref = for_node.tnodes.find(n => n.type === 'partial-ref') as PartialRefTNode | undefined;
+	assertExists(ref);
+	assertEquals(ref!.partialName, 'card');
+	assertEquals(ref!.bindings.length, 1);
+	assertEquals(ref!.bindings[0].name, 'title');
+});
+
+Deno.test("b-part call: b-if / b-else-if / b-else chain across b-part calls", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><b-unwrap b-if="a" b-part="#a" /><b-unwrap b-else-if="b" b-part="#b" /><b-unwrap b-else b-part="#c" /></div>'
+	);
+	assertEquals(errors.length, 0);
+	const if_node = findIfNode(compiled.partials.get('page')!);
+	assertEquals(if_node.branches.length, 3);
+	assertEquals(if_node.branches[0].condition, interpretBackcode('a'));
+	assertEquals(if_node.branches[1].condition, interpretBackcode('b'));
+	assertEquals(if_node.branches[2].condition, undefined);
+	const refs = if_node.branches.map(br => br.tnodes.find(n => n.type === 'partial-ref') as PartialRefTNode);
+	assertEquals(refs.map(r => r.partialName), ['a', 'b', 'c']);
+});
+
+Deno.test("b-part call: b-else on a b-part call chains to a preceding b-if on a regular tag", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><p b-if="cond">yes</p><b-unwrap b-else b-part="#card" /></div>'
+	);
+	assertEquals(errors.length, 0);
+	const if_node = findIfNode(compiled.partials.get('page')!);
+	assertEquals(if_node.branches.length, 2);
+	const ref = if_node.branches[1].tnodes.find(n => n.type === 'partial-ref') as PartialRefTNode | undefined;
+	assertExists(ref);
+	assertEquals(ref!.partialName, 'card');
+});
+
+Deno.test("b-part call: slot content lowers inside the wrapped call", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><b-unwrap b-if="show" b-part="#card">body</b-unwrap></div>'
+	);
+	assertEquals(errors.length, 0);
+	const if_node = findIfNode(compiled.partials.get('page')!);
+	const ref = if_node.branches[0].tnodes.find(n => n.type === 'partial-ref') as PartialRefTNode;
+	assertEquals(renderStatic(ref.slots['default']), 'body');
+});
+
+Deno.test("b-part on a regular tag: the flow wraps the element and does not leak into its attrs", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><div class="w" b-if="show" b-part="#card"></div></div>'
+	);
+	assertEquals(errors.length, 0);
+	const if_node = findIfNode(compiled.partials.get('page')!);
+	const wrapper = if_node.branches[0].tnodes.find(n => n.type === 'element') as ElementTNode | undefined;
+	assertExists(wrapper);
+	assertEquals(wrapper!.tagName, 'div');
+	assertEquals((wrapper!.tnodes[0] as PartialRefTNode).partialName, 'card');
+	const attrText = wrapper!.attrs.map(a => a.type === 'static' ? a.raw : '').join('');
+	assertEquals(attrText.includes('b-if'), false, `b-if leaked into attrs: ${attrText}`);
+	assertEquals(attrText.includes('class="w"'), true, `caller attrs should survive: ${attrText}`);
+});
+
+Deno.test("b-part call: more than one flow attr reports 'more than one b-attr'", async () => {
+	const { errors } = await compileFile(
+		'<div b-name="page"><b-unwrap b-if="a" b-for="x in xs" b-part="#card" /></div>'
+	);
+	assertEquals(errors.length > 0, true);
+	assertStringIncludes(errors.map(e => e.message).join(' | '), 'more than one b-attr');
+});
+
+Deno.test("b-part call: a bad b-for value reports and falls back instead of emitting the call", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><b-unwrap b-for="nonsense" b-part="#card" /></div>'
+	);
+	assertEquals(errors.length > 0, true);
+	const found = findTNode<PartialRefTNode>(compiled.partials.get('page')!.tnodes, n => n.type === 'partial-ref');
+	assertEquals(found, undefined, "a call whose flow failed to build should not be emitted");
+});
+
+Deno.test("b-slot: b-if wraps the slot insertion point in an IfTNode", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><b-unwrap b-if="show" b-slot="s" /></div>'
+	);
+	assertEquals(errors.length, 0);
+	const if_node = findIfNode(compiled.partials.get('page')!);
+	const slot = if_node.branches[0].tnodes.find(n => n.type === 'slot') as SlotTNode | undefined;
+	assertExists(slot);
+	assertEquals(slot!.name, 's');
+});
+
+Deno.test("b-slot on a regular tag: the flow wraps the element and does not leak into its attrs", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><div class="w" b-if="show" b-slot="s"></div></div>'
+	);
+	assertEquals(errors.length, 0);
+	const if_node = findIfNode(compiled.partials.get('page')!);
+	const wrapper = if_node.branches[0].tnodes.find(n => n.type === 'element') as ElementTNode | undefined;
+	assertExists(wrapper);
+	assertEquals(wrapper!.tnodes[0].type, 'slot');
+	const attrText = wrapper!.attrs.map(a => a.type === 'static' ? a.raw : '').join('');
+	assertEquals(attrText.includes('b-if'), false, `b-if leaked into attrs: ${attrText}`);
+	assertEquals(attrText.includes('class="w"'), true, `caller attrs should survive: ${attrText}`);
+});
+
+Deno.test("b-in + b-if + b-part routes the wrapped call into the named slot", async () => {
+	const { compiled, errors } = await compileFile(
+		'<div b-name="page"><b-unwrap b-part="#card"><b-unwrap b-in="header" b-if="show" b-part="#chip" /></b-unwrap></div>'
+	);
+	assertEquals(errors.length, 0);
+	const ref = findPartialRef(compiled.partials.get('page')!);
+	assertEquals(ref.partialName, 'card');
+	assertEquals(ref.slots['header'].length, 1);
+	const if_node = ref.slots['header'][0] as IfTNode;
+	assertEquals(if_node.type, 'if');
+	const chip = if_node.branches[0].tnodes.find(n => n.type === 'partial-ref') as PartialRefTNode;
+	assertEquals(chip.partialName, 'chip');
+});
+
+Deno.test("b-unwrap carrying no directive still contributes no element of its own", async () => {
+	const { compiled, errors } = await compileFile('<div b-name="page"><b-unwrap>hi</b-unwrap></div>');
+	assertEquals(errors.length, 0);
+	assertEquals(renderStatic(compiled.partials.get('page')!.tnodes), '<div>hi</div>');
+});
+
+Deno.test("self-closing b-unwrap carrying no directive contributes nothing", async () => {
+	const { compiled, errors } = await compileFile('<div b-name="page"><b-unwrap />hi</div>');
+	assertEquals(errors.length, 0);
+	assertEquals(renderStatic(compiled.partials.get('page')!.tnodes), '<div>hi</div>');
+});
+
 // ---- error recovery / lowering behavior ----
 // These pin the observable behavior of the recovery paths (malformed input never
 // throws: broken structure degrades to raw text plus an error) and of the

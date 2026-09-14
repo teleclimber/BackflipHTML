@@ -178,6 +178,8 @@ Called with slot content `Hi`, this renders `<div><span class="body">Hi</span></
 
 **Body content:** anything inside a `b-slot` tag renders *in addition to* the injected content, right after it — it is not fallback content. `<b-unwrap b-slot="note">(none)</b-unwrap>` renders `(none)` whether or not the caller fills `note`.
 
+**Conditional slots:** a flow directive on a `b-slot` tag wraps the insertion point, so `<b-unwrap b-if="withHeader" b-slot="header"></b-unwrap>` renders the `header` slot only when the condition holds.
+
 ---
 
 ## Forwarding a slot
@@ -432,7 +434,7 @@ If the same attribute name appears on both the call site and the definition (e.g
 
 ### Flow control on call sites
 
-`b-for`, `b-if`, `b-else-if`, and `b-else` can be placed directly on a custom element call tag — the call (and its slot content) is wrapped in the matching loop or branch:
+`b-for`, `b-if`, `b-else-if`, and `b-else` can be placed directly on a call tag — the call (and its slot content) is wrapped in the matching loop or branch. This works on a custom element call:
 
 ```html
 <my-greeting b-for="who in names" b-data:name="who"></my-greeting>
@@ -442,7 +444,14 @@ If the same attribute name appears on both the call site and the definition (e.g
 <my-banner b-else b-data:tone="'quiet'"></my-banner>
 ```
 
-The b-for variable (`who` above) is in scope for `b-data:*` bindings and slot content on the same call. b-else-if/b-else chain to a preceding b-if among siblings just like they do on regular tags, and the preceding b-if can be on a regular tag or another custom element call.
+and on a `b-part` call, on `b-unwrap` or on a wrapper element (where the wrapper is inside the loop or branch too):
+
+```html
+<b-unwrap b-if="warn" b-part="#notice"></b-unwrap>
+<div class="row" b-for="who in names" b-part="#greeting" b-data:name="who"></div>
+```
+
+The b-for variable (`who` above) is in scope for `b-data:*` bindings and slot content on the same call. b-else-if/b-else chain to a preceding b-if among siblings just like they do on regular tags, and the preceding b-if can be on any of these.
 
 The equivalent `<b-unwrap b-for=...>` wrapping form is also supported and produces the same output — use whichever reads better in context:
 

@@ -191,6 +191,24 @@ Deno.test("php: btn: renders empty button when no slot content provided", async 
     );
 });
 
+Deno.test("php: call_if: b-if on a b-part call gates the call", async () => {
+    assertEquals(
+        normalize(await renderPhp("ui.html", "call_if", { show: true })),
+        "<button>Save</button>"
+    );
+    assertEquals(
+        normalize(await renderPhp("ui.html", "call_if", { show: false })),
+        ""
+    );
+});
+
+Deno.test("php: call_for: b-for on a b-part call repeats the call per item", async () => {
+    assertEquals(
+        normalize(await renderPhp("ui.html", "call_for", { items: ["A", "B"] })),
+        "<button>A</button><button>B</button>"
+    );
+});
+
 // ---------------------------------------------------------------------------
 // data.html — b-data: passes expressions to partials
 // ---------------------------------------------------------------------------
