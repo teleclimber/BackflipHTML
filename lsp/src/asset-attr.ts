@@ -10,6 +10,8 @@
  * while the attribute is still being typed — which is what completion needs.
  */
 
+import { openAttrValueEdit } from './tag-context.js';
+
 /** An asset-naming attribute, and where its value sits on the line. */
 export interface AssetAttrMatch {
 	/** As authored, suffix included: `src~`, `:srcset~`, `b-script`. */
@@ -44,14 +46,14 @@ export interface AssetRefMatch {
 	end: number;
 }
 
-// The attribute name, then a quoted value. A `~` name may start at a `:` — that
+// The attribute names that name an asset. A `~` name may start at a `:` — that
 // is how the long form `b-bind:src~` is reached, the match beginning at its
 // colon — so only the `b-script` branch carries a lookbehind, to keep it from
 // matching inside a longer name like `data-b-script`.
-const ASSET_ATTR = /((?::?[a-zA-Z][a-zA-Z0-9-]*~)|(?<![\w-])b-script)=(["'])([^"']*)\2/g;
+const ASSET_ATTR_NAME = "(?::?[a-zA-Z][a-zA-Z0-9-]*~)|(?<![\\w-])b-script";
 
-// The same, with the quote still open: everything from `="` to the cursor.
-const OPEN_ASSET_ATTR = /((?::?[a-zA-Z][a-zA-Z0-9-]*~)|(?<![\w-])b-script)=["']([^"']*)$/;
+// That name, then a closed quoted value.
+const ASSET_ATTR = new RegExp(`(${ASSET_ATTR_NAME})=(["'])([^"']*)\\2`, 'g');
 
 function isSrcsetName(name: string): boolean {
 	return name.replace(/^:/, '').replace(/~$/, '') === 'srcset';
@@ -112,8 +114,7 @@ export function assetRefInValue(attr: AssetAttrMatch, character: number): AssetR
  * the line up to the cursor. Null when the cursor is not in one.
  */
 export function openAssetAttrValue(linePrefix: string): string | null {
-	const m = linePrefix.match(OPEN_ASSET_ATTR);
-	return m ? m[2] : null;
+	return openAttrValueEdit(linePrefix, linePrefix.length, ASSET_ATTR_NAME)?.typed ?? null;
 }
 
 /**
@@ -129,12 +130,12 @@ export function openAssetAttrValue(linePrefix: string): string | null {
  * than appending to what is already there.
  */
 export function assetRefEditAtCursor(line: string, character: number): AssetRefEdit | null {
-	const value = openAssetAttrValue(line.substring(0, character));
-	if (value === null) return null;
-	const candidate = value.substring(value.lastIndexOf(',') + 1);
+	const attr = openAttrValueEdit(line, character, ASSET_ATTR_NAME);
+	if (!attr) return null;
+	const candidate = attr.typed.substring(attr.typed.lastIndexOf(',') + 1);
 	const typed = candidate.match(/[^\s]*$/)![0];
 	if (candidate.slice(0, candidate.length - typed.length).trim() !== '') return null;
-	const ahead = line.substring(character).match(/^[^\s,"']*/)![0];
+	const ahead = line.substring(character, attr.valueEnd).match(/^[^\s,]*/)![0];
 	return {
 		typed,
 		start: character - typed.length,

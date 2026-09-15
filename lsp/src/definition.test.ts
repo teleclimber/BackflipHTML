@@ -81,7 +81,7 @@ describe('findCustomElementDefinition', () => {
 			}],
 			[],
 		);
-		const result = findCustomElementDefinition('my-card', index, root);
+		const result = findCustomElementDefinition('my-card', 'page.html', index, root);
 		deepStrictEqual(result, {
 			uri: 'file:///workspace/components.html',
 			range: {
@@ -91,9 +91,34 @@ describe('findCustomElementDefinition', () => {
 		});
 	});
 
+	it('returns null for an unexported definition in another file', () => {
+		const index = makeIndex(
+			[{
+				file: 'components.html', name: 'my-card',
+				loc: makeLoc(1, 1, 1, 9), exported: false, customElement: true,
+			}],
+			[],
+		);
+		strictEqual(findCustomElementDefinition('my-card', 'page.html', index, root), null);
+		// Its own file still sees it.
+		ok(findCustomElementDefinition('my-card', 'components.html', index, root));
+	});
+
+	it('prefers a same-file definition over an exported one elsewhere', () => {
+		const index = makeIndex(
+			[
+				{ file: 'components.html', name: 'my-card', loc: makeLoc(1, 1, 1, 9), exported: true, customElement: true },
+				{ file: 'page.html', name: 'my-card', loc: makeLoc(4, 1, 4, 9), exported: false, customElement: true },
+			],
+			[],
+		);
+		const result = findCustomElementDefinition('my-card', 'page.html', index, root);
+		strictEqual(result?.uri, 'file:///workspace/page.html');
+	});
+
 	it('returns null for unknown custom element', () => {
 		const index = makeIndex([], []);
-		const result = findCustomElementDefinition('my-card', index, root);
+		const result = findCustomElementDefinition('my-card', 'page.html', index, root);
 		strictEqual(result, null);
 	});
 
@@ -105,7 +130,7 @@ describe('findCustomElementDefinition', () => {
 			}],
 			[],
 		);
-		const result = findCustomElementDefinition('my-thing', index, root);
+		const result = findCustomElementDefinition('my-thing', 'page.html', index, root);
 		strictEqual(result, null);
 	});
 });

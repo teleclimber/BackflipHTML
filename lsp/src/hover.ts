@@ -2,14 +2,16 @@ import type { Hover, Position } from 'vscode-languageserver';
 import { MarkupKind } from 'vscode-languageserver';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 import type { ProjectIndex, PartialDef, PartialRef } from './index.js';
+import { resolvePartialDef, resolveCallTarget, visibleCustomElementDef } from './index.js';
 import { matchingPartialRefs } from './references.js';
 import type { CssAnalysisResult, StrippedPseudo } from '@backflip/css';
 import type { CompiledFile } from '@backflip/html';
 import { resolveAt } from './resolve.js';
 import type { DataShape } from '@backflip/html';
-import { parseBPartValue } from '@backflip/html';
+import { parseBPartValue, isCustomElementTagName } from '@backflip/html';
 import * as path from 'node:path';
 import { assetAttrAtCursor, assetRefInValue } from './asset-attr.js';
+import { asCallSiteTag, findEnclosingCallSiteTag, findEnclosingOpeningTag } from './tag-context.js';
 
 /**
  * Provide hover info for BackflipHTML b-directives.
@@ -63,18 +65,6 @@ function matchBareAttr(line: string, attrName: string, character: number): boole
 	const m = line.match(regex);
 	if (!m || m.index === undefined) return false;
 	return character >= m.index && character <= m.index + attrName.length;
-}
-
-function resolvePartialDef(
-	partialName: string,
-	targetFile: string | null,
-	sourceFile: string,
-	index: ProjectIndex,
-): PartialDef | null {
-	const defs = index.partialDefs.get(partialName);
-	if (!defs || defs.length === 0) return null;
-	const resolvedFile = targetFile ?? sourceFile;
-	return defs.find(d => d.file === resolvedFile) ?? null;
 }
 
 /** How many references a definition hover lists before it stops and counts the rest. */
@@ -361,14 +351,12 @@ function hoverBIn(
 
 	const slotName = value || 'default';
 
-	// Scan upward to find the enclosing b-part
-	const partialInfo = scanUpFor(doc, position.line, /b-part="([^"]*)"/);
-	if (!partialInfo) {
-		return mkHover([`**Slot** \`${slotName}\` — *enclosing b-part not found*`]);
+	const call = findEnclosingCallSiteTag(doc, position.line, position.character);
+	if (!call) {
+		return mkHover([`**Slot** \`${slotName}\` — *enclosing partial call not found*`]);
 	}
 
-	const { partialName, file: targetFile } = parseBPartValue(partialInfo);
-	const def = resolvePartialDef(partialName, targetFile, filePath, index);
+	const { partialName, def } = resolveCallTarget(call, filePath, index);
 
 	if (!def) {
 		return mkHover([`**Slot** \`${slotName}\` → partial \`${partialName}\` — *partial not found*`]);
@@ -455,78 +443,23 @@ function hoverBData(
 }
 
 /**
- * Resolve the partial reference for the opening tag enclosing the cursor.
- * Recognises both `<element b-part="...">` and a custom-element tag.
- * Walks up across lines to support multi-line opening tags.
+ * Resolve the partial reference made by the opening tag the cursor is in —
+ * `<element b-part="...">` or a custom-element tag. Null when that tag makes no
+ * call, or names a partial that is not indexed.
  */
 function findCallSitePartial(
 	doc: TextDocument, position: Position, filePath: string, index: ProjectIndex,
 ): { partialName: string; def: PartialDef | null } | null {
 	const tag = findEnclosingOpeningTag(doc, position.line, position.character);
 	if (!tag) return null;
-
-	const bPartMatch = tag.openTagText.match(/b-part="([^"]*)"/);
-	if (bPartMatch) {
-		const { partialName, file: targetFile } = parseBPartValue(bPartMatch[1]);
-		return { partialName, def: resolvePartialDef(partialName, targetFile, filePath, index) };
-	}
-
-	if (tag.tagName.includes('-') && !tag.tagName.startsWith('b-')) {
-		const defs = index.partialDefs.get(tag.tagName);
-		const def = defs?.find(d => d.customElement) ?? null;
-		if (def) return { partialName: tag.tagName, def };
-	}
-
-	return null;
-}
-
-/**
- * Mask quoted attribute values with spaces so embedded `<` or `>` don't confuse
- * a tag-boundary scan. Lengths are preserved.
- */
-function maskQuoted(s: string): string {
-	return s
-		.replace(/"[^"]*"/g, m => ' '.repeat(m.length))
-		.replace(/'[^']*'/g, m => ' '.repeat(m.length));
-}
-
-/**
- * Find the opening tag whose attribute area contains the cursor. Walks back up
- * to ~50 lines and forward up to ~50 lines so multi-line opening tags resolve.
- * Returns the tag name and the opening-tag text (`<TAG ... >` or partial if `>`
- * not found within the lookahead window).
- */
-function findEnclosingOpeningTag(
-	doc: TextDocument, lineIdx: number, character: number,
-): { tagName: string; openTagText: string } | null {
-	const maxLookback = 50;
-	const maxLookahead = 50;
-	const startLine = Math.max(0, lineIdx - maxLookback);
-	const before = doc.getText({
-		start: { line: startLine, character: 0 },
-		end: { line: lineIdx, character },
-	});
-	const beforeMasked = maskQuoted(before);
-	const lastGt = beforeMasked.lastIndexOf('>');
-	const tagRe = /<([a-zA-Z][a-zA-Z0-9-]*)/g;
-	let lastMatch: RegExpExecArray | null = null;
-	let m: RegExpExecArray | null;
-	while ((m = tagRe.exec(beforeMasked)) !== null) lastMatch = m;
-	if (!lastMatch) return null;
-	if (lastGt > lastMatch.index) return null; // tag closed before cursor
-
-	const after = doc.getText({
-		start: { line: lineIdx, character },
-		end: { line: lineIdx + maxLookahead, character: 0 },
-	});
-	const afterMasked = maskQuoted(after);
-	const closeIdx = afterMasked.indexOf('>');
-	const afterPart = closeIdx !== -1 ? after.substring(0, closeIdx + 1) : after;
-
-	return {
-		tagName: lastMatch[1],
-		openTagText: before.substring(lastMatch.index) + afterPart,
-	};
+	const call = asCallSiteTag(tag);
+	if (!call) return null;
+	const target = resolveCallTarget(call, filePath, index);
+	// A custom element that resolves to nothing is not a call site to report on:
+	// any hyphenated tag looks like one, so an unknown name is more likely plain
+	// HTML than a reference.
+	if (call.bPartValue === null && !target.def) return null;
+	return target;
 }
 
 // --- b-attr at call site (plain, :attr, b-bind:attr) ---
@@ -539,11 +472,9 @@ function hoverBAttrCallSite(
 
 	const tag = findEnclosingOpeningTag(doc, position.line, position.character);
 	if (!tag) return null;
-	if (!tag.tagName.includes('-') || tag.tagName.startsWith('b-')) return null;
+	if (!isCustomElementTagName(tag.tagName)) return null;
 
-	const defs = index.partialDefs.get(tag.tagName);
-	if (!defs) return null;
-	const def = defs.find(d => d.customElement);
+	const def = visibleCustomElementDef(tag.tagName, filePath, index);
 	if (!def) return null;
 
 	const bAttr = def.bAttrs?.find(a => a.name === attrName);
@@ -604,8 +535,7 @@ export function findCustomElementTagAtCursor(
 	let m: RegExpExecArray | null;
 	while ((m = regex.exec(line)) !== null) {
 		const tagName = m[2];
-		if (!tagName.includes('-')) continue;
-		if (tagName.startsWith('b-')) continue;
+		if (!isCustomElementTagName(tagName)) continue;
 		const nameStart = m.index + 1 + m[1].length; // after '<' or '</'
 		const nameEnd = nameStart + tagName.length;
 		if (character >= nameStart && character <= nameEnd) {
@@ -623,9 +553,7 @@ function hoverCustomElement(
 	if (!tagInfo) return null;
 	const { tagName, isClosing } = tagInfo;
 
-	const defs = index.partialDefs.get(tagName);
-	if (!defs || defs.length === 0) return null;
-	const def = defs.find(d => d.customElement);
+	const def = visibleCustomElementDef(tagName, filePath, index);
 	if (!def) return null;
 
 	const isDefSite = !isClosing
@@ -920,7 +848,11 @@ function hoverCssRules(
 
 // --- helpers ---
 
-/** Scan upward from `startLine` (exclusive) looking for a regex match. Returns capture group 1. */
+/**
+ * Scan upward from `startLine` (exclusive) looking for a regex match. Returns
+ * capture group 1. Used for the enclosing `b-name`, where the nearest one above
+ * is the answer: a definition is top-level, so none can nest inside another.
+ */
 function scanUpFor(doc: TextDocument, startLine: number, regex: RegExp): string | null {
 	const maxScan = 50; // don't scan more than 50 lines up
 	for (let i = startLine - 1; i >= 0 && i >= startLine - maxScan; i--) {

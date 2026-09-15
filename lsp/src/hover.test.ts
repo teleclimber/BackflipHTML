@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import { strictEqual, ok, match, deepStrictEqual } from 'node:assert';
 import { getHover, findRulesForElement, findElementsForSelector } from './hover.js';
 import { elementAt } from './resolve.js';
-import { makeIndex, makeLoc } from './test-helpers.js';
+import { makeIndex, makeLoc, makeDoc } from './test-helpers.js';
 import { analyzeCss } from '@backflip/css';
 import { compileFiles } from '@backflip/html';
 
@@ -17,31 +17,7 @@ async function analyze(input: { cssContent: string; cssPath?: string; templateFi
 	return Object.assign(cssAnalysis, { files: directory.files });
 }
 
-import type { TextDocument } from 'vscode-languageserver-textdocument';
 import type { Position } from 'vscode-languageserver';
-
-/** Create a fake TextDocument from lines of text. Honours character offsets within each line. */
-function makeDoc(lines: string[]): TextDocument {
-	const text = lines.join('\n');
-	const lineStarts: number[] = [0];
-	for (let i = 0; i < text.length; i++) {
-		if (text[i] === '\n') lineStarts.push(i + 1);
-	}
-	const offsetAt = (p: { line: number; character: number }): number => {
-		if (p.line >= lineStarts.length) return text.length;
-		if (p.line < 0) return 0;
-		const lineStart = lineStarts[p.line];
-		const lineEnd = p.line + 1 < lineStarts.length ? lineStarts[p.line + 1] - 1 : text.length;
-		return Math.min(lineStart + Math.max(0, p.character), lineEnd);
-	};
-	return {
-		getText(range?: any): string {
-			if (!range) return text;
-			return text.substring(offsetAt(range.start), offsetAt(range.end));
-		},
-		offsetAt,
-	} as TextDocument;
-}
 
 function pos(line: number, character: number): Position {
 	return { line, character };
@@ -295,14 +271,56 @@ describe('getHover', () => {
 			ok(v.includes('`footer`'));
 		});
 
-		it('shows error when no enclosing b-part found', async () => {
+		it('shows error when no enclosing partial call found', async () => {
 			const index = makeIndex([], []);
 			const doc = makeDoc([
 				'<b-unwrap b-in="header">Title</b-unwrap>',
 			]);
 			const result = getHover(doc, pos(0, 18), 'page.html', index);
 			const v = hoverValue(result);
-			ok(v.includes('enclosing b-part not found'));
+			ok(v.includes('enclosing partial call not found'));
+		});
+
+		it('names the call that contains the b-in, not a sibling call above it', async () => {
+			const index = makeIndex(
+				[
+					{ file: 'page.html', name: 'card', loc: makeLoc(6, 1, 6, 20), exported: false, slots: ['header'] },
+					{ file: 'page.html', name: 'chip', loc: makeLoc(9, 1, 9, 20), exported: false, slots: [] },
+				],
+				[],
+			);
+			const doc = makeDoc([
+				'<div b-name="page">',
+				'  <div b-part="#card">',
+				'    <div b-part="#chip"></div>',
+				'    <b-unwrap b-in="header">Title</b-unwrap>',
+				'  </div>',
+				'</div>',
+			]);
+			const v = hoverValue(getHover(doc, pos(3, 22), 'page.html', index));
+			ok(v.includes('partial `card`'), `expected the containing call, got: ${v}`);
+			ok(v.includes('✓ Slot exists'));
+		});
+
+		it('resolves a b-in inside a custom element call', async () => {
+			const index = makeIndex(
+				[{
+					file: 'components.html', name: 'my-card',
+					loc: makeLoc(1, 1, 1, 10), exported: true, customElement: true,
+					slots: ['header'], freeVars: [],
+				}],
+				[],
+			);
+			const doc = makeDoc([
+				'<div b-name="page">',
+				'  <my-card>',
+				'    <b-unwrap b-in="header">Title</b-unwrap>',
+				'  </my-card>',
+				'</div>',
+			]);
+			const v = hoverValue(getHover(doc, pos(2, 22), 'page.html', index));
+			ok(v.includes('partial `my-card`'), `expected the custom element call, got: ${v}`);
+			ok(v.includes('✓ Slot exists'));
 		});
 	});
 
@@ -610,7 +628,7 @@ describe('getHover', () => {
 			const index = makeIndex(
 				[{
 					file: 'components.html', name: 'my-tag',
-					loc: makeLoc(1, 1, 1, 10), exported: false, customElement: true,
+					loc: makeLoc(1, 1, 1, 10), exported: true, customElement: true,
 					slots: [], freeVars: ['flag'], dataShape,
 					bAttrs: [{ name: 'flag', isBool: true }],
 				}],
@@ -628,7 +646,7 @@ describe('getHover', () => {
 			const index = makeIndex(
 				[{
 					file: 'components.html', name: 'plain-tag',
-					loc: makeLoc(1, 1, 1, 10), exported: false, customElement: true,
+					loc: makeLoc(1, 1, 1, 10), exported: true, customElement: true,
 					slots: [], freeVars: [],
 				}],
 				[],

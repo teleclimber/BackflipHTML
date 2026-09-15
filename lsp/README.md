@@ -7,7 +7,7 @@
 - **Diagnostics** — red underlines for template compilation errors, and warnings on CSS files whose syntax stopped the analyzer
 - **Go to Definition** — click a `b-part` reference to jump to the `b-name` definition, or click a custom element partial tag (e.g. `<my-card>`) to jump to its definition
 - **Find All References** — from a `b-name` definition, find all `b-part` usages; from an `@name/subpath` asset reference, find every use of that asset across templates and stylesheets
-- **Completion** — asset directory names and file paths, offered while an asset path is being typed
+- **Completion** — asset directory names and file paths, `b-part` targets, custom element partial tags, and the slot names a `b-in` can fill, each offered while the value is being typed
 - **Document Symbols** — lists partials in the editor outline/breadcrumbs, each spanning its whole definition so breadcrumbs track the cursor anywhere inside a partial
 - **Hover (HTML)** — hover over `b-part`, `b-name`, `b-in`, `b-slot`, `b-data:` attributes, asset paths, custom element partial tags (e.g. `<my-card>`), or HTML elements to see directive info and matching CSS rules; a definition's hover lists its references as links that jump to them
 - **Hover (CSS)** — hover over a selector in a CSS file to see which partials contain matching elements
@@ -89,6 +89,91 @@ still take the first match on that line. `resolve.ts` already reports all of
 them, so moving those over is a mechanical change; it is held back only because
 their tests are built on template fragments that carry no `b-name` and so
 compile to no tree at all.
+
+What *contains* the cursor's tag comes from `src/tag-context.ts` instead — see
+[Completion](#completion). A `b-in` hover names its call from there, so it
+resolves a call the tag is actually inside, custom element calls included.
+
+### Completion
+
+Four things complete: an asset path (see [Asset references](#asset-references)),
+a `b-part` target, a custom element partial tag, and a slot name in `b-in`.
+`src/completion.ts` tries each probe in turn and answers with the first that has
+something to offer; the probes match disjoint positions, so at most one does.
+
+Every probe reads the document's text — through `src/tag-context.ts` for the
+tag-shaped questions, `src/asset-attr.ts` for the asset ones — rather than the
+compiled tree. That is what lets them answer mid-keystroke: the trees are
+rebuilt on save, so by the time a completion is asked for, their spans no longer
+line up with what is on screen.
+
+**`b-part`** names a partial in this file (`#name`) or one another file exports
+(`path/file.html#name`). Before a `#` is typed, all three ways in are offered —
+this file's names, the files that export something, and every exported partial
+written out in full — because which is wanted is not yet knowable. After a `#`,
+only what its left-hand side can reach: this file's partials, or the named
+file's exported ones. A file item re-opens the suggest widget, so picking one
+leads straight to its partials.
+
+**A custom element tag** completes from where the cursor sits at a `<` followed
+by name characters. What is offered is what a call in this file can resolve —
+its own definitions plus the exported ones — which is the set
+`resolveCustomElementCalls` links against, so nothing is offered that would then
+fail to compile.
+
+**`b-in`** offers the slots of the call whose body the tag sits in.
+`findEnclosingCallSiteTag` finds that call by counting tags backwards from the
+cursor's own tag, skipping void and self-closing ones, rather than taking the
+nearest `b-part` written above: a call nested inside a call body, or a sibling
+that has already closed, is not the one the tag is in. Both call forms answer —
+`b-part="…"` and a custom element tag. A parent that makes no call offers
+nothing, since `b-in` only routes from a direct child of a call body.
+
+#### Matching
+
+What is offered is decided here, by `matchRank`: a candidate matches when the
+**whole typed string appears in it in one piece**, anywhere. `shell` finds
+`page-shell` and `PageShell`, `hell` finds both too, and `pgsl` finds nothing.
+Case is the one thing ignored. A `b-part` is matched on the half the cursor is
+in: the name after a `#`, or the name *or* file before one. A tag or slot is
+matched on its name.
+
+Where the match lands is the rank rather than a condition, and `sortText`
+carries it: a name the typed text opens comes before one where it opens a word
+(after a separator, or at a capital), which comes before one where it only
+appears mid-word. So `shell` lists `shell-box`, then `page-shell`, then
+`bombshell`. Matching and ranking are one pass, because they are one question.
+
+Every item's `filterText` is the typed text verbatim, so the client's own pass
+matches all of them and drops none, and the response is marked `isIncomplete` so
+the next keystroke asks again rather than re-filtering the list already in hand.
+The offer is settled here.
+
+**Why the client cannot be left to filter.** Not only because its matching is
+fuzzy — it matches the word it believes is being typed against one fixed
+`filterText` per item, and a partial reference is not a word. The same row has
+to answer to `page-shell`, to `#page-shell` and to `layout.html#page-shell`, and
+no single value matches what was typed in all three forms. Where they disagree
+the row scores nothing and disappears; worse, a VS Code model that empties while
+the leading word is empty — which any `-` makes it — cancels the session
+outright, so the list reads "No suggestions" rather than going stale. Every
+custom element name carries a `-`, so this is the common case, not an edge.
+
+Two costs follow: one request per keystroke while a value is open, and no match
+highlighting in the labels, which the client draws from its own match. What it
+buys, beyond the value grammar working at all, is that the rule here is the
+whole rule: a mid-word match is offered because nothing downstream can refuse
+it. Nothing here depends on the user's `editor.suggest` settings.
+
+`sortText` orders the offer: group first (this file's names, then files, then
+qualified refs), then names the typed text *opens* ahead of names it merely
+appears inside, then alphabetically.
+
+Asset paths keep their own narrowing — entries whose name starts with what is
+typed — and are unaffected by the above beyond re-querying per keystroke.
+
+Items carry their own edit range for the same reason the asset ones do: it spans
+the whole value, so accepting one rewrites the value rather than appending to it.
 
 ### Asset references
 
@@ -184,7 +269,8 @@ File changes trigger recompilation with a 300ms debounce. The server runs its ow
 | `src/index.ts` | Project indexing: maps partial definitions and references (collection shared with the compiler) |
 | `src/resolve.ts` | Cursor position → the element/directive under it, from the compiled tree |
 | `src/asset-attr.ts` | Cursor position → the asset attribute and `@name/subpath` under it, from the line's text |
-| `src/completion.ts` | Asset path completion: directory names after `@`, then entries within the named directory |
+| `src/tag-context.ts` | Cursor position → the tag it is in and the partial call containing that tag, from the document's text |
+| `src/completion.ts` | Completion: asset paths, `b-part` targets, custom element tags, `b-in` slot names |
 | `src/hover.ts` | Hover information for directives and CSS selectors |
 | `src/definition.ts` | Go-to-definition for `b-part` → `b-name` |
 | `src/references.ts` | Find-references for partial usage and asset references |

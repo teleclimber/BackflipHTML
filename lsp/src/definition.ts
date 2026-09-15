@@ -1,5 +1,6 @@
 import { Location } from 'vscode-languageserver';
 import type { ProjectIndex } from './index.js';
+import { visibleCustomElementDef } from './index.js';
 import * as path from 'node:path';
 import { assetRefAtCursor } from './asset-attr.js';
 
@@ -39,17 +40,16 @@ export function findDefinition(
 }
 
 /**
- * Given a custom element partial tag name, find the definition location.
- * Custom element partial names are globally unique, so no targetFile is needed.
+ * Given a custom element partial tag name written in `sourceFile`, find the
+ * definition location — the one that file's call resolves to.
  */
 export function findCustomElementDefinition(
 	tagName: string,
+	sourceFile: string,
 	index: ProjectIndex,
 	workspaceRoot: string,
 ): Location | null {
-	const defs = index.partialDefs.get(tagName);
-	if (!defs || defs.length === 0) return null;
-	const def = defs.find(d => d.customElement);
+	const def = visibleCustomElementDef(tagName, sourceFile, index);
 	if (!def || !def.loc) return null;
 
 	const uri = `file://${workspaceRoot}/${def.file}`;

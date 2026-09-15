@@ -10,7 +10,7 @@ import {
 	DocumentSymbolParams,
 	HoverParams,
 	CompletionParams,
-	CompletionItem,
+	CompletionList,
 	DiagnosticSeverity,
 } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
@@ -20,7 +20,7 @@ import { discoverAssetFileInfos, collectAllAssetReferences, validateAssetFiles, 
 import { buildIndex, type ProjectIndex } from './index.js';
 import { errorsToDiagnostics, cssFailuresToDiagnostics } from './diagnostics.js';
 import { assetAttrAtCursor } from './asset-attr.js';
-import { getAssetCompletions } from './completion.js';
+import { getCompletions } from './completion.js';
 import { findDefinition, findAssetDefinition, findCustomElementDefinition } from './definition.js';
 import { findReferences, parseAssetRefAtCursor, findAssetReferences } from './references.js';
 import { getDocumentSymbols } from './symbols.js';
@@ -68,7 +68,9 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
 			documentSymbolProvider: true,
 			hoverProvider: true,
 			completionProvider: {
-				triggerCharacters: ['@', '/'],
+				// `"` opens a value, `<` starts a tag name, and `@ / #` step
+				// through a path or a partial reference as it is written.
+				triggerCharacters: ['@', '/', '#', '<', '"'],
 			},
 		},
 	};
@@ -339,10 +341,12 @@ connection.onDefinition((params: DefinitionParams) => {
 		if (assetDef) return assetDef;
 	}
 
+	const relPath = path.relative(templateRoot, uri.replace('file://', ''));
+
 	// Check if cursor is on a custom element partial tag
 	const ceTag = findCustomElementTagAtCursor(line, params.position.character);
 	if (ceTag) {
-		const ceDef = findCustomElementDefinition(ceTag.tagName, projectIndex, templateRoot);
+		const ceDef = findCustomElementDefinition(ceTag.tagName, relPath, projectIndex, templateRoot);
 		if (ceDef) return ceDef;
 	}
 
@@ -360,9 +364,6 @@ connection.onDefinition((params: DefinitionParams) => {
 	}
 
 	const value = bPartMatch[1];
-	const filePath = uri.replace('file://', '');
-	const relPath = path.relative(templateRoot, filePath);
-
 	const { partialName, file } = parseBPartValue(value);
 
 	return findDefinition(partialName, file, relPath, projectIndex, templateRoot);
@@ -452,19 +453,21 @@ connection.onHover((params: HoverParams) => {
 	return result;
 });
 
-// Completion: asset dir names and file paths
-connection.onCompletion(async (params: CompletionParams): Promise<CompletionItem[]> => {
-	if (!assetDirs || assetDirs.size === 0) return [];
+// Completion: asset paths, b-part targets, custom element tags, b-in slot names
+//
+// Always incomplete: matching is decided here, not by the client, so the next
+// keystroke has to ask again rather than re-filter this list with the client's
+// own fuzzy matcher. See `neutralFilter` in completion.ts.
+connection.onCompletion(async (params: CompletionParams): Promise<CompletionList> => {
+	const empty: CompletionList = { isIncomplete: true, items: [] };
+	if (!templateRoot) return empty;
 
 	const doc = documents.get(params.textDocument.uri);
-	if (!doc) return [];
+	if (!doc) return empty;
 
-	const line = doc.getText({
-		start: { line: params.position.line, character: 0 },
-		end: { line: params.position.line + 1, character: 0 },
-	});
-
-	return getAssetCompletions(line, params.position.character, params.position.line, assetDirs);
+	const relPath = path.relative(templateRoot, params.textDocument.uri.replace('file://', ''));
+	const items = await getCompletions(doc, params.position, relPath, projectIndex, assetDirs);
+	return { isIncomplete: true, items };
 });
 
 // Find All Matches: CSS selector → matching HTML elements
