@@ -102,6 +102,21 @@ Those probes read the line's text rather than the compiled tree, which is what
 lets completion answer while the attribute is still being typed and the document
 does not yet compile.
 
+Every completion item carries its own edit range and filter text, spanning the
+whole `@name/subpath` — back to where the ref starts, and forward past the
+cursor to where it ends. Left to guess, a client falls back to the word under
+the cursor, and no editor's word pattern treats a ref as one word: it would
+replace a fragment and leave the rest of the ref in place, and would filter the
+offered items against a word the `@` had been cut from.
+
+`assetRefEditAtCursor` reports that extent. Since a value names one asset — and
+a srcset one per candidate — the ref is the token opening the candidate the
+cursor is in, which makes an empty value a ref not yet started: completion
+offers every asset directory there, and writes one in at the cursor. The `@` is
+part of what is being completed rather than a precondition for it, so a name
+typed without one still completes and the item writes it in. Past that first
+token is a srcset descriptor, which names nothing and so offers nothing.
+
 Find-all-references on an `@name/subpath` reads the asset references collected
 from the last compile — `collectAllAssetReferences`, which walks the compiled
 trees and the discovered stylesheets.
@@ -169,6 +184,7 @@ File changes trigger recompilation with a 300ms debounce. The server runs its ow
 | `src/index.ts` | Project indexing: maps partial definitions and references (collection shared with the compiler) |
 | `src/resolve.ts` | Cursor position → the element/directive under it, from the compiled tree |
 | `src/asset-attr.ts` | Cursor position → the asset attribute and `@name/subpath` under it, from the line's text |
+| `src/completion.ts` | Asset path completion: directory names after `@`, then entries within the named directory |
 | `src/hover.ts` | Hover information for directives and CSS selectors |
 | `src/definition.ts` | Go-to-definition for `b-part` → `b-name` |
 | `src/references.ts` | Find-references for partial usage and asset references |

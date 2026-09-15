@@ -11,7 +11,6 @@ import {
 	HoverParams,
 	CompletionParams,
 	CompletionItem,
-	CompletionItemKind,
 	DiagnosticSeverity,
 } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
@@ -20,7 +19,8 @@ import { analyzeCss, discoverCssFiles, type CssAnalysisResult, type CssSourceFil
 import { discoverAssetFileInfos, collectAllAssetReferences, validateAssetFiles, buildAssetUsageReport, filterReport, renderAssetReportHtml, type AssetReference } from '@backflip/assets';
 import { buildIndex, type ProjectIndex } from './index.js';
 import { errorsToDiagnostics, cssFailuresToDiagnostics } from './diagnostics.js';
-import { assetAttrAtCursor, openAssetAttrValue } from './asset-attr.js';
+import { assetAttrAtCursor } from './asset-attr.js';
+import { getAssetCompletions } from './completion.js';
 import { findDefinition, findAssetDefinition, findCustomElementDefinition } from './definition.js';
 import { findReferences, parseAssetRefAtCursor, findAssetReferences } from './references.js';
 import { getDocumentSymbols } from './symbols.js';
@@ -461,67 +461,10 @@ connection.onCompletion(async (params: CompletionParams): Promise<CompletionItem
 
 	const line = doc.getText({
 		start: { line: params.position.line, character: 0 },
-		end: { line: params.position.line, character: params.position.character },
+		end: { line: params.position.line + 1, character: 0 },
 	});
 
-	// Only complete inside an attribute that names an asset, and only while its
-	// quote is still open.
-	const valueTyped = openAssetAttrValue(line);
-	if (valueTyped === null) return [];
-
-	// If user typed @ or part of @name, complete asset dir names
-	if (valueTyped === '@' || (valueTyped.startsWith('@') && !valueTyped.includes('/'))) {
-		const prefix = valueTyped.substring(1); // strip @
-		const items: CompletionItem[] = [];
-		for (const name of assetDirs.keys()) {
-			if (prefix && !name.startsWith(prefix)) continue;
-			items.push({
-				label: `@${name}/`,
-				kind: CompletionItemKind.Folder,
-				insertText: `@${name}/`,
-			});
-		}
-		return items;
-	}
-
-	// If user typed @name/ or @name/sub/path, complete files within the directory
-	const pathMatch = valueTyped.match(/^@([a-zA-Z0-9_-]+)\/(.*)$/);
-	if (!pathMatch) return [];
-
-	const dirName = pathMatch[1];
-	const subpath = pathMatch[2];
-	const dirPath = assetDirs.get(dirName);
-	if (!dirPath) return [];
-
-	try {
-		const searchDir = path.join(dirPath, path.dirname(subpath));
-		const prefix = path.basename(subpath);
-		const entries = await fs.readdir(searchDir, { withFileTypes: true });
-		const items: CompletionItem[] = [];
-		for (const entry of entries) {
-			if (prefix && !entry.name.startsWith(prefix)) continue;
-			if (entry.name.startsWith('.')) continue;
-			const relBase = subpath.includes('/')
-				? path.dirname(subpath) + '/' + entry.name
-				: entry.name;
-			if (entry.isDirectory()) {
-				items.push({
-					label: entry.name + '/',
-					kind: CompletionItemKind.Folder,
-					insertText: `@${dirName}/${relBase}/`,
-				});
-			} else {
-				items.push({
-					label: entry.name,
-					kind: CompletionItemKind.File,
-					insertText: `@${dirName}/${relBase}`,
-				});
-			}
-		}
-		return items;
-	} catch {
-		return [];
-	}
+	return getAssetCompletions(line, params.position.character, params.position.line, assetDirs);
 });
 
 // Find All Matches: CSS selector → matching HTML elements

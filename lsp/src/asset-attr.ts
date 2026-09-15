@@ -24,6 +24,16 @@ export interface AssetAttrMatch {
 	end: number;
 }
 
+/** The `@name/subpath` being typed, and the columns an edit should replace. */
+export interface AssetRefEdit {
+	/** The ref as authored up to the cursor; empty where none has been started. */
+	typed: string;
+	/** Column the ref starts at, which is the cursor when nothing is typed. */
+	start: number;
+	/** Column one past the ref's last character, which may sit after the cursor. */
+	end: number;
+}
+
 /** One `@name/subpath` within such an attribute. */
 export interface AssetRefMatch {
 	/** Asset directory name, without the `@`. */
@@ -104,4 +114,30 @@ export function assetRefInValue(attr: AssetAttrMatch, character: number): AssetR
 export function openAssetAttrValue(linePrefix: string): string | null {
 	const m = linePrefix.match(OPEN_ASSET_ATTR);
 	return m ? m[2] : null;
+}
+
+/**
+ * The ref being typed at the cursor, and the extent a completion replaces.
+ *
+ * A value names one asset, and a srcset one per candidate, so the ref is the
+ * token that opens the candidate the cursor is in — empty while the value is,
+ * and missing its `@` until that is typed. Anything past that first token is a
+ * srcset descriptor and names nothing, so the cursor resolves to no ref there.
+ *
+ * The extent reaches back over what is typed and forward past the cursor to the
+ * end of the token, so accepting a completion rewrites the whole ref rather
+ * than appending to what is already there.
+ */
+export function assetRefEditAtCursor(line: string, character: number): AssetRefEdit | null {
+	const value = openAssetAttrValue(line.substring(0, character));
+	if (value === null) return null;
+	const candidate = value.substring(value.lastIndexOf(',') + 1);
+	const typed = candidate.match(/[^\s]*$/)![0];
+	if (candidate.slice(0, candidate.length - typed.length).trim() !== '') return null;
+	const ahead = line.substring(character).match(/^[^\s,"']*/)![0];
+	return {
+		typed,
+		start: character - typed.length,
+		end: character + ahead.length,
+	};
 }

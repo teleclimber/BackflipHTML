@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import { deepStrictEqual, ok, strictEqual } from 'node:assert';
-import { assetAttrAtCursor, assetRefAtCursor, openAssetAttrValue } from './asset-attr.js';
+import { assetAttrAtCursor, assetRefAtCursor, assetRefEditAtCursor, openAssetAttrValue } from './asset-attr.js';
 
 describe('assetAttrAtCursor', () => {
 	it('finds a ~ attribute the cursor sits in', () => {
@@ -116,5 +116,100 @@ describe('openAssetAttrValue', () => {
 
 	it('returns null for an attribute that names no asset', () => {
 		strictEqual(openAssetAttrValue('<img src="@'), null);
+	});
+});
+
+describe('assetRefEditAtCursor', () => {
+	/** The probe for a line whose cursor is written as `|`. */
+	function at(marked: string) {
+		return assetRefEditAtCursor(marked.replace('|', ''), marked.indexOf('|'));
+	}
+
+	it('spans the bare `@` that starts a ref', () => {
+		const marked = '<img src~="@|">';
+		deepStrictEqual(at(marked), {
+			typed: '@',
+			start: marked.indexOf('@'),
+			end: marked.indexOf('|'),
+		});
+	});
+
+	it('spans back to the `@` while the ref is being typed', () => {
+		const marked = '<img src~="@assets/st|">';
+		deepStrictEqual(at(marked), {
+			typed: '@assets/st',
+			start: marked.indexOf('@'),
+			end: marked.indexOf('|'),
+		});
+	});
+
+	it('spans forward past the cursor to the end of a ref being edited', () => {
+		const marked = '<img src~="@assets/st|yle.css">';
+		const line = marked.replace('|', '');
+		deepStrictEqual(at(marked), {
+			typed: '@assets/st',
+			start: line.indexOf('@'),
+			end: line.indexOf('@') + '@assets/style.css'.length,
+		});
+	});
+
+	it('spans only the candidate under the cursor in a srcset', () => {
+		const marked = '<img srcset~="@images/a.png 1x, @im|ages/b.png 2x">';
+		const line = marked.replace('|', '');
+		deepStrictEqual(at(marked), {
+			typed: '@im',
+			start: line.lastIndexOf('@'),
+			end: line.lastIndexOf('@') + '@images/b.png'.length,
+		});
+	});
+
+	it('stops at the descriptor that ends a srcset candidate', () => {
+		const marked = '<img srcset~="@images/a|.png 1x, @images/b.png 2x">';
+		const line = marked.replace('|', '');
+		strictEqual(at(marked)!.end, line.indexOf('@') + '@images/a.png'.length);
+	});
+
+	it('spans a b-script ref, which carries no `~`', () => {
+		const marked = '<my-widget b-script="@scr|">';
+		deepStrictEqual(at(marked), {
+			typed: '@scr',
+			start: marked.indexOf('@'),
+			end: marked.indexOf('|'),
+		});
+	});
+
+	it('spans nothing in an empty value, where a ref has yet to be started', () => {
+		const marked = '<img src~="|">';
+		deepStrictEqual(at(marked), {
+			typed: '',
+			start: marked.indexOf('|'),
+			end: marked.indexOf('|'),
+		});
+	});
+
+	it('spans nothing at an empty srcset candidate', () => {
+		const marked = '<img srcset~="@images/a.png 1x, |">';
+		deepStrictEqual(at(marked), {
+			typed: '',
+			start: marked.indexOf('|'),
+			end: marked.indexOf('|'),
+		});
+	});
+
+	it('spans a name typed without its `@`, which the value still needs', () => {
+		const marked = '<img src~="as|">';
+		deepStrictEqual(at(marked), {
+			typed: 'as',
+			start: marked.indexOf('as'),
+			end: marked.indexOf('|'),
+		});
+	});
+
+	it('returns null past the end of a srcset candidate', () => {
+		strictEqual(at('<img srcset~="@images/a.png 1x|">'), null);
+	});
+
+	it('returns null outside an asset attribute', () => {
+		strictEqual(at('<img src="@assets/st|">'), null);
 	});
 });
