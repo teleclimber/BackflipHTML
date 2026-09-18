@@ -1741,3 +1741,28 @@ describe('b-script hover', () => {
 		ok(v.includes('b-script'), v);
 	});
 });
+
+describe('b-generate hover', () => {
+	const hoverAt = (line: string, at: number) =>
+		hoverValue(getHover(makeDoc([line]), pos(0, at), 'page.html', makeIndex([], [])));
+
+	it('explains the mode under the cursor', () => {
+		const line = '<my-widget b-attr:count b-generate="full">';
+		const v = hoverAt(line, line.indexOf('full'));
+		ok(v.includes('b-generate="full"'), v);
+		ok(v.includes('customElements.define()'), v);
+	});
+
+	it('names what the author still has to write for base', () => {
+		const line = '<my-widget b-generate="base">';
+		const v = hoverAt(line, line.indexOf('base'));
+		ok(v.includes('extend'), v);
+		ok(v.includes('super'), v);
+	});
+
+	it('lists the expected values for an unknown one', () => {
+		const line = '<my-widget b-generate="sideways">';
+		const v = hoverAt(line, line.indexOf('sideways'));
+		ok(v.includes('Expected'), v);
+	});
+});

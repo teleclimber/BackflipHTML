@@ -5,7 +5,7 @@ import type { CompiledFile } from '../compiler/types.js';
 import { resolveDomPatchScriptUrl, type BackflipConfig } from '../compiler/config.js';
 import { resolveAssetRefs } from '../compiler/helpers.js';
 import { flattenCompiledFile } from '../compiler/flatten.js';
-import { applyDomPatch, renderImportPathFor } from '../compiler/generate/dom-patch/nodes2patch.js';
+import { applyDomPatch, moduleFileName } from '../compiler/generate/dom-patch/nodes2patch.js';
 import { fileToJsModule } from '../compiler/generate/js/nodes2js.js';
 import { renderRoot } from '../runtime/js/render.js';
 import type { RootRNode } from '../runtime/js/render.js';
@@ -59,10 +59,10 @@ export async function previewPartial(options: PreviewOptions): Promise<PreviewRe
 	const { partialName, compiledFile, allFiles, fileName, cssHrefs, liveReload, nonce, dataOverrides, tmpDir, assetMap, domPatchOutputDirs, domPatchOutDir, config, configDir } = options;
 	const errors: string[] = [];
 
-	// Per-file script URL for dom-patch auto-include (null/undefined → not stamped).
-	const scriptUrlFor = (relPath: string): string | undefined =>
+	// Per-partial script URL for dom-patch auto-include (null/undefined → not stamped).
+	const scriptUrlFor = (tagName: string): string | undefined =>
 		config && configDir !== undefined
-			? (resolveDomPatchScriptUrl(configDir, config, relPath) ?? undefined)
+			? (resolveDomPatchScriptUrl(configDir, config, moduleFileName(tagName)) ?? undefined)
 			: undefined;
 
 	// 1. Find the partial
@@ -117,31 +117,29 @@ export async function previewPartial(options: PreviewOptions): Promise<PreviewRe
 
 /**
  * Regenerate dom-patch JS for each file and save it under `outDir`. For every
- * configured dom-patch output dir, record where the build *would* write the file
- * (`<outputDir>/<file>.js`) mapped to the actual saved path, so an asset request
+ * configured dom-patch output dir, record where the build *would* write each module
+ * (`<outputDir>/<tag>.js`) mapped to the actual saved path, so an asset request
  * resolving to that build path can be served the fresh JS.
  */
 async function writeDomPatchAssets(
 	files: Map<string, CompiledFile>,
 	outputDirs: string[],
 	outDir: string,
-	scriptUrlFor?: (relPath: string) => string | undefined,
+	scriptUrlFor?: (tagName: string) => string | undefined,
 ): Promise<Record<string, string>> {
 	const assets: Record<string, string> = {};
 	let needsRenderAny = false;
-	for (const [relPath, file] of files) {
-		const jsRel = relPath.replace(/\.html$/, '.js');
-		const { js, needsRender } = applyDomPatch(file, {
-			scriptUrl: scriptUrlFor?.(relPath),
-			renderImportPath: renderImportPathFor(jsRel),
-		});
-		if (needsRender) needsRenderAny = true;
-		if (!js) continue;
-		const savedPath = path.join(outDir, jsRel);
-		await fs.mkdir(path.dirname(savedPath), { recursive: true });
-		await fs.writeFile(savedPath, js, 'utf-8');
-		for (const outputDir of outputDirs) {
-			assets[path.join(outputDir, jsRel)] = savedPath;
+	for (const [, file] of files) {
+		const { modules } = applyDomPatch(file, { ...(scriptUrlFor ? { scriptUrlFor } : {}) });
+		for (const mod of modules) {
+			if (mod.needsRender) needsRenderAny = true;
+			const jsRel = moduleFileName(mod.tagName);
+			const savedPath = path.join(outDir, jsRel);
+			await fs.mkdir(path.dirname(savedPath), { recursive: true });
+			await fs.writeFile(savedPath, mod.js, 'utf-8');
+			for (const outputDir of outputDirs) {
+				assets[path.join(outputDir, jsRel)] = savedPath;
+			}
 		}
 	}
 	// A build copies render.js into the dom-patch output root; the preview serves the
@@ -169,12 +167,12 @@ async function evalPartial(
 	allFiles?: Map<string, CompiledFile>,
 	tmpDir?: string,
 	assetMap?: Map<string, string>,
-	scriptUrlFor?: (relPath: string) => string | undefined,
+	scriptUrlFor?: (tagName: string) => string | undefined,
 ): Promise<RootRNode> {
 	// Mirror the CLI build: dom-patch mutates the AST in place (appending
 	// data-bfid markers to reactive elements) and must run before flatten + js
 	// codegen so the previewed HTML carries the ids the runtime queries on.
-	applyDomPatch(compiledFile, { scriptUrl: scriptUrlFor?.(fileName) });
+	applyDomPatch(compiledFile, { ...(scriptUrlFor ? { scriptUrlFor } : {}) });
 	const resolvedFile = assetMap ? resolveAssetRefs(compiledFile, assetMap) : compiledFile;
 	const flattenedFile = flattenCompiledFile(resolvedFile);
 	const js = fileToJsModule(flattenedFile, fileName, assetMap);
@@ -203,7 +201,7 @@ async function evalPartial(
 		for (const [filePath, file] of allFiles) {
 			const jsPath = path.join(workDir, filePath.replace('.html', '.js'));
 			await fs.mkdir(path.dirname(jsPath), { recursive: true });
-			applyDomPatch(file, { scriptUrl: scriptUrlFor?.(filePath) });
+			applyDomPatch(file, { ...(scriptUrlFor ? { scriptUrlFor } : {}) });
 			const resolvedCrossFile = assetMap ? resolveAssetRefs(file, assetMap) : file;
 			const flatCrossFile = flattenCompiledFile(resolvedCrossFile);
 			await fs.writeFile(jsPath, fileToJsModule(flatCrossFile, filePath, assetMap), 'utf-8');

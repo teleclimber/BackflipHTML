@@ -132,15 +132,15 @@ Deno.test("Config: asset dir that doubles as dom-patch output dir does not repor
     await fs.mkdir(templatesDir, { recursive: true });
     await fs.mkdir(bfdomDir, { recursive: true });
 
-    // A custom element with a dynamic attribute → produces dom-patch JS (widget.js).
+    // A custom element with a dynamic attribute → produces dom-patch JS (my-widget.js).
     await fs.writeFile(
         path.join(templatesDir, "widget.html"),
-        `<my-widget b-attr:level :class="level > 80 ? 'high' : ''" b-export>\n\t<meter :value="level"></meter>\n</my-widget>\n`,
+        `<my-widget b-attr:level b-generate="full" :class="level > 80 ? 'high' : ''" b-export>\n\t<meter :value="level"></meter>\n</my-widget>\n`,
     );
     // A page that references the generated dom-patch JS as a bfdom asset.
     await fs.writeFile(
         path.join(templatesDir, "page.html"),
-        `<html b-name="page" b-export>\n\t<my-widget level="90"></my-widget>\n\t<script lang="js" src~="@bfdom/widget.js"></script>\n</html>\n`,
+        `<html b-name="page" b-export>\n\t<my-widget level="90"></my-widget>\n\t<script lang="js" src~="@bfdom/my-widget.js"></script>\n</html>\n`,
     );
 
     const config = {
@@ -164,7 +164,7 @@ Deno.test("Config: asset dir that doubles as dom-patch output dir does not repor
         assertEquals(stdout.includes("Generated"), true, `Expected 'Generated' in stdout: ${stdout}`);
 
         // The dom-patch JS the page referenced should actually exist after the build.
-        await fs.stat(path.join(bfdomDir, "widget.js"));
+        await fs.stat(path.join(bfdomDir, "my-widget.js"));
     } finally {
         await fs.rm(workDir, { recursive: true, force: true });
     }
@@ -180,9 +180,9 @@ Deno.test("Config: reference to a dom-patch asset no template generates is still
 
     await fs.writeFile(
         path.join(templatesDir, "widget.html"),
-        `<my-widget b-attr:level :class="level > 80 ? 'high' : ''" b-export>\n\t<meter :value="level"></meter>\n</my-widget>\n`,
+        `<my-widget b-attr:level b-generate="full" :class="level > 80 ? 'high' : ''" b-export>\n\t<meter :value="level"></meter>\n</my-widget>\n`,
     );
-    // Page references @bfdom/typo.js — there is no typo.html, so nothing generates it.
+    // Page references @bfdom/typo.js — no partial is named `typo`, so nothing generates it.
     await fs.writeFile(
         path.join(templatesDir, "page.html"),
         `<html b-name="page" b-export>\n\t<my-widget level="90"></my-widget>\n\t<script lang="js" src~="@bfdom/typo.js"></script>\n</html>\n`,

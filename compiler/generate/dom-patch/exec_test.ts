@@ -99,7 +99,7 @@ function mount(js: string, partialName: string, className: string, hostAttrs: st
 Deno.test("exec: updating a b-attr re-renders the print text, preserving siblings", () => {
 	const root = patchBranch('BackflipPatch_MyWidget',
 		[printSite({ kind: 'bfid-element', bfid: 'bf0' }, 'name', 'bf1', 'bf2')]);
-	const js = generateClassForPartial('my-widget', [{ name: 'name', isBool: false }], root)!;
+	const js = generateClassForPartial('my-widget', [{ name: 'name', isBool: false }], root, 'render')!;
 	const innerHtml = `<p data-bfid="bf0">Hello <!--bfid:bf1-->World<!--bfid:bf2-->!</p>`;
 	const { host, instance, restore } = mount(js, 'my-widget', 'BackflipMyWidget', 'name="World"', innerHtml);
 	try {
@@ -125,7 +125,7 @@ Deno.test("exec: updating a b-attr re-renders the print text, preserving sibling
 Deno.test("exec: print anchored to the ref element patches host children", () => {
 	const root = patchBranch('BackflipPatch_MyThing',
 		[printSite({ kind: 'ref-element' }, 'label', 'bf0', 'bf1')]);
-	const js = generateClassForPartial('my-thing', [{ name: 'label', isBool: false }], root)!;
+	const js = generateClassForPartial('my-thing', [{ name: 'label', isBool: false }], root, 'render')!;
 	const innerHtml = `<!--bfid:bf0-->one<!--bfid:bf1-->`;
 	const { host, instance, restore } = mount(js, 'my-thing', 'BackflipMyThing', 'label="one"', innerHtml);
 	try {
@@ -141,7 +141,7 @@ Deno.test("exec: print anchored to the ref element patches host children", () =>
 Deno.test("exec: inserted value is text, never interpreted as HTML", () => {
 	const root = patchBranch('BackflipPatch_MyWidget',
 		[printSite({ kind: 'bfid-element', bfid: 'bf0' }, 'name', 'bf1', 'bf2')]);
-	const js = generateClassForPartial('my-widget', [{ name: 'name', isBool: false }], root)!;
+	const js = generateClassForPartial('my-widget', [{ name: 'name', isBool: false }], root, 'render')!;
 	const innerHtml = `<p data-bfid="bf0"><!--bfid:bf1-->plain<!--bfid:bf2--></p>`;
 	const { host, instance, restore } = mount(js, 'my-widget', 'BackflipMyWidget', 'name="plain"', innerHtml);
 	try {
@@ -160,7 +160,7 @@ Deno.test("exec: a print and an attr on the same element update together", () =>
 		attrSite('bf0', 'title', 'name'),
 		printSite({ kind: 'bfid-element', bfid: 'bf0' }, 'name', 'bf1', 'bf2'),
 	]);
-	const js = generateClassForPartial('my-widget', [{ name: 'name', isBool: false }], root)!;
+	const js = generateClassForPartial('my-widget', [{ name: 'name', isBool: false }], root, 'render')!;
 	const innerHtml = `<p data-bfid="bf0" title="World">Hi <!--bfid:bf1-->World<!--bfid:bf2--></p>`;
 	const { host, instance, restore } = mount(js, 'my-widget', 'BackflipMyWidget', 'name="World"', innerHtml);
 	try {
@@ -177,7 +177,7 @@ Deno.test("exec: a print and an attr on the same element update together", () =>
 Deno.test("exec: missing markers log an error and skip without throwing", () => {
 	const root = patchBranch('BackflipPatch_MyWidget',
 		[printSite({ kind: 'bfid-element', bfid: 'bf0' }, 'name', 'bf1', 'bf2')]);
-	const js = generateClassForPartial('my-widget', [{ name: 'name', isBool: false }], root)!;
+	const js = generateClassForPartial('my-widget', [{ name: 'name', isBool: false }], root, 'render')!;
 	// <p> has the bfid but no marker comments (rendered DOM diverged from template).
 	const { host, instance, restore } = mount(js, 'my-widget', 'BackflipMyWidget', 'name="World"', `<p data-bfid="bf0">Hello !</p>`);
 	const errors: unknown[][] = [];
@@ -225,7 +225,7 @@ function mountSet(snapshot: string, hostAttrs: string, innerHtml: string, childS
 	});
 	const root = patchBranch('BackflipPatch_MyWidget', [], [set]);
 	const js = generateClassForPartial('my-widget',
-		[{ name: 'mode', isBool: false }, { name: 'name', isBool: false }], root)!;
+		[{ name: 'mode', isBool: false }, { name: 'name', isBool: false }], root, 'render')!;
 	return mount(js, 'my-widget', 'BackflipMyWidget', hostAttrs, innerHtml);
 }
 
@@ -280,7 +280,7 @@ Deno.test("exec: a set with no b-else renders nothing when no branch matches", (
 		setId: 's0', endId: 's1', snapshot, branches: [null],
 	});
 	const root = patchBranch('BackflipPatch_MyWidget', [], [set]);
-	const js = generateClassForPartial('my-widget', [{ name: 'mode', isBool: false }], root)!;
+	const js = generateClassForPartial('my-widget', [{ name: 'mode', isBool: false }], root, 'render')!;
 	const { host, instance, restore } = mount(js, 'my-widget', 'BackflipMyWidget', 'mode="a"', `<!--bfid:s0--><p>shown</p><!--bfid:s1-->`);
 	try {
 		host.setAttribute('mode', 'z');
@@ -389,7 +389,7 @@ function mountNested(hostAttrs: string) {
 	});
 	const root = patchBranch('BackflipPatch_MyWidget', [], [outerSet]);
 	const js = generateClassForPartial('my-widget',
-		[{ name: 'mode', isBool: false }, { name: 'sub', isBool: false }, { name: 'label', isBool: false }], root)!;
+		[{ name: 'mode', isBool: false }, { name: 'sub', isBool: false }, { name: 'label', isBool: false }], root, 'render')!;
 	return mount(js, 'my-widget', 'BackflipMyWidget', hostAttrs, NESTED_SERVER_HTML);
 }
 
@@ -440,4 +440,155 @@ Deno.test("exec: swapping the outer branch and back re-establishes the deep patc
 	} finally {
 		restore();
 	}
+});
+
+// --- b-generate: the custom element class ----------------------------------
+//
+// These run the generated module inside a jsdom window (which implements the
+// custom-elements registry, upgrade and the lifecycle callbacks) so the ordering
+// rules the class is built around are exercised for real, not asserted as text.
+
+const MODE_ATTRS = [{ name: 'name', isBool: false }];
+
+// The module for `<my-widget name>` with one print site inside a <p data-bfid>.
+function widgetModule(mode: 'render' | 'base' | 'full'): string {
+	const root = patchBranch('BackflipPatch_MyWidget',
+		[printSite({ kind: 'bfid-element', bfid: 'bf0' }, 'name', 'bf1', 'bf2')]);
+	return generateClassForPartial('my-widget', MODE_ATTRS, root, mode)!;
+}
+
+const SERVER_HTML = (name: string) =>
+	`<my-widget name="${name}"><p data-bfid="bf0">Hello <!--bfid:bf1-->${name}<!--bfid:bf2-->!</p></my-widget>`;
+
+// Strip the ES-module syntax so the source can be evaluated as a classic script. The
+// exported names are hung off globalThis, standing in for what an importer would bind.
+function asScript(js: string): string {
+	const exported = [...js.matchAll(/export class (\w+)/g)].map(m => m[1]);
+	return [
+		js.replaceAll('export class', 'class'),
+		...exported.map(n => `globalThis.${n} = ${n};`),
+	].join('\n');
+}
+
+function parsed(dom: InstanceType<typeof JSDOM>): Promise<void> {
+	return new Promise(resolve => {
+		if (dom.window.document.readyState === 'complete') return resolve();
+		dom.window.addEventListener('load', () => resolve(), { once: true });
+	});
+}
+
+/**
+ * Parse the document first, then evaluate the module — what a deferred module script
+ * does, and the path where init can run straight away.
+ */
+async function defineAfterParse(js: string, bodyHtml: string) {
+	const dom = new JSDOM(`<!DOCTYPE html><body>${bodyHtml}</body>`, { runScripts: 'outside-only' });
+	const errors: string[] = [];
+	dom.window.console.error = (...args: unknown[]) => { errors.push(args.map(String).join(' ')); };
+	await parsed(dom);
+	dom.window.eval(asScript(js));
+	return { dom, doc: dom.window.document, errors };
+}
+
+/** Define before the element is parsed — the mid-parse path bfInit has to defer. */
+function defineDuringParse(js: string, bodyHtml: string) {
+	const dom = new JSDOM(
+		`<!DOCTYPE html><html><head><script>${asScript(js)}</script></head><body>${bodyHtml}</body></html>`,
+		{ runScripts: 'dangerously' },
+	);
+	return { dom, doc: dom.window.document };
+}
+
+Deno.test("exec: b-generate=full registers the element and patches it on attribute change", async () => {
+	const { doc, errors } = await defineAfterParse(widgetModule('full'), SERVER_HTML('World'));
+	const host = doc.querySelector('my-widget')!;
+	assertEquals(doc.defaultView!.customElements.get('my-widget') !== undefined, true);
+	// Upgrade replayed every observed attribute before connectedCallback; none of that
+	// patched anything, and the server-rendered DOM is untouched.
+	assertEquals(host.textContent, 'Hello World!');
+	assertEquals(errors, []);
+
+	host.setAttribute('name', 'Mars');
+	assertEquals(host.textContent, 'Hello Mars!');
+});
+
+Deno.test("exec: b-generate=base does not register the element", async () => {
+	const { doc } = await defineAfterParse(widgetModule('base'), SERVER_HTML('World'));
+	assertEquals(doc.defaultView!.customElements.get('my-widget'), undefined);
+	// The class is there for the author to extend.
+	assertEquals(typeof doc.defaultView!.eval('BackflipMyWidgetElement'), 'function');
+});
+
+Deno.test("exec: a subclass that spreads observedAttributes patches; one that drops it is reported", async () => {
+	const { doc, errors } = await defineAfterParse(widgetModule('base'), SERVER_HTML('World'));
+	const win = doc.defaultView!;
+	win.eval(`
+		class GoodWidget extends BackflipMyWidgetElement {
+			static observedAttributes = [...super.observedAttributes, 'extra'];
+		}
+		customElements.define('my-widget', GoodWidget);
+	`);
+	const host = doc.querySelector('my-widget')!;
+	host.setAttribute('name', 'Mars');
+	assertEquals(host.textContent, 'Hello Mars!');
+	assertEquals(errors, []);
+
+	// A second document, whose subclass forgets to spread: `name` is no longer observed,
+	// so nothing patches — and the guard says which attribute went missing.
+	const second = await defineAfterParse(widgetModule('base'), SERVER_HTML('World'));
+	second.doc.defaultView!.eval(`
+		class BadWidget extends BackflipMyWidgetElement {
+			static observedAttributes = ['extra'];
+		}
+		customElements.define('my-widget', BadWidget);
+	`);
+	const badHost = second.doc.querySelector('my-widget')!;
+	badHost.setAttribute('name', 'Mars');
+	assertEquals(badHost.textContent, 'Hello World!');
+	assertEquals(second.errors.length, 1);
+	assertEquals(second.errors[0].includes('observedAttributes is missing name'), true);
+});
+
+Deno.test("exec: defining the same element twice is skipped, not thrown", async () => {
+	const { doc } = await defineAfterParse(widgetModule('full'), SERVER_HTML('World'));
+	const win = doc.defaultView!;
+	const first = win.customElements.get('my-widget');
+	// A second copy of the module (the same file served from two URLs) must not throw.
+	win.eval(asScript(widgetModule('full')));
+	assertEquals(win.customElements.get('my-widget'), first);
+});
+
+Deno.test("exec: an element connected mid-parse defers init, then patches", async () => {
+	const { dom, doc } = defineDuringParse(widgetModule('full'), SERVER_HTML('World'));
+	// The definition ran before the element was parsed, so connectedCallback fired
+	// with no children yet. Init waits for the document instead of patching into a
+	// half-built subtree.
+	const host = doc.querySelector('my-widget')!;
+	assertEquals((host as unknown as { bfPatch?: unknown }).bfPatch, undefined);
+
+	await parsed(dom);
+	assertEquals((host as unknown as { bfPatch?: unknown }).bfPatch !== undefined, true);
+	host.setAttribute('name', 'Mars');
+	assertEquals(host.textContent, 'Hello Mars!');
+});
+
+Deno.test("exec: an attribute changed before init is replayed once init runs", async () => {
+	const { dom, doc } = defineDuringParse(widgetModule('full'), SERVER_HTML('World'));
+	const host = doc.querySelector('my-widget')!;
+	// Changed while init is still deferred: the callback records it and patches nothing.
+	host.setAttribute('name', 'Mars');
+	assertEquals(host.textContent, 'Hello World!');
+
+	await parsed(dom);
+	assertEquals(host.textContent, 'Hello Mars!');
+});
+
+Deno.test("exec: moving the element does not re-initialize it", async () => {
+	const { doc } = await defineAfterParse(widgetModule('full'), `<div id="a">${SERVER_HTML('World')}</div><div id="b"></div>`);
+	const host = doc.querySelector('my-widget')! as unknown as { bfPatch: unknown };
+	const firstPatch = host.bfPatch;
+	doc.querySelector('#b')!.appendChild(host as unknown as Node);
+	assertEquals(host.bfPatch, firstPatch);
+	(host as unknown as Element).setAttribute('name', 'Mars');
+	assertEquals((host as unknown as Element).textContent, 'Hello Mars!');
 });

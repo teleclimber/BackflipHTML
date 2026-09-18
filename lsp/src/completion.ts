@@ -107,6 +107,14 @@ export async function getAssetCompletions(
  */
 const B_PART = '(?<![\\w-])b-part';
 const B_IN = '(?<![\\w-])b-in';
+const B_GENERATE = '(?<![\\w-])b-generate';
+
+/** The `b-generate` values, with the one-liner each shows in the completion list. */
+const GENERATE_MODES: [string, string][] = [
+	['full', 'Generate the element class and register it — no author JS needed'],
+	['base', 'Generate an element class to subclass and define yourself'],
+	['render', 'Generate the patch class only; you write the whole web component'],
+];
 
 /** Re-opens the suggest widget, so picking a file leads straight to its partials. */
 const RETRIGGER = { title: 'Suggest partials', command: 'editor.action.triggerSuggest' };
@@ -346,6 +354,31 @@ export function getSlotCompletions(
 		}));
 }
 
+/** The three `b-generate` values, offered inside `b-generate="…"`. */
+export function getGenerateCompletions(
+	line: string,
+	character: number,
+	lineNumber: number,
+): CompletionItem[] {
+	const attr = openAttrValueEdit(line, character, B_GENERATE);
+	if (!attr) return [];
+
+	const range: Range = {
+		start: { line: lineNumber, character: attr.valueStart },
+		end: { line: lineNumber, character: attr.valueEnd },
+	};
+	return GENERATE_MODES
+		.filter(([mode]) => matchesTyped(mode, attr.typed))
+		.map(([mode, detail]) => ({
+			label: mode,
+			kind: CompletionItemKind.EnumMember,
+			detail,
+			filterText: attr.typed,
+			sortText: sortKey('0', attr.typed, mode),
+			textEdit: { range, newText: mode },
+		}));
+}
+
 /**
  * Everything offered at the cursor. The probes answer for disjoint positions,
  * so the first that has something to say is the answer.
@@ -368,6 +401,9 @@ export async function getCompletions(
 		const assets = await getAssetCompletions(line, ch, position.line, assetDirs, readDir);
 		if (assets.length > 0) return assets;
 	}
+
+	const generate = getGenerateCompletions(line, ch, position.line);
+	if (generate.length > 0) return generate;
 
 	const partials = getPartialCompletions(line, ch, position.line, filePath, index);
 	if (partials.length > 0) return partials;

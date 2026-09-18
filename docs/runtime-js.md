@@ -49,17 +49,19 @@ for (const chunk of streamRenderRoot(greetingModule.greeting, { name: "Alice" })
 
 ### dom-patch script auto-include
 
-The generated dom-patch JS is an **ES module** that *exports* a patch class — a library, not something the page runs directly. Your hand-coded web component imports that class and calls `customElements.define(...)`. So each reactive custom-element partial can carry up to two scripts:
+The generated dom-patch JS is an **ES module**, one per custom-element partial and named after its tag. What it is *for* depends on the partial's [`b-generate`](partials.md#generated-client-js-b-generate) mode, and that decides how the renderer injects it:
 
-- an **entry** module — the hand-coded web component, declared on the definition with [`b-script`](partials.md#client-script-b-script) (an `@asset/...` path). Injected as `<script src="…" type="module"></script>`.
-- a **dependency** module — the generated dom-patch JS the entry imports. Its URL is derived at compile time from the asset prefix covering the dom-patch output dir (see [Assets](assets.md)). Injected as `<link rel="modulepreload" href="…">` so the browser fetches it in parallel with the entry that imports it, instead of waterfalling.
+- `b-generate="full"` — the module registers the element itself, so it is the **entry**: injected as `<script src="…" type="module"></script>`.
+- `b-generate="base"` / `"render"` — the module is a library your own module imports, so it is a **dependency**: injected as `<link rel="modulepreload" href="…">`, which the browser fetches in parallel with the entry that imports it instead of waterfalling. Your module, declared on the definition with [`b-script`](partials.md#client-script-b-script) (an `@asset/...` path), is the entry.
+
+Module URLs are derived at compile time from the asset prefix covering the dom-patch output dir (see [Assets](assets.md)).
 
 As the renderer walks the tree it collects the scripts of the reactive custom elements that **actually rendered** (deduped by URL, in first-encounter order) and emits the dependency `<link>`s first, then the entry `<script>`s:
 
 - Placement: immediately before the first `</body>` (case-insensitive) when one exists; otherwise appended at the end of the output.
 - Only rendered elements count — a custom element in an untaken `b-if`/`b-else` branch, or a `b-for` over an empty iterable, contributes nothing.
 - No reactive custom elements rendered ⇒ no block is added.
-- A partial with a generated dependency but no `b-script` entry has nothing to register the component; the build warns (see [CLI](cli.md)).
+- A `base` or `render` partial with no `b-script` entry has nothing to register the component; the build warns (see [CLI](cli.md)).
 
 Both `renderRoot` and `streamRenderRoot` auto-include scripts, with **byte-identical output** — `renderRoot` is simply the collected chunks of `streamRenderRoot`. Streaming achieves the same placement without buffering the whole document: it streams the body straight through and only withholds the trailing `</body>…` tail (normally just `</body></html>`), flushing the block immediately before `</body>` once the full set of rendered scripts is known. Nested partials rendered inside a page never emit their own block — auto-include is a page-level concern. The single-node `render(...)` entry never injects.
 

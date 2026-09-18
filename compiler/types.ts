@@ -27,11 +27,21 @@ interface BaseRoot {
 export interface NamedPartialRoot extends BaseRoot {
 	kind: 'named',
 }
+/**
+ * Client-JS generation mode for a custom-element partial, from `b-generate` (or
+ * implied by `b-script`). Undefined means no client JS is generated at all.
+ *  - 'render' → the patch shell only; the author writes the whole web component.
+ *  - 'base'   → plus an HTMLElement subclass for the author to extend and define.
+ *  - 'full'   → plus the customElements.define() call.
+ */
+export type GenerateMode = 'render' | 'base' | 'full';
+
 export interface CustomElementPartialRoot extends BaseRoot {
 	kind: 'custom-element',
 	definitionAttrNames?: string[],  // effective attribute names on the definition's wrapping tag
 	definitionAttrs?: AttrPart[],    // attr-parts for the definition's wrapping tag. Renders the definition's attrs in childCtx at call sites.
 	bAttrs?: { name: string; isBool: boolean; loc?: SourceLoc }[],  // declared b-attr:* directives on the custom element definition tag
+	generate?: GenerateMode,         // client-JS generation mode; absent means nothing is generated
 	scripts?: PartialScript[],       // scripts the renderer auto-includes for this partial. 'entry' items come from b-script (an @name/... path until resolveAssetRefs rewrites it); 'dependency' items are the generated dom-patch module, stamped by applyDomPatch.
 }
 
@@ -130,6 +140,7 @@ export interface PartialDef {
 	name: string;            // partial name (b-name value, or hyphenated tag name for custom element partials)
 	exported: boolean;       // has b-export attribute
 	customElement: boolean;  // true when defined as a top-level hyphenated tag (custom element partial)
+	generatesJs?: boolean;   // definition tag carries b-generate or b-script, so it produces a client module
 	loc: {
 		filename: string;    // relative path of the file that defines this partial
 		from: number;        // 1-based line number of the opening tag

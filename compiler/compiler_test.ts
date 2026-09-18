@@ -377,7 +377,7 @@ Deno.test("compileFile: custom element call site stores callerAttrs", async () =
 // ---- compileFile: b-attr on custom element partial definitions ----
 
 Deno.test("compileFile: b-attr declarations populate partialRoot.bAttrs", async () => {
-	const { compiled, errors } = await compileFile('<my-widget b-attr:premium b-attr:checked.bool>body</my-widget>');
+	const { compiled, errors } = await compileFile('<my-widget b-generate="full" b-attr:premium b-attr:checked.bool>body</my-widget>');
 	assertEquals(errors.length, 0);
 	const root = compiled.partials.get('my-widget');
 	assertExists(root);
@@ -446,7 +446,7 @@ Deno.test("compileFile: b-attr on a b-part call is an error", async () => {
 });
 
 Deno.test("compileFile: b-attr with uppercase letters in name produces warning", async () => {
-	const { errors } = await compileFile('<my-widget b-attr:fooBar>body</my-widget>');
+	const { errors } = await compileFile('<my-widget b-generate="full" b-attr:fooBar>body</my-widget>');
 	const warnings = errors.filter(e => e.severity === 'warning');
 	const fatal = errors.filter(e => e.severity !== 'warning');
 	assertEquals(fatal.length, 0);
@@ -456,14 +456,14 @@ Deno.test("compileFile: b-attr with uppercase letters in name produces warning",
 });
 
 Deno.test("compileFile: b-attr with all uppercase letters in name produces warning", async () => {
-	const { errors } = await compileFile('<my-widget b-attr:PREMIUM>body</my-widget>');
+	const { errors } = await compileFile('<my-widget b-generate="full" b-attr:PREMIUM>body</my-widget>');
 	const warnings = errors.filter(e => e.severity === 'warning');
 	assertEquals(warnings.length, 1);
 	assertStringIncludes(warnings[0].message, 'PREMIUM');
 });
 
 Deno.test("compileFile: b-attr with uppercase letters and .bool modifier produces warning", async () => {
-	const { errors } = await compileFile('<my-widget b-attr:isPremium.bool>body</my-widget>');
+	const { errors } = await compileFile('<my-widget b-generate="full" b-attr:isPremium.bool>body</my-widget>');
 	const warnings = errors.filter(e => e.severity === 'warning');
 	const fatal = errors.filter(e => e.severity !== 'warning');
 	assertEquals(fatal.length, 0);
@@ -472,12 +472,12 @@ Deno.test("compileFile: b-attr with uppercase letters and .bool modifier produce
 });
 
 Deno.test("compileFile: b-attr with all-lowercase name produces no uppercase warning", async () => {
-	const { errors } = await compileFile('<my-widget b-attr:premium b-attr:foo-bar.bool>body</my-widget>');
+	const { errors } = await compileFile('<my-widget b-generate="full" b-attr:premium b-attr:foo-bar.bool>body</my-widget>');
 	assertEquals(errors.length, 0);
 });
 
 Deno.test("compileFile: b-attr declared name is excluded from definitionAttrNames", async () => {
-	const { compiled, errors } = await compileFile('<my-widget b-attr:premium class="card">body</my-widget>');
+	const { compiled, errors } = await compileFile('<my-widget b-generate="full" b-attr:premium class="card">body</my-widget>');
 	assertEquals(errors.length, 0);
 	const root = compiled.partials.get('my-widget');
 	assertExists(root);
@@ -525,7 +525,7 @@ Deno.test("compileFile: call site captures bare attribute as plain with empty va
 
 Deno.test("compileFile: b-attr declarations are not rendered on definition open tag", async () => {
 	const { compiled, errors } = await compileFile(
-		'<my-widget b-attr:premium b-attr:checked.bool class="card">body</my-widget>'
+		'<my-widget b-generate="full" b-attr:premium b-attr:checked.bool class="card">body</my-widget>'
 	);
 	assertEquals(errors.length, 0);
 	const root = compiled.partials.get('my-widget')!;
@@ -2280,3 +2280,153 @@ Deno.test("expression errors: disallowed operator in slot text interpolation rep
 	assertExists(errors[0].endCol);
 });
 
+
+// ---- b-generate ----
+
+/** Warnings only, by message fragment — the b-generate diagnostics are all warnings. */
+function warningsOf(errors: BackflipError[]): string[] {
+	return errors.filter(e => e.severity === 'warning').map(e => e.message);
+}
+
+Deno.test("b-generate: an explicit value is stored on the definition", async () => {
+	for (const mode of ['render', 'base', 'full'] as const) {
+		const { compiled, errors } = await compileFile(
+			`<my-widget b-attr:title b-generate="${mode}"><span :data-x="title">x</span></my-widget>`
+		);
+		assertEquals(errors.filter(e => e.severity !== 'warning').length, 0);
+		const root = compiled.partials.get('my-widget')! as CustomElementPartialRoot;
+		assertEquals(root.generate, mode);
+	}
+});
+
+Deno.test("b-generate: absent with no b-script generates nothing", async () => {
+	const { compiled } = await compileFile(
+		`<my-widget b-attr:title><span :data-x="title">x</span></my-widget>`
+	);
+	const root = compiled.partials.get('my-widget')! as CustomElementPartialRoot;
+	assertEquals(root.generate, undefined);
+});
+
+Deno.test("b-generate: b-script implies base", async () => {
+	const assetMap = new Map([['scripts', '/js/']]);
+	const { compiled, errors } = await compileFile(
+		`<my-widget b-attr:title b-script="@scripts/my-widget.js"><span :data-x="title">x</span></my-widget>`,
+		undefined, 'test.html', { assetMap }
+	);
+	assertEquals(errors.length, 0);
+	const root = compiled.partials.get('my-widget')! as CustomElementPartialRoot;
+	assertEquals(root.generate, 'base');
+});
+
+Deno.test("b-generate: an explicit value wins over the b-script default", async () => {
+	const assetMap = new Map([['scripts', '/js/']]);
+	const { compiled } = await compileFile(
+		`<my-widget b-attr:title b-generate="render" b-script="@scripts/my-widget.js"><span :data-x="title">x</span></my-widget>`,
+		undefined, 'test.html', { assetMap }
+	);
+	const root = compiled.partials.get('my-widget')! as CustomElementPartialRoot;
+	assertEquals(root.generate, 'render');
+});
+
+Deno.test("b-generate: an unknown value is an error naming the three modes", async () => {
+	const { errors } = await compileFile(`<my-widget b-generate="sideways">x</my-widget>`);
+	const fatal = errors.filter(e => e.severity !== 'warning');
+	assertEquals(fatal.length, 1);
+	assertStringIncludes(fatal[0].message, 'unknown b-generate value "sideways"');
+	assertStringIncludes(fatal[0].message, '"render", "base", "full"');
+});
+
+Deno.test("b-generate: a bare directive (no value) is an error", async () => {
+	const { errors } = await compileFile(`<my-widget b-generate>x</my-widget>`);
+	const fatal = errors.filter(e => e.severity !== 'warning');
+	assertEquals(fatal.length, 1);
+	assertStringIncludes(fatal[0].message, 'b-generate requires a value');
+});
+
+Deno.test("b-generate: more than one on a definition is an error", async () => {
+	const { compiled, errors } = await compileFile(`<my-widget b-generate="full" b-generate="base">x</my-widget>`);
+	// As for b-script: HTML parsers drop duplicate attributes, so this also exercises
+	// the single-value path. Either way the first value wins and nothing crashes.
+	const fatal = errors.filter(e => e.severity !== 'warning');
+	const ok = fatal.some(e => e.message.includes('more than one b-generate')) || fatal.length === 0;
+	assert(ok, fatal.map(e => e.message).join('; '));
+	const root = compiled.partials.get('my-widget')! as CustomElementPartialRoot;
+	assertEquals(root.generate, 'full');
+});
+
+Deno.test("b-generate: on a non-definition element is an error", async () => {
+	const { errors } = await compileFile(`<b-unwrap b-name="page"><div b-generate="full">hi</div></b-unwrap>`);
+	assertEquals(
+		errors.some(e => e.message.includes('b-generate is only allowed on custom element partial definitions')),
+		true,
+	);
+});
+
+Deno.test("b-generate: the directive does not leak into the rendered definition tag", async () => {
+	const { compiled } = await compileFile(
+		`<my-widget b-generate="full" class="card"><span>x</span></my-widget>`
+	);
+	const root = compiled.partials.get('my-widget')! as CustomElementPartialRoot;
+	assertEquals(JSON.stringify(root.definitionAttrs ?? []).includes('b-generate'), false);
+	assertEquals((root.definitionAttrNames ?? []).includes('b-generate'), false);
+});
+
+Deno.test("b-generate: a reserved custom element name cannot be defined", async () => {
+	const { errors } = await compileFile(`<font-face b-generate="full"><span>x</span></font-face>`);
+	const fatal = errors.filter(e => e.severity !== 'warning');
+	assertEquals(fatal.length, 1);
+	assertStringIncludes(fatal[0].message, 'reserved element name');
+	// 'render' generates no element class, so it never reaches customElements.define.
+	const ok = await compileFile(`<font-face b-generate="render"><span>x</span></font-face>`);
+	assertEquals(ok.errors.filter(e => e.severity !== 'warning').length, 0);
+});
+
+// --- the three warnings ---
+
+Deno.test("b-generate: b-attr with no mode warns that nothing is generated", async () => {
+	const { errors } = await compileFile(
+		`<my-widget b-attr:title><span :data-x="title">x</span></my-widget>`
+	);
+	const warnings = warningsOf(errors);
+	assertEquals(warnings.length, 1);
+	assertStringIncludes(warnings[0], 'declares b-attr:title but generates no client JS');
+	assertEquals(errors.filter(e => e.severity !== 'warning').length, 0);
+});
+
+Deno.test("b-generate: no b-attr and no mode is silent", async () => {
+	const { errors } = await compileFile(`<my-widget class="card"><span>x</span></my-widget>`);
+	assertEquals(errors.length, 0);
+});
+
+Deno.test("b-generate: base or render without b-script warns that nothing loads the module", async () => {
+	for (const mode of ['base', 'render'] as const) {
+		const { errors } = await compileFile(
+			`<my-widget b-attr:title b-generate="${mode}"><span :data-x="title">x</span></my-widget>`
+		);
+		const warnings = warningsOf(errors);
+		assertEquals(warnings.length, 1, `for ${mode}: ${warnings.join(' | ')}`);
+		assertStringIncludes(warnings[0], 'no b-script to load it');
+	}
+});
+
+Deno.test("b-generate: full without b-script is silent", async () => {
+	const { errors } = await compileFile(
+		`<my-widget b-attr:title b-generate="full"><span :data-x="title">x</span></my-widget>`
+	);
+	assertEquals(errors.length, 0);
+});
+
+Deno.test("b-generate: full together with b-script warns about the double define", async () => {
+	const assetMap = new Map([['scripts', '/js/']]);
+	const { compiled, errors } = await compileFile(
+		`<my-widget b-attr:title b-generate="full" b-script="@scripts/my-widget.js"><span :data-x="title">x</span></my-widget>`,
+		undefined, 'test.html', { assetMap }
+	);
+	const warnings = warningsOf(errors);
+	assertEquals(warnings.length, 1);
+	assertStringIncludes(warnings[0], 'already calls customElements.define()');
+	// It stays a warning: the b-script entry is still recorded and injected.
+	const root = compiled.partials.get('my-widget')! as CustomElementPartialRoot;
+	assertEquals(root.scripts!.some(s => s.kind === 'entry'), true);
+	assertEquals(root.generate, 'full');
+});

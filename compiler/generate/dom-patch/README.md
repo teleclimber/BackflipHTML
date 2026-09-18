@@ -1,6 +1,8 @@
 # DOM-patch generator
 
-Produces a JavaScript file with, per custom-element partial that has at least one reactive attribute, an exported `BackflipMyElement` shell plus a tree of module-private **patch-branch** classes. Together they let browser-side code update specific attributes, prints, and `b-if` branches of the rendered subtree when one of the custom element's own attributes changes — without re-rendering the whole thing. See [patch-branches](#patch-branches).
+Produces one JavaScript module per custom-element partial that asks for client JS with [`b-generate`](../../../docs/partials.md#generated-client-js-b-generate). Each module holds an exported `BackflipMyElement` shell plus a tree of module-private **patch-branch** classes, which let browser-side code update specific attributes, prints, and `b-if` branches of the rendered subtree when one of the custom element's own attributes changes — without re-rendering the whole thing. See [patch-branches](#patch-branches). For `b-generate="base"` and `"full"` the module also carries the [custom element class](#the-custom-element-class) that drives the shell.
+
+Modules are written flat at the dom-patch output root, named after the partial's tag (`my-widget.js`). One partial per module keeps the auto-include kind unambiguous — a `full` partial's module is executed, a `base` partial's is preloaded — and means a page only loads the elements it rendered. It is also why a partial that generates JS must have a project-unique tag name.
 
 ## How it fits
 
@@ -28,7 +30,7 @@ A site qualifies when **all** of these hold:
 
 Sites that don't qualify are silently ignored: `b-for` iterables and `b-data:` bindings. Static caller attrs and caller attrs referencing non-live vars are not patched. Slot contents are not entered (they live in the caller's scope). A `b-part` call inlines its partial with no stable element, so nothing on it is patchable.
 
-If a partial produces zero classes, it contributes nothing to the file. If a file produces zero classes, no file is emitted.
+A partial with no `b-generate` (and no `b-script` implying one) is skipped entirely. In `render` mode a partial with no qualifying site produces nothing; in `base` and `full` the module is emitted anyway, since the author asked for a class whether or not it patches.
 
 ## v1 limitation: no for-loop sites
 
@@ -42,7 +44,7 @@ Attr and print patching edits DOM that is already there. An if-set instead **ren
 
 Three consequences shape the design:
 
-- **`render.js` is a build input.** The generated module does `import { render } from './render.js'`, and the CLI copies `dist/runtime/js/render.js` into the root of the dom-patch output dir. The specifier is depth-relative (`foo/bar.js` → `../render.js`), computed by `renderImportPathFor()`. If the `dist` file is missing the build **errors and stops** — a silent skip would ship a page that 404s on import. `applyDomPatch` reports `needsRender` so the CLI knows whether the copy is required, and the preview server maps `<domPatchOutputDir>/render.js` to the same `dist` file.
+- **`render.js` is a build input.** The generated module does `import { render } from './render.js'`, and the CLI copies `dist/runtime/js/render.js` into the root of the dom-patch output dir. Every module sits at that root, so the specifier is always `./render.js`. If the `dist` file is missing the build **errors and stops** — a silent skip would ship a page that 404s on import. `applyDomPatch` reports `needsRender` so the CLI knows whether the copy is required, and the preview server maps `<domPatchOutputDir>/render.js` to the same `dist` file.
 - **Snapshots are taken after all AST mutation, recursively.** `applyDomPatch` runs two passes per partial over the patch-branch tree (see [patch-branches](#patch-branches)): pass 1 mutates the AST at every depth (`data-bfid`s, print markers, and every set's marker pair), pass 2 snapshots each set's `IfTNode`. Taking a snapshot before every nested marker exists would produce a client-rendered branch missing markers the server-rendered HTML has, and every patch site inside it — including a nested set's anchors — would stop working.
 - **The HTML becomes DOM via `range.createContextualFragment()`**, with the range's contents set to the target element, so a branch is parsed in its real parent context (a `<tr>` under a `<tbody>` survives).
 
@@ -81,7 +83,7 @@ Within a single patch-branch, if-set handling runs **first** in a `mutate_<var>`
 The mutation logic lives in **patch-branches** (see [patch-branches](#patch-branches)); `BackflipMyElement` is a thin shell that owns the host, `collectData()`, and the root patch-branch. For a partial `my-element` with live vars `title` and `flag`:
 
 ```js
-import { render } from './render.js';   // only when the file has at least one if-set
+import { render } from './render.js';   // only when the module has at least one if-set
 
 const bfif_<setId> = { type:'if', branches: [ ... ] };   // one per if-set, module level
 
@@ -107,7 +109,7 @@ export class BackflipMyElement {
 }
 ```
 
-Only `BackflipMyElement` is exported (the auto-included entry references it); the `BackflipPatch_*` classes are module-private.
+`BackflipMyElement` is exported; the `BackflipPatch_*` classes are module-private. `b-generate="base"` and `"full"` append `BackflipMyElementElement` (also exported) and, for `"full"`, the `customElements.define` call — see [the custom element class](#the-custom-element-class).
 
 Inside a `mutate_<varName>` body, **set handling runs first** (see [Ordering](#ordering-within-mutate_var)): for each owned set driven by the var, `mutate_` either calls `this.renderIf_<setId>(data)` (the var is in a branch condition), forwards the change to the active child — `const pb = this.if_pb_<setId>.get(this.if_<setId>); if (pb) pb.update('<var>', data);` — or does both under an `if (!this.renderIf_<setId>(data)) { …forward… }` guard (re-render *or* forward, never both). Then the branch's own sites run, grouped by element: `ref-element` sites (the patch-branch's own ref element — including the custom element for the root) use `elem = this.ref_elem;`; descendant sites use `elem = this.sel_<bfid>();`. Each group is guarded once; a null lookup logs `console.error(...)` and skips, since it means the rendered DOM diverged from the compiled template.
 
@@ -138,16 +140,42 @@ A **patch-branch** owns patching for a DOM subtree that is either wholly present
 
 The bfid and attribute function name must be valid JS identifiers, but the runtime DOM call must use the original (stripped) attribute name. So `data-foo` becomes `bc_<bfid>_data_foo` in the function name but stays `'data-foo'` in `setAttribute`.
 
+## The custom element class
+
+`b-generate="base"` and `"full"` add `export class BackflipMyWidgetElement extends HTMLElement` below the shell; `"full"` also adds a guarded `customElements.define('my-widget', BackflipMyWidgetElement)`. The element class is the lifecycle half and does nothing else — it constructs the shell and forwards attribute changes to it:
+
+```js
+export class BackflipMyWidgetElement extends HTMLElement {
+    static observedAttributes = ['count'];
+    connectedCallback() { this.bfInit(); }
+    attributeChangedCallback(name, oldValue, newValue) { ... }
+    bfInit() { ... this.bfPatch = new BackflipMyWidget(this); ... }
+}
+```
+
+Each rule it is built around comes from the custom elements spec, not from preference:
+
+- **Nothing happens in the constructor.** A custom element constructor may not inspect its attributes or children, which is exactly what the shell does. There is no constructor at all; `bfInit()` runs from `connectedCallback`.
+- **`connectedCallback` can run mid-parse**, when the element's children do not exist yet. `bfInit` checks `ownerDocument.readyState === 'loading'` and, in that case, waits for `DOMContentLoaded` instead of patching into a half-built subtree. It is also idempotent, since moving an element re-fires `connectedCallback`.
+- **`attributeChangedCallback` fires before `connectedCallback`**, once per observed attribute, during upgrade. Those calls must not patch — the server-rendered DOM already matches — so they are collected in `bfPending` and replayed by `bfInit`, which fixes an attribute that genuinely changed between parse and upgrade. A change with `oldValue === newValue` is skipped, since `setAttribute` fires the callback either way.
+- **`observedAttributes` and the lifecycle callbacks are read once**, at `define()` time, off the registered class. A `base` subclass that overrides `observedAttributes` without spreading `super.observedAttributes` silently loses all reactivity, so `bfInit` compares the two and `console.error`s the missing names. A forgotten `super.connectedCallback()` is documented, not detectable.
+- **Everything the class owns is `bf`-prefixed** (`bfPatch`, `bfPending`, `bfInit`, `bfCheckObserved`), leaving the plain namespace to a subclass.
+- **The define is guarded** with `customElements.get`: a name may be registered once, and an unguarded throw would take the rest of the module with it.
+
+Known limitation: the replay covers attr and print sites, but not an if-set whose condition changed before init — the patch-branch constructor computes the active index from current data and trusts the server to have rendered that branch (the same assumption noted for [active-branch tracking](#active-branch-tracking)).
+
+Patching targets server-rendered DOM, so an element created with `document.createElement` has nothing to patch; that is documented as unsupported. No shadow root is ever attached.
+
 ## Entry point
 
-`applyDomPatch(file, opts?)` mutates the CompiledFile in place and returns `{ js: string | null, needsRender: boolean }` — `needsRender` is true when the generated module imports `render.js`, i.e. it contains at least one if-set. `opts` is `{ bfidGen?, scriptUrl?, renderImportPath? }`:
+`applyDomPatch(file, opts?)` mutates the CompiledFile in place and returns `{ modules }` — one `{ tagName, js, needsRender }` per partial in the file that generates client JS. `needsRender` is true when that module imports `render.js`, i.e. it contains at least one if-set. `moduleFileName(tagName)` names its file. `opts` is `{ bfidGen?, scriptUrlFor?, renderImportPath? }`:
 
-- `bfidGen` — deterministic id generator (`makeSequentialBfidGen()`) in tests; production uses the default crypto-random generator.
-- `renderImportPath` — specifier for the JS runtime's `render.js`, used only when the file has an if-set. Defaults to `'./render.js'`; the CLI and preview pass a depth-relative path via `renderImportPathFor(outRelPath)`.
-- `scriptUrl` — public URL of the JS file this run produces. When set, every partial that produces a patch class is stamped with `root.scriptUrl = scriptUrl` (on the `CustomElementPartialRoot`). Partials that produce **no** class are left unstamped, even when they share a file with one that does — a partial with no reactive sites needs no script. When `scriptUrl` is absent, generation is unchanged and nothing is stamped.
+- `bfidGen` — deterministic id generator (`makeSequentialBfidGen()`) in tests; production uses the default crypto-random generator. One generator is shared across a file's partials, so ids stay distinct across its modules.
+- `renderImportPath` — overrides the `render.js` specifier (`'./render.js'`); tests use it to assert the import line.
+- `scriptUrlFor(tagName)` — public URL of that partial's module. When it returns a URL, the partial's root is stamped with a script the renderer auto-includes: an `'entry'` for `b-generate="full"` (the module registers the element itself), a `'dependency'` otherwise. Partials that produce no module are left untouched. When the option is absent, generation is unchanged and nothing is stamped.
 
 ## Script auto-include
 
-The stamped `scriptUrl` flows through the JS and PHP generators into the emitted root node, and the **renderer** auto-includes the scripts of the reactive custom-element partials it actually renders — there is no manual `<script>` step. The CLI derives each file's URL from the asset prefix that covers the dom-patch output dir (see [Assets](../../../docs/assets.md) and [Configuration](../../../docs/configuration.md)); if no asset prefix covers the output dir it warns and the scripts are not auto-included.
+The stamped script flows through the JS and PHP generators into the emitted root node, and the **renderer** auto-includes the scripts of the custom-element partials it actually renders — there is no manual `<script>` step. The CLI derives each module's URL from the asset prefix that covers the dom-patch output dir (see [Assets](../../../docs/assets.md) and [Configuration](../../../docs/configuration.md)); if no asset prefix covers the output dir it warns and the scripts are not auto-included.
 
 Inclusion follows what actually rendered server-side: a custom element in an untaken `b-if`/`b-else` branch, or a `b-for` over an empty iterable, contributes no script. Reactive `b-if` sets do toggle branches client-side, but this stays correct because **a branch containing a partial reference of any kind disqualifies its whole set** (see [b-if sets](#b-if-sets)). So a branch that is untaken server-side can never later introduce a custom element whose script was not included — any set that could do that is not reactive in the first place.

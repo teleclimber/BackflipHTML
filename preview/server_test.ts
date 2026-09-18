@@ -281,7 +281,7 @@ async function compileCustomElement(html: string): Promise<CompiledFile> {
 
 Deno.test("server serves generated dom-patch JS for a dom-patch dir nested inside an asset dir", async () => {
 	const file = await compileCustomElement(
-		`<my-badge b-attr:tone><span :data-tone="tone">badge</span></my-badge>`
+		`<my-badge b-attr:tone b-generate="full"><span :data-tone="tone">badge</span></my-badge>`
 	);
 	const tmpDir = await Deno.makeTempDir({ prefix: 'srv-bfdom-' });
 	// Asset dir is `static/`; dom-patch output goes to the `static/bfdom` SUBDIR.
@@ -305,11 +305,11 @@ Deno.test("server serves generated dom-patch JS for a dom-patch dir nested insid
 	const htmlBfid = previewRes._body.match(/data-bfid="([^"]+)"/)?.[1];
 	assertEquals(typeof htmlBfid, 'string');
 	// The map keys on the nested build destination, not the asset dir root.
-	assertEquals(dpCtx.domPatchAssets!.has(path.join(buildDir, 'badge.js')), true);
+	assertEquals(dpCtx.domPatchAssets!.has(path.join(buildDir, 'my-badge.js')), true);
 
 	// A request resolving to that nested path is served the fresh JS (no disk read).
 	const jsRes = mockRes();
-	await handleRequest(mockReq('/__assets/static/bfdom/badge.js'), jsRes, dpCtx);
+	await handleRequest(mockReq('/__assets/static/bfdom/my-badge.js'), jsRes, dpCtx);
 	assertEquals(jsRes._status, 200);
 	assertStringIncludes(jsRes._headers['Content-Type'], 'javascript');
 	const jsBfid = String(jsRes._body).match(/data-bfid="([^"]+)"/)?.[1];

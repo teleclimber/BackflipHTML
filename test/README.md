@@ -25,6 +25,9 @@ This runs `deno test --allow-read --allow-write --allow-run=php,deno` and covers
 | `integration_php_test.ts` | PHP pipeline: compile → generate PHP → execute via `php` subprocess → compare output. |
 | `integration_error_test.ts` | Compilation error detection: structural errors, invalid directives, missing partials. |
 | `cli_test.ts` | CLI argument parsing, config-based compilation, output directory handling. |
+| `dom_patch_autoinclude_test.ts` | Script auto-include: the module each `b-generate` mode contributes, its URL, and where the renderer injects it (JS and PHP). |
+| `dom_patch_if_test.ts` | Reactive `b-if`: the `render.js` build input, nested patch-branch classes, and the copied runtime a generated module imports. |
+| `dom_patch_generate_test.ts` | `b-generate="full"` end to end: CLI build → server render → the generated module patching that HTML in jsdom. |
 
 ## Template fixtures
 

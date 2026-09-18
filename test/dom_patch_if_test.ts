@@ -95,7 +95,7 @@ Deno.test("integration CLI: render.js is copied into the dom-patch output root",
 		// It is the real compiled runtime, not a stub.
 		assertStringIncludes(await fs.readFile(renderPath, "utf-8"), "export function render");
 
-		const generated = await fs.readFile(path.join(workDir, "bfdom", "app.js"), "utf-8");
+		const generated = await fs.readFile(path.join(workDir, "bfdom", "mode-badge.js"), "utf-8");
 		assertStringIncludes(generated, "import { render } from './render.js';");
 		assertStringIncludes(generated, "createContextualFragment");
 	} finally {
@@ -109,7 +109,7 @@ Deno.test("integration CLI: a nested b-if compiles to nested patch-branch classe
 		const { code, stderr } = await runCli(workDir);
 		assertEquals(code, 0, `cli failed: ${stderr}`);
 
-		const generated = await fs.readFile(path.join(workDir, "bfdom", "app.js"), "utf-8");
+		const generated = await fs.readFile(path.join(workDir, "bfdom", "mode-badge.js"), "utf-8");
 		// Two set snapshots (outer + inner) and a nested patch-branch class.
 		assertEquals((generated.match(/const bfif_/g) ?? []).length, 2);
 		assertStringIncludes(generated, "class BackflipPatch_ModeBadge {");
@@ -126,21 +126,24 @@ Deno.test("integration CLI: a nested b-if compiles to nested patch-branch classe
 	}
 });
 
-Deno.test("integration CLI: a nested module's import specifier resolves to the copied render.js", async () => {
+// A module is named after its partial and sits flat at the output root, however deep
+// the template that defines it — so its render.js import is always './render.js'.
+Deno.test("integration CLI: a partial from a nested template still lands flat beside render.js", async () => {
 	const workDir = await makeProject(path.join("deep", "nested", "app.html"), APP_HTML);
 	try {
 		const { code, stderr } = await runCli(workDir);
 		assertEquals(code, 0, `cli failed: ${stderr}`);
 
-		const modulePath = path.join(workDir, "bfdom", "deep", "nested", "app.js");
+		const modulePath = path.join(workDir, "bfdom", "mode-badge.js");
 		const generated = await fs.readFile(modulePath, "utf-8");
-		assertStringIncludes(generated, "import { render } from '../../render.js';");
+		assertStringIncludes(generated, "import { render } from './render.js';");
+		assertEquals(await exists(path.join(workDir, "bfdom", "deep")), false);
 
 		// Resolve the specifier the way the browser would, and check it lands on a real file.
 		const spec = generated.match(/import \{ render \} from '([^']+)';/)![1];
 		const resolved = path.resolve(path.dirname(modulePath), spec);
 		assertEquals(resolved, path.join(workDir, "bfdom", "render.js"));
-		assertEquals(await exists(resolved), true, "the nested import must resolve to a real file");
+		assertEquals(await exists(resolved), true, "the import must resolve to a real file");
 	} finally {
 		await fs.rm(workDir, { recursive: true, force: true });
 	}
@@ -151,7 +154,7 @@ Deno.test("integration CLI: no b-if means no import and no copied render.js", as
 	try {
 		const { code, stderr } = await runCli(workDir);
 		assertEquals(code, 0, `cli failed: ${stderr}`);
-		const generated = await fs.readFile(path.join(workDir, "bfdom", "app.js"), "utf-8");
+		const generated = await fs.readFile(path.join(workDir, "bfdom", "mode-badge.js"), "utf-8");
 		assertEquals(generated.includes("import"), false);
 		assertEquals(await exists(path.join(workDir, "bfdom", "render.js")), false);
 	} finally {

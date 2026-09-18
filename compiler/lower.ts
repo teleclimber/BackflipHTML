@@ -17,7 +17,7 @@ import type {
 	SourceLoc, TNode, RawTNode, PrintTNode, ForTNode, IfTNode, IfBranch,
 	SlotTNode, PartialRefTNode, BPartCallTNode, CustomElementCallTNode, ParentTNode,
 	RootTNode, NamedPartialRoot, CustomElementPartialRoot, CompiledFile, CompileOptions, PartialDef, PartialBinding,
-	ElementTNode, AttrPart,
+	ElementTNode, AttrPart, GenerateMode,
 } from './types.js';
 
 /**
@@ -225,22 +225,21 @@ function collectBDataBindings(el: SourceElement, ctx: Ctx): PartialBinding[] {
 	return bindings;
 }
 
-// b-attr:* / b-script are only meaningful on a custom element partial definition.
-// Reported for every other element, inside a partial or not.
+// b-attr:* / b-script / b-generate are only meaningful on a custom element partial
+// definition. Reported for every other element, inside a partial or not.
+const DEFINITION_ONLY_DIRECTIVES = ['b-script', 'b-generate'];
+
 function reportDirectiveMisplacement(el: SourceElement, ctx: Ctx): void {
 	for (const attr of el.attrs) {
-		if (attr.name.startsWith('b-attr:')) {
-			ctx.errors.push(new BackflipError(
-				`b-attr is only allowed on custom element partial definitions`,
-				attrErrLoc(el, attr.name, ctx)
-			));
-		}
-		if (attr.name === 'b-script') {
-			ctx.errors.push(new BackflipError(
-				`b-script is only allowed on custom element partial definitions`,
-				attrErrLoc(el, attr.name, ctx)
-			));
-		}
+		// The reported name is the directive, not the attribute: `b-attr:foo` is `b-attr`.
+		const directive = attr.name.startsWith('b-attr:')
+			? 'b-attr'
+			: DEFINITION_ONLY_DIRECTIVES.find(d => d === attr.name);
+		if (!directive) continue;
+		ctx.errors.push(new BackflipError(
+			`${directive} is only allowed on custom element partial definitions`,
+			attrErrLoc(el, attr.name, ctx)
+		));
 	}
 }
 
@@ -513,6 +512,41 @@ function lowerNamedDefinition(el: SourceElement, bNameAttr: SourceAttr, ctx: Ctx
 	if (endOffset !== undefined) partialRoot.meta!.endOffset = endOffset;
 }
 
+// Hyphenated names the custom-elements registry reserves; `define()` throws on them.
+const RESERVED_ELEMENT_NAMES = new Set([
+	'annotation-xml', 'color-profile', 'font-face', 'font-face-src', 'font-face-uri',
+	'font-face-format', 'font-face-name', 'missing-glyph',
+]);
+
+const GENERATE_MODES: GenerateMode[] = ['render', 'base', 'full'];
+
+/**
+ * The generation mode for a custom element definition: the `b-generate` value when
+ * present, else 'base' when a b-script names an author module to load, else undefined
+ * (nothing is generated). Errors are reported against the directive.
+ */
+function parseGenerateMode(el: SourceElement, ctx: Ctx, hasScript: boolean): GenerateMode | undefined {
+	const attrs = el.attrs.filter(a => a.name === 'b-generate');
+	if (attrs.length > 1) {
+		ctx.errors.push(new BackflipError(
+			`more than one b-generate on a custom element definition`,
+			attrErrLoc(el, 'b-generate', ctx) ?? tagErrLoc(el, ctx)
+		));
+	}
+	if (attrs.length === 0) return hasScript ? 'base' : undefined;
+
+	const value = attrs[0].value;
+	if (!GENERATE_MODES.includes(value as GenerateMode)) {
+		const what = value === '' ? 'b-generate requires a value' : `unknown b-generate value "${value}"`;
+		ctx.errors.push(new BackflipError(
+			`${what} (expected ${GENERATE_MODES.map(m => `"${m}"`).join(', ')})`,
+			attrErrLoc(el, 'b-generate', ctx) ?? tagErrLoc(el, ctx)
+		));
+		return hasScript ? 'base' : undefined;
+	}
+	return value as GenerateMode;
+}
+
 function lowerCustomElementDefinition(el: SourceElement, ctx: Ctx): void {
 	// Pre-conditions: top level, no b-name attr, and isCustomElementTagName —
 	// lowerTopLevelNode guarantees these.
@@ -626,6 +660,38 @@ function lowerCustomElementDefinition(el: SourceElement, ctx: Ctx): void {
 				...(refs[0].subpathLoc ? { subpathLoc: refs[0].subpathLoc } : {}),
 			});
 		}
+	}
+
+	// Parse b-generate: which client JS this partial produces. `b-script` (an author
+	// module that registers the element) implies 'base'; with neither directive nothing
+	// is generated, whatever the partial's b-attrs.
+	const hasScript = bScriptAttrs.length > 0;
+	const mode = parseGenerateMode(el, ctx, hasScript);
+	if (mode) partialRoot.generate = mode;
+
+	if (mode === undefined && bAttrs.length > 0) {
+		ctx.errors.push(new BackflipError(
+			`<${partialName}> declares b-attr:${bAttrs[0].name} but generates no client JS; add b-generate="full" (or b-script=) for the attribute to patch the DOM in the browser`,
+			{ ...(tagErrLoc(el, ctx) ?? { filename: ctx.filename }), severity: 'warning' }
+		));
+	}
+	if ((mode === 'base' || mode === 'render') && !hasScript) {
+		ctx.errors.push(new BackflipError(
+			`<${partialName}> generates a client module (b-generate="${mode}") but has no b-script to load it; nothing will register the element`,
+			{ ...(tagErrLoc(el, ctx) ?? { filename: ctx.filename }), severity: 'warning' }
+		));
+	}
+	if (mode === 'full' && hasScript) {
+		ctx.errors.push(new BackflipError(
+			`<${partialName}> has b-generate="full", which already calls customElements.define(); the b-script module is injected too and will throw if it defines the same element`,
+			{ ...(attrErrLoc(el, 'b-script', ctx) ?? tagErrLoc(el, ctx) ?? { filename: ctx.filename }), severity: 'warning' }
+		));
+	}
+	if ((mode === 'base' || mode === 'full') && RESERVED_ELEMENT_NAMES.has(partialName)) {
+		ctx.errors.push(new BackflipError(
+			`<${partialName}> cannot be registered as a custom element: "${partialName}" is a reserved element name, so customElements.define() would throw`,
+			tagErrLoc(el, ctx)
+		));
 	}
 
 	ctx.compiledFile.partials.set(partialName, partialRoot);

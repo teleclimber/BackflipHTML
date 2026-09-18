@@ -24,7 +24,7 @@ const CLI_PATH = new URL("../cli.ts", import.meta.url).pathname;
 const RENDER_PHP = new URL("../runtime/php/render.php", import.meta.url).pathname;
 
 // A reactive custom element (`count-badge`) and a page partial that uses it.
-const APP_HTML = `<count-badge b-attr:count>
+const APP_HTML = `<count-badge b-attr:count b-generate="base">
 	<span :data-count="count">{{ count }}</span>
 </count-badge>
 
@@ -70,8 +70,8 @@ async function buildJsPartial(partialName: string, config: BackflipConfig): Prom
 	const root = await writeTemplates({ "app.html": APP_HTML });
 	try {
 		const { directory } = await compileDirectory(root);
-		for (const [relPath, file] of directory.files) {
-			applyDomPatch(file, { scriptUrl: resolveDomPatchScriptUrl("/proj", config, relPath) ?? undefined });
+		for (const [, file] of directory.files) {
+			applyDomPatch(file, { scriptUrlFor: tag => resolveDomPatchScriptUrl("/proj", config, `${tag}.js`) ?? undefined });
 		}
 		const file = directory.files.get("app.html")!;
 		const js = fileToJsModule(file, "app.html");
@@ -94,12 +94,12 @@ async function buildAndRenderJs(partialName: string, ctx: any, config: BackflipC
 Deno.test("integration JS: reactive custom element injects resolved script once before </body>", async () => {
 	const html = await buildAndRenderJs("page", {}, COVERED_CONFIG);
 	assertEquals(html.match(/<link rel="modulepreload"/g)?.length, 1);
-	assertStringIncludes(html, '<link rel="modulepreload" href="/bfdom/app.js"></body>');
+	assertStringIncludes(html, '<link rel="modulepreload" href="/bfdom/count-badge.js"></body>');
 });
 
 Deno.test("integration JS: untaken b-if branch excludes the script (rendered-only)", async () => {
 	const taken = await buildAndRenderJs("conditional-page", { show: true }, COVERED_CONFIG);
-	assertStringIncludes(taken, '<link rel="modulepreload" href="/bfdom/app.js">');
+	assertStringIncludes(taken, '<link rel="modulepreload" href="/bfdom/count-badge.js">');
 
 	const untaken = await buildAndRenderJs("conditional-page", { show: false }, COVERED_CONFIG);
 	assertEquals(untaken.includes("<link"), false);
@@ -109,7 +109,7 @@ Deno.test("integration JS streaming: reactive custom element injects resolved sc
 	const rnode = await buildJsPartial("page", COVERED_CONFIG);
 	const streamed = Array.from(streamRenderRoot(rnode, {})).join("");
 	assertEquals(streamed.match(/<link rel="modulepreload"/g)?.length, 1);
-	assertStringIncludes(streamed, '<link rel="modulepreload" href="/bfdom/app.js"></body>');
+	assertStringIncludes(streamed, '<link rel="modulepreload" href="/bfdom/count-badge.js"></body>');
 	// Streaming output must equal batch output (same build, so bfids match).
 	assertEquals(streamed, renderRoot(rnode, {}));
 });
@@ -117,7 +117,7 @@ Deno.test("integration JS streaming: reactive custom element injects resolved sc
 Deno.test("integration JS streaming: untaken b-if branch excludes the script", async () => {
 	const rnode = await buildJsPartial("conditional-page", COVERED_CONFIG);
 	const taken = Array.from(streamRenderRoot(rnode, { show: true })).join("");
-	assertStringIncludes(taken, '<link rel="modulepreload" href="/bfdom/app.js">');
+	assertStringIncludes(taken, '<link rel="modulepreload" href="/bfdom/count-badge.js">');
 
 	const untaken = Array.from(streamRenderRoot(rnode, { show: false })).join("");
 	assertEquals(untaken.includes("<link"), false);
@@ -127,8 +127,8 @@ Deno.test("integration PHP: reactive custom element injects resolved script befo
 	const root = await writeTemplates({ "app.html": APP_HTML });
 	try {
 		const { directory } = await compileDirectory(root);
-		for (const [relPath, file] of directory.files) {
-			applyDomPatch(file, { scriptUrl: resolveDomPatchScriptUrl("/proj", COVERED_CONFIG, relPath) ?? undefined });
+		for (const [, file] of directory.files) {
+			applyDomPatch(file, { scriptUrlFor: tag => resolveDomPatchScriptUrl("/proj", COVERED_CONFIG, `${tag}.js`) ?? undefined });
 		}
 		const phpPath = path.join(root, "app.php");
 		await fs.writeFile(phpPath, fileToPhpFile(directory.files.get("app.html")!, "app.html"));
@@ -146,7 +146,7 @@ echo backflip_renderRoot($partials['page'], []);
 		const stderr = new TextDecoder().decode(out.stderr);
 		assertEquals(out.code, 0, `php failed: ${stderr}`);
 		assertEquals(stdout.match(/<link rel="modulepreload"/g)?.length, 1);
-		assertStringIncludes(stdout, '<link rel="modulepreload" href="/bfdom/app.js"></body>');
+		assertStringIncludes(stdout, '<link rel="modulepreload" href="/bfdom/count-badge.js"></body>');
 	} finally {
 		await fs.rm(root, { recursive: true, force: true });
 	}
@@ -156,8 +156,8 @@ Deno.test("integration PHP streaming: injects resolved script before </body> and
 	const root = await writeTemplates({ "app.html": APP_HTML });
 	try {
 		const { directory } = await compileDirectory(root);
-		for (const [relPath, file] of directory.files) {
-			applyDomPatch(file, { scriptUrl: resolveDomPatchScriptUrl("/proj", COVERED_CONFIG, relPath) ?? undefined });
+		for (const [, file] of directory.files) {
+			applyDomPatch(file, { scriptUrlFor: tag => resolveDomPatchScriptUrl("/proj", COVERED_CONFIG, `${tag}.js`) ?? undefined });
 		}
 		const phpPath = path.join(root, "app.php");
 		await fs.writeFile(phpPath, fileToPhpFile(directory.files.get("app.html")!, "app.html"));
@@ -180,7 +180,7 @@ echo $stream . "\\0" . backflip_renderRoot($partials['page'], []);
 		assertEquals(out.code, 0, `php failed: ${stderr}`);
 		const [streamed, batched] = stdout.split("\0");
 		assertEquals(streamed.match(/<link rel="modulepreload"/g)?.length, 1);
-		assertStringIncludes(streamed, '<link rel="modulepreload" href="/bfdom/app.js"></body>');
+		assertStringIncludes(streamed, '<link rel="modulepreload" href="/bfdom/count-badge.js"></body>');
 		assertEquals(streamed, batched);
 	} finally {
 		await fs.rm(root, { recursive: true, force: true });
@@ -267,7 +267,7 @@ Deno.test("integration CLI: b-script entry + generated dependency both emitted, 
 
 		const generatedJs = await fs.readFile(path.join(workDir, "dist", "app.js"), "utf-8");
 		assertStringIncludes(generatedJs, "{ url: '/scripts/count-badge.js', kind: 'entry' }");
-		assertStringIncludes(generatedJs, "{ url: '/bfdom/app.js', kind: 'dependency' }");
+		assertStringIncludes(generatedJs, "{ url: '/bfdom/count-badge.js', kind: 'dependency' }");
 	} finally {
 		await fs.rm(workDir, { recursive: true, force: true });
 	}
@@ -308,6 +308,111 @@ Deno.test("integration CLI: a missing b-script file is reported at the asset pat
 		// Line 1, at the subpath within `b-script="@scripts/count-badge.js"`.
 		const col = APP_WITH_BSCRIPT.split("\n")[0].indexOf("count-badge.js") + 1;
 		assertStringIncludes(stderr, `app.html:1:${col}:`);
+	} finally {
+		await fs.rm(workDir, { recursive: true, force: true });
+	}
+});
+
+async function exists(p: string): Promise<boolean> {
+	try { await Deno.stat(p); return true; } catch { return false; }
+}
+
+// --- b-generate modes end-to-end -------------------------------------------
+
+// Three partials in one template file, one per mode. Each produces its own module,
+// named after its tag, and the mode decides how the renderer injects it.
+const APP_MODES = `<full-el b-attr:tone b-generate="full">
+	<span :data-tone="tone">full</span>
+</full-el>
+
+<base-el b-attr:tone b-script="@scripts/base-el.js">
+	<span :data-tone="tone">base</span>
+</base-el>
+
+<b-unwrap b-name="page" b-export>
+	<body>
+		<full-el tone="a"></full-el>
+		<base-el tone="b"></base-el>
+	</body>
+</b-unwrap>`;
+
+const MODES_CONFIG: BackflipConfig = {
+	root: ".",
+	output: [{ lang: "dom-patch", path: "bfdom" }, { lang: "js", path: "dist" }],
+	assets: [
+		{ name: "bfdom", path: "bfdom", prefix: "/bfdom/" },
+		{ name: "scripts", path: "scripts", prefix: "/scripts/" },
+	],
+};
+
+Deno.test("integration JS: full is injected as a module script, base as a preloaded dependency", async () => {
+	const root = await writeTemplates({ "app.html": APP_MODES });
+	try {
+		const { directory } = await compileDirectory(root);
+		for (const [, file] of directory.files) {
+			applyDomPatch(file, { scriptUrlFor: tag => resolveDomPatchScriptUrl("/proj", MODES_CONFIG, `${tag}.js`) ?? undefined });
+		}
+		const js = fileToJsModule(directory.files.get("app.html")!, "app.html");
+		const exportNames: string[] = [];
+		const re = /^export const (\w+)/gm;
+		let m;
+		while ((m = re.exec(js)) !== null) exportNames.push(m[1]);
+		const mod = new Function(js.replace(/^export const /gm, "const ") + `\nreturn { ${exportNames.join(", ")} };`)();
+		const html = renderRoot(mod[sanitize("page")] as RootRNode, {});
+
+		// full-el registers itself, so its module is executed.
+		assertStringIncludes(html, '<script src="/bfdom/full-el.js" type="module"></script>');
+		// base-el's module is imported by the author's entry, so it is only preloaded.
+		// (The entry itself needs the asset map a real build supplies — see the CLI test.)
+		assertStringIncludes(html, '<link rel="modulepreload" href="/bfdom/base-el.js">');
+		// Preloads come first, and nothing is injected twice.
+		assertEquals(html.match(/<link rel="modulepreload"/g)?.length, 1);
+		assertEquals(html.match(/<script /g)?.length, 1);
+		assertEquals(html.indexOf('<link rel="modulepreload"') < html.indexOf('<script '), true);
+	} finally {
+		await fs.rm(root, { recursive: true, force: true });
+	}
+});
+
+Deno.test("integration CLI: each partial gets its own module, named after its tag", async () => {
+	const workDir = path.join(TMPDIR, `cli_modes_${Date.now()}`);
+	const templatesDir = path.join(workDir, "templates");
+	await fs.mkdir(templatesDir, { recursive: true });
+	await fs.writeFile(path.join(templatesDir, "app.html"), APP_MODES);
+	await fs.mkdir(path.join(workDir, "scripts"), { recursive: true });
+	await fs.writeFile(path.join(workDir, "scripts", "base-el.js"), "// hand-coded\n");
+	await fs.mkdir(path.join(workDir, "bfdom"), { recursive: true });
+	await fs.writeFile(path.join(workDir, "backflip.json"), JSON.stringify({ ...MODES_CONFIG, root: "templates" }));
+
+	try {
+		const cmd = new Deno.Command("deno", {
+			args: ["run", "--allow-read", "--allow-write", CLI_PATH],
+			cwd: workDir,
+			stdout: "piped",
+			stderr: "piped",
+		});
+		const out = await cmd.output();
+		const stderr = new TextDecoder().decode(out.stderr);
+		assertEquals(out.code, 0, `cli failed: ${stderr}`);
+		assertEquals(stderr.includes("warning:"), false, `unexpected warning: ${stderr}`);
+
+		// One file per partial, named for the tag — not for app.html.
+		const fullJs = await fs.readFile(path.join(workDir, "bfdom", "full-el.js"), "utf-8");
+		const baseJs = await fs.readFile(path.join(workDir, "bfdom", "base-el.js"), "utf-8");
+		assertEquals(await exists(path.join(workDir, "bfdom", "app.js")), false);
+
+		assertStringIncludes(fullJs, "export class BackflipFullElElement extends HTMLElement");
+		assertStringIncludes(fullJs, "customElements.define('full-el', BackflipFullElElement)");
+		assertEquals(fullJs.includes("BackflipBaseEl"), false);
+
+		assertStringIncludes(baseJs, "export class BackflipBaseElElement extends HTMLElement");
+		assertEquals(baseJs.includes("customElements.define"), false);
+
+		// Each partial is stamped with its own module, and the mode picks the kind.
+		const pageJs = await fs.readFile(path.join(workDir, "dist", "app.js"), "utf-8");
+		assertStringIncludes(pageJs, "{ url: '/bfdom/full-el.js', kind: 'entry' }");
+		assertStringIncludes(pageJs, "{ url: '/scripts/base-el.js', kind: 'entry' }");
+		assertStringIncludes(pageJs, "{ url: '/bfdom/base-el.js', kind: 'dependency' }");
 	} finally {
 		await fs.rm(workDir, { recursive: true, force: true });
 	}

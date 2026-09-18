@@ -94,10 +94,15 @@ export function scanPartials(html: string, filename: string): Promise<{ defs: Pa
                         loc: { filename, from: startLine, to: isContainer ? startLine : endLine },
                     };
                 } else if (isCustomElementTagName(tag.tagName)) {
+                    // b-generate (or b-script, which implies it) means this definition
+                    // produces a client module — which the tag name identifies, so two
+                    // such definitions of one name collide. See validateCustomElementUniqueness.
+                    const generatesJs = tag.attrs.some(a => a.name === 'b-generate' || a.name === 'b-script');
                     def = {
                         name: tag.tagName,
                         exported,
                         customElement: true,
+                        ...(generatesJs ? { generatesJs } : {}),
                         loc: { filename, from: startLine, to: isContainer ? startLine : endLine },
                     };
                 }
@@ -437,6 +442,10 @@ function validateTNode(
  * Rule: Once a custom element partial name is exported anywhere in the directory,
  * no other definition (exported or not) of that same name is allowed in any file.
  * Two unexported definitions with the same name in different files are fine.
+ *
+ * Second rule: a definition that generates client JS owns the tag name in the browser
+ * (its module is named after it, and `customElements.define` accepts one class per
+ * name), so a name with more than one definition may not have a generating one.
  */
 export function validateCustomElementUniqueness(
     registry: PartialRegistry
@@ -455,6 +464,17 @@ export function validateCustomElementUniqueness(
     }
 
     for (const [name, occurrences] of byName) {
+        if (occurrences.length > 1 && occurrences.some(d => d.generatesJs)) {
+            const locs = occurrences.map(d => `${d.loc.filename}:${d.loc.from}`).join(', ');
+            for (const d of occurrences) {
+                errors.push(new BackflipError(
+                    `custom element partial <${name}> generates client JS, so its name must be unique across the project (defined in: ${locs})`,
+                    { filename: d.loc.filename, line: d.loc.from }
+                ));
+            }
+            continue;   // one report per name is enough; the export rule would repeat it
+        }
+
         const exported = occurrences.filter(d => d.exported);
         if (exported.length === 0) continue; // all unexported: same name across files is OK
 

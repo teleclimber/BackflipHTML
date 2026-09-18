@@ -41,7 +41,7 @@ Deno.test("resolveDomPatchScriptUrl - asset dir equals output dir", () => {
 		output: [{ lang: "dom-patch", path: "static/bfdom" }],
 		assets: [{ name: "bfdom", path: "static/bfdom", prefix: "/bfdom/" }],
 	};
-	assertEquals(resolveDomPatchScriptUrl("/proj", config, "widget.html"), "/bfdom/widget.js");
+	assertEquals(resolveDomPatchScriptUrl("/proj", config, "my-widget.js"), "/bfdom/my-widget.js");
 });
 
 Deno.test("resolveDomPatchScriptUrl - asset dir is an ancestor of output dir", () => {
@@ -50,16 +50,16 @@ Deno.test("resolveDomPatchScriptUrl - asset dir is an ancestor of output dir", (
 		output: [{ lang: "dom-patch", path: "static/bfdom" }],
 		assets: [{ name: "static", path: "static", prefix: "/static/" }],
 	};
-	assertEquals(resolveDomPatchScriptUrl("/proj", config, "widget.html"), "/static/bfdom/widget.js");
+	assertEquals(resolveDomPatchScriptUrl("/proj", config, "my-widget.js"), "/static/bfdom/my-widget.js");
 });
 
-Deno.test("resolveDomPatchScriptUrl - nested template path keeps POSIX separators", () => {
+Deno.test("resolveDomPatchScriptUrl - nested output dir keeps POSIX separators", () => {
 	const config: BackflipConfig = {
 		root: "templates",
-		output: [{ lang: "dom-patch", path: "static/bfdom" }],
-		assets: [{ name: "bfdom", path: "static/bfdom", prefix: "/bfdom/" }],
+		output: [{ lang: "dom-patch", path: "static/js/bfdom" }],
+		assets: [{ name: "static", path: "static", prefix: "/static/" }],
 	};
-	assertEquals(resolveDomPatchScriptUrl("/proj", config, "graphics/charts.html"), "/bfdom/graphics/charts.js");
+	assertEquals(resolveDomPatchScriptUrl("/proj", config, "my-widget.js"), "/static/js/bfdom/my-widget.js");
 });
 
 Deno.test("resolveDomPatchScriptUrl - no dom-patch output returns null", () => {
@@ -68,7 +68,7 @@ Deno.test("resolveDomPatchScriptUrl - no dom-patch output returns null", () => {
 		output: [{ lang: "js", path: "dist" }],
 		assets: [{ name: "static", path: "static", prefix: "/static/" }],
 	};
-	assertEquals(resolveDomPatchScriptUrl("/proj", config, "widget.html"), null);
+	assertEquals(resolveDomPatchScriptUrl("/proj", config, "my-widget.js"), null);
 });
 
 Deno.test("resolveDomPatchScriptUrl - output dir not under any asset prefix returns null", () => {
@@ -77,7 +77,7 @@ Deno.test("resolveDomPatchScriptUrl - output dir not under any asset prefix retu
 		output: [{ lang: "dom-patch", path: "build/bfdom" }],
 		assets: [{ name: "static", path: "static", prefix: "/static/" }],
 	};
-	assertEquals(resolveDomPatchScriptUrl("/proj", config, "widget.html"), null);
+	assertEquals(resolveDomPatchScriptUrl("/proj", config, "my-widget.js"), null);
 });
 
 Deno.test("resolveDomPatchScriptUrl - picks most specific (longest) asset dir on overlap", () => {
@@ -89,7 +89,7 @@ Deno.test("resolveDomPatchScriptUrl - picks most specific (longest) asset dir on
 			{ name: "bfdom", path: "static/bfdom", prefix: "/bfdom/" },
 		],
 	};
-	assertEquals(resolveDomPatchScriptUrl("/proj", config, "widget.html"), "/bfdom/widget.js");
+	assertEquals(resolveDomPatchScriptUrl("/proj", config, "my-widget.js"), "/bfdom/my-widget.js");
 });
 
 Deno.test("loadConfig - returns null when no config file exists", async () => {

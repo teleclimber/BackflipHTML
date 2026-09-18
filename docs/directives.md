@@ -61,7 +61,7 @@ The element is repeated once per item in `collection`. `item` is a new variable 
 
 All three directives compile to a single `IfTNode`. They can be nested freely inside `b-for` blocks and other `b-if` blocks.
 
-**Client-side reactivity.** Inside a custom-element partial, a `b-if` set whose conditions are driven by `b-attr` variables re-renders in the browser when those attributes change — the branch is rendered client-side and swapped into place. Sets may be **nested**: an inner set becomes its own patch unit, so changing an inner condition re-renders just the inner branch, and content inside a rendered branch keeps patching. This applies to a set that is:
+**Client-side reactivity.** Inside a custom-element partial that generates client JS (see [`b-generate`](partials.md#generated-client-js-b-generate)), a `b-if` set whose conditions are driven by `b-attr` variables re-renders in the browser when those attributes change — the branch is rendered client-side and swapped into place. Sets may be **nested**: an inner set becomes its own patch unit, so changing an inner condition re-renders just the inner branch, and content inside a rendered branch keeps patching. This applies to a set that is:
 
 - not inside a `b-for`;
 - driven only by `b-attr` variables in its own branch conditions — an expression elsewhere in the set, or a condition mixing in a non-`b-attr` variable, disqualifies the whole set;

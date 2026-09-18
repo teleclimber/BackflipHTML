@@ -1,6 +1,7 @@
 import { generateStatement } from '../js/generatejs.js';
 import { commentMarker } from './bfid.js';
 import type { BackcodeSite, IfSetSite } from './collect.js';
+import type { GenerateMode } from '../../types.js';
 
 /**
  * Where a site's DOM node is, relative to the owning patch-branch's `ref_elem`.
@@ -55,6 +56,11 @@ export interface PatchBranch {
 	vars: string[];
 }
 
+/** `BackflipMyWidgetElement` — the HTMLElement subclass, emitted for 'base' and 'full'. */
+export function elementClassNameFor(partialName: string): string {
+	return classNameFor(partialName) + 'Element';
+}
+
 export function classNameFor(partialName: string): string {
 	const parts = partialName.split('-').filter(s => s.length > 0);
 	const camel = parts.map(s => s[0].toUpperCase() + s.slice(1)).join('');
@@ -72,16 +78,22 @@ export function sanitizeAttrName(name: string): string {
 
 /**
  * Emit the whole cluster for one partial: the module-level `bfif_<setId>` snapshot
- * consts (from every set in the tree), each `BackflipPatch_*` class depth-first, and
- * finally the thin `export class BackflipMyElement` shell. Returns null when the root
- * branch has nothing to patch.
+ * consts (from every set in the tree), each `BackflipPatch_*` class depth-first, the
+ * thin `export class BackflipMyElement` shell, and — for 'base' and 'full' — the
+ * HTMLElement subclass that drives it, plus its `customElements.define` for 'full'.
+ *
+ * Returns null in 'render' mode when the root branch has nothing to patch: the shell
+ * would have no work to do and the author asked for nothing else. 'base' and 'full'
+ * always emit, since the author asked for a class whether or not it patches anything.
  */
 export function generateClassForPartial(
 	partialName: string,
 	bAttrs: { name: string; isBool: boolean }[],
 	root: PatchBranch,
+	mode: GenerateMode,
 ): string | null {
-	if (root.sites.length === 0 && root.sets.length === 0) return null;
+	const patches = root.sites.length > 0 || root.sets.length > 0;
+	if (!patches && mode === 'render') return null;
 
 	const allSets = collectAllSets(root);
 	const consts = allSets.map(s => `const ${ifConstName(s.setId)} = ${s.snapshot};`);
@@ -91,6 +103,12 @@ export function generateClassForPartial(
 	const parts: string[] = [];
 	if (consts.length) parts.push(consts.join('\n'), '');
 	parts.push(patchClasses, '', shell);
+	if (mode === 'base' || mode === 'full') {
+		parts.push('', genCustomElementClass(partialName, bAttrs));
+	}
+	if (mode === 'full') {
+		parts.push('', genDefine(partialName));
+	}
 	return parts.join('\n');
 }
 
@@ -508,4 +526,85 @@ function genElementShell(
 		'\t}',
 		'}',
 	].join('\n');
+}
+
+// --- the custom element class ('base' and 'full') --------------------------
+
+/**
+ * `BackflipMyWidgetElement extends HTMLElement` — the lifecycle half, driving the
+ * shell above. Everything it owns is `bf`-prefixed so a 'base' subclass has the
+ * plain namespace to itself; `bfPatch` is the documented handle on the shell.
+ *
+ * Nothing runs in the constructor: a custom element constructor may not inspect its
+ * attributes or children, which is exactly what the shell does. `bfInit` is idempotent
+ * (connectedCallback fires again whenever the element is moved) and defers while the
+ * document is still parsing, since a parser-driven connect happens before the
+ * element's children exist.
+ */
+function genCustomElementClass(
+	partialName: string,
+	bAttrs: { name: string; isBool: boolean }[],
+): string {
+	const className = elementClassNameFor(partialName);
+	const shellName = classNameFor(partialName);
+	const observed = bAttrs.map(b => `'${b.name}'`).join(', ');
+
+	const lines = [
+		`export class ${className} extends HTMLElement {`,
+		`\tstatic observedAttributes = [${observed}];`,
+		'\tconnectedCallback() {',
+		'\t\tthis.bfInit();',
+		'\t}',
+		'\tattributeChangedCallback(name, oldValue, newValue) {',
+		'\t\t// setAttribute with an unchanged value still fires this.',
+		'\t\tif (oldValue === newValue) return;',
+		'\t\tif (!this.bfPatch) {',
+		'\t\t\t// Upgrade replays every observed attribute before connectedCallback, and the',
+		'\t\t\t// server-rendered DOM already matches those. A change that really happened',
+		'\t\t\t// before init is replayed by bfInit.',
+		'\t\t\t(this.bfPending ??= new Set()).add(name);',
+		'\t\t\treturn;',
+		'\t\t}',
+		'\t\tthis.bfPatch.update(name);',
+		'\t}',
+		'\tbfInit() {',
+		'\t\tif (this.bfPatch) return;',
+		"\t\tif (this.ownerDocument.readyState === 'loading') {",
+		'\t\t\t// Connected by the parser: our children are not all here yet.',
+		"\t\t\tthis.ownerDocument.addEventListener('DOMContentLoaded', () => this.bfInit(), { once: true });",
+		'\t\t\treturn;',
+		'\t\t}',
+	];
+	if (bAttrs.length > 0) lines.push('\t\tthis.bfCheckObserved();');
+	lines.push(
+		`\t\tthis.bfPatch = new ${shellName}(this);`,
+		'\t\tif (this.bfPending) {',
+		'\t\t\tfor (const name of this.bfPending) this.bfPatch.update(name);',
+		'\t\t\tthis.bfPending = null;',
+		'\t\t}',
+		'\t}',
+	);
+	if (bAttrs.length > 0) {
+		// observedAttributes is read once, at define() time, off the registered class, so
+		// a subclass that overrides it without spreading loses reactivity silently.
+		lines.push(
+			'\tbfCheckObserved() {',
+			`\t\tconst declared = [${observed}];`,
+			'\t\tconst observed = this.constructor.observedAttributes ?? [];',
+			'\t\tconst missing = declared.filter(n => !observed.includes(n));',
+			'\t\tif (missing.length) {',
+			`\t\t\tconsole.error('BackflipHTML <${partialName}>: observedAttributes is missing ' + missing.join(', ') + '; a subclass overriding it must spread super.observedAttributes', this);`,
+			'\t\t}',
+			'\t}',
+		);
+	}
+	lines.push('}');
+	return lines.join('\n');
+}
+
+// A name may be registered once. Two copies of one module (or an author module
+// defining the same tag) would otherwise throw and take the rest of the module down.
+function genDefine(partialName: string): string {
+	const className = elementClassNameFor(partialName);
+	return `if (!customElements.get('${partialName}')) customElements.define('${partialName}', ${className});`;
 }

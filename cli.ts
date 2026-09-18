@@ -5,7 +5,7 @@ import { compileDirectory } from './compiler/partials.ts';
 import { loadConfig, resolveConfigRoot, resolveAssetDirs, resolveDomPatchOutputDirs, resolveDomPatchScriptUrl, type OutputConfig } from './compiler/config.ts';
 import { fileToJsModule } from './compiler/generate/js/nodes2js.ts';
 import { fileToPhpFile } from './compiler/generate/php/nodes2php.ts';
-import { applyDomPatch, renderImportPathFor } from './compiler/generate/dom-patch/nodes2patch.ts';
+import { applyDomPatch, moduleFileName } from './compiler/generate/dom-patch/nodes2patch.ts';
 import { resolveAssetRefs } from './compiler/helpers.ts';
 import { flattenCompiledFile } from './compiler/flatten.ts';
 import { discoverAssetFileInfos, collectAllAssetReferences, validateAssetFiles, buildAssetUsageReport, filterReport } from './assets/src/index.ts';
@@ -210,39 +210,29 @@ if (args.check) {
     // Dom-patch must run before js/php codegen — it mutates each CompiledFile in
     // place (appending `data-bfid="..."` static attrs to qualifying elements) so
     // the server-rendered HTML carries the ids the runtime class queries on.
-    const domPatchJs = new Map<string, string | null>();
+    // One module per custom-element partial, keyed by its file name at the output root.
+    const domPatchJs = new Map<string, string>();
     // Set when at least one generated module uses a b-if set, and so imports the
     // JS runtime's render.js from the root of the dom-patch output dir.
     let domPatchNeedsRender = false;
     if (outputs.some(o => o.lang === 'dom-patch')) {
-        // Each reactive partial is stamped with its script's public URL (derived
-        // from the asset prefix covering the dom-patch output dir) so the runtime
-        // can auto-include it. If the output dir isn't under any asset prefix the
-        // scripts can't be served; warn once.
+        // Each partial that generates a module is stamped with its script's public URL
+        // (derived from the asset prefix covering the dom-patch output dir) so the
+        // runtime can auto-include it. If the output dir isn't under any asset prefix
+        // the scripts can't be served; warn once.
         const domPatchDirs = config ? resolveDomPatchOutputDirs(Deno.cwd(), config) : [];
         let warnedUnservable = false;
-        for (const [relPath, compiledFile] of result.files) {
-            const scriptUrl = config ? (resolveDomPatchScriptUrl(Deno.cwd(), config, relPath) ?? undefined) : undefined;
-            // Output mirrors the template's relative path, so a nested module needs a
-            // depth-relative specifier to reach render.js at the output root.
-            const renderImportPath = renderImportPathFor(relPath.replace(/\.html$/, '.js'));
-            const { js, needsRender } = applyDomPatch(compiledFile, { renderImportPath, ...(scriptUrl !== undefined ? { scriptUrl } : {}) });
-            domPatchJs.set(relPath, js);
-            if (needsRender) domPatchNeedsRender = true;
-            if (js && scriptUrl === undefined && domPatchDirs.length > 0 && !warnedUnservable) {
-                console.warn(`warning: dom-patch output "${domPatchDirs.join('", "')}" is not covered by an asset prefix; generated scripts will not be auto-included. Add an asset entry whose directory contains this output dir.`);
-                warnedUnservable = true;
-            }
-            // A reactive partial carries a generated 'dependency' module, but it's only
-            // useful once a hand-coded entry module imports it. Warn when b-script is missing.
-            if (js) {
-                for (const [partialName, root] of compiledFile.partials) {
-                    if (root.kind !== 'custom-element' || !root.scripts) continue;
-                    const hasDep = root.scripts.some(s => s.kind === 'dependency');
-                    const hasEntry = root.scripts.some(s => s.kind === 'entry');
-                    if (hasDep && !hasEntry) {
-                        console.warn(`warning: <${partialName}> has generated dom-patch code but no b-script; its client module won't be auto-injected. Add b-script="@asset/..." on the definition pointing at the hand-coded web component.`);
-                    }
+        const scriptUrlFor = (tagName: string) => config
+            ? (resolveDomPatchScriptUrl(Deno.cwd(), config, moduleFileName(tagName)) ?? undefined)
+            : undefined;
+        for (const [, compiledFile] of result.files) {
+            const { modules } = applyDomPatch(compiledFile, { scriptUrlFor });
+            for (const mod of modules) {
+                domPatchJs.set(moduleFileName(mod.tagName), mod.js);
+                if (mod.needsRender) domPatchNeedsRender = true;
+                if (scriptUrlFor(mod.tagName) === undefined && domPatchDirs.length > 0 && !warnedUnservable) {
+                    console.warn(`warning: dom-patch output "${domPatchDirs.join('", "')}" is not covered by an asset prefix; generated scripts will not be auto-included. Add an asset entry whose directory contains this output dir.`);
+                    warnedUnservable = true;
                 }
             }
         }
@@ -265,18 +255,20 @@ if (args.check) {
 
     for (const out of outputs) {
         let count = 0;
+        if (out.lang === 'dom-patch') {
+            // One flat file per custom-element partial, named after its tag.
+            for (const [fileName, js] of domPatchJs) {
+                const outPath = join(out.path, fileName);
+                Deno.mkdirSync(dirname(outPath), { recursive: true });
+                Deno.writeTextFileSync(outPath, js);
+                count++;
+            }
+        }
         for (const [relPath, compiledFile] of result.files) {
+            if (out.lang === 'dom-patch') continue;   // written above, per partial
             const ext = out.lang === 'php' ? '.php' : '.js';
             const outRelPath = relPath.replace(/\.html$/, ext);
             const outPath = join(out.path, outRelPath);
-            if (out.lang === 'dom-patch') {
-                const generated = domPatchJs.get(relPath);
-                if (!generated) continue;
-                Deno.mkdirSync(dirname(outPath), { recursive: true });
-                Deno.writeTextFileSync(outPath, generated);
-                count++;
-                continue;
-            }
             const resolved = assetMap ? resolveAssetRefs(compiledFile, assetMap) : compiledFile;
             const flattened = flattenCompiledFile(resolved);
             const generated = out.lang === 'js'
@@ -286,8 +278,7 @@ if (args.check) {
             Deno.writeTextFileSync(outPath, generated);
             count++;
         }
-        // The generated modules import it from the output root as './render.js'
-        // (or '../'-prefixed for nested ones).
+        // The generated modules sit at the output root and import it as './render.js'.
         if (out.lang === 'dom-patch' && renderRuntimePath) {
             Deno.mkdirSync(out.path, { recursive: true });
             Deno.copyFileSync(renderRuntimePath, join(out.path, 'render.js'));

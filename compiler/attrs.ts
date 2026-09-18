@@ -47,6 +47,7 @@ export function effectiveAttrNames(attrs: { name: string, value: string }[]): st
 		if (n === 'b-name' || n === 'b-export') continue;
 		if (n === 'b-if' || n === 'b-for' || n === 'b-else' || n === 'b-else-if') continue;
 		if (n === 'b-part' || n === 'b-slot' || n === 'b-in') continue;
+		if (n === 'b-script' || n === 'b-generate') continue;
 		if (n.startsWith('b-data:')) continue;
 		if (n.startsWith('b-attr:')) continue;
 		if (n.startsWith('b-bind:')) { names.push(n.slice('b-bind:'.length).replace(/~$/, '')); continue; }
@@ -103,7 +104,7 @@ export function classifyOpenTagAttrs(
 	const errors: BackflipError[] = [];
 	let hasBind = false;
 	for (const attr of el.attrs) {
-		if (excludeAttrs.includes(attr.name) || attr.name.startsWith('b-data:') || attr.name.startsWith('b-attr:') || attr.name === 'b-script') continue;
+		if (excludeAttrs.includes(attr.name) || attr.name.startsWith('b-data:') || attr.name.startsWith('b-attr:') || attr.name === 'b-script' || attr.name === 'b-generate') continue;
 		if (isBindAttr(attr.name)) {
 			let bindName = getBindAttrName(attr.name);
 			let isAsset = false;

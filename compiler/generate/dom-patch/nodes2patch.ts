@@ -12,92 +12,99 @@ import {
 
 export type { BfidGen } from './bfid.js';
 
-/** Default specifier for the JS runtime's render.js, alongside the generated module. */
-export const DEFAULT_RENDER_IMPORT_PATH = './render.js';
-
 /**
- * The import specifier a generated module at `outRelPath` (relative to the
- * dom-patch output root, e.g. `foo/bar.js`) needs to reach `render.js`, which
- * the CLI copies into that root.
+ * Specifier for the JS runtime's render.js. Every generated module sits flat at the
+ * dom-patch output root, where the CLI copies render.js, so the path is fixed.
  */
-export function renderImportPathFor(outRelPath: string): string {
-	const depth = outRelPath.split('/').length - 1;
-	return depth === 0 ? DEFAULT_RENDER_IMPORT_PATH : '../'.repeat(depth) + 'render.js';
+export const RENDER_IMPORT_PATH = './render.js';
+
+/** The file a partial's module is written to, relative to the dom-patch output root. */
+export function moduleFileName(tagName: string): string {
+	return `${tagName}.js`;
+}
+
+/** One generated module: the client JS for a single custom-element partial. */
+export interface DomPatchModule {
+	/** The partial's tag name, which also names the file — see moduleFileName. */
+	tagName: string;
+	js: string;
+	/**
+	 * True when the module imports `render.js` (i.e. it contains at least one if-set).
+	 * The CLI uses this to decide whether the runtime file must be copied alongside.
+	 */
+	needsRender: boolean;
 }
 
 export interface DomPatchResult {
-	js: string | null;
-	/**
-	 * True when the generated module imports `render.js` (i.e. it contains at least
-	 * one if-set). The CLI uses this to decide whether the runtime file must be
-	 * copied into the output dir.
-	 */
-	needsRender: boolean;
+	/** One per custom-element partial in the file that generates client JS. */
+	modules: DomPatchModule[];
 }
 
 export interface DomPatchOptions {
 	bfidGen?: BfidGen;
 	/**
-	 * Public URL of the generated dom-patch module this run produces. When set,
-	 * every partial that produces a patch class gets a `{ url, kind: 'dependency' }`
-	 * entry appended to `root.scripts` so the renderer can preload it (it's imported
-	 * by the partial's hand-coded entry module). Partials that produce no class are
-	 * left untouched, even when they share a file with one that does.
+	 * Public URL of the module generated for a given partial. When it returns a URL,
+	 * that partial's root is stamped with a script the renderer auto-includes: an
+	 * 'entry' for `b-generate="full"` (the module registers the element itself), a
+	 * 'dependency' otherwise (an author module imports it). Partials that produce no
+	 * module are left untouched.
 	 */
-	scriptUrl?: string;
-	/**
-	 * Import specifier for the JS runtime's `render.js`, used by if-sets. Depends on
-	 * how deep this module sits in the dom-patch output dir — see renderImportPathFor.
-	 */
+	scriptUrlFor?: (tagName: string) => string | undefined;
+	/** Overrides the render.js specifier; tests use it to assert the import line. */
 	renderImportPath?: string;
 }
 
 export function applyDomPatch(file: CompiledFile, opts?: DomPatchOptions): DomPatchResult {
 	const gen = opts?.bfidGen ?? makeBfidGen();
-	const classes: string[] = [];
-	let anyIfSet = false;
+	const modules: DomPatchModule[] = [];
 
 	for (const [partialName, root] of file.partials) {
 		if (root.kind !== 'custom-element') continue;
+		// b-generate (or b-script, which implies it) is what asks for a module; without
+		// one nothing is generated, whatever the partial declares.
+		const mode = root.generate;
+		if (mode === undefined) continue;
+
 		const bAttrs = root.bAttrs ?? [];
 		const liveVarNames = new Set(bAttrs.map(b => b.name));
-		if (liveVarNames.size === 0) continue;
 
-		// Walk into a scope tree (qualification folded in — the tree's shape depends
-		// on which sets qualify).
-		const scope = collectPatchTree(root, liveVarNames, s => qualifies(s, liveVarNames));
+		// With no live vars there is nothing to patch, but 'base' and 'full' still owe
+		// the author a class — an empty patch-branch gives them one.
+		let rootBranch: PatchBranch = { className: patchClassNameFor(partialName), sites: [], sets: [], vars: [] };
+		if (liveVarNames.size > 0) {
+			// Walk into a scope tree (qualification folded in — the tree's shape depends
+			// on which sets qualify).
+			const scope = collectPatchTree(root, liveVarNames, s => qualifies(s, liveVarNames));
 
-		// Pass 1 — all AST mutation, every scope at every depth: allocate bfids and
-		// splice in every marker pair (attr/print/if-set), building the PatchBranch tree
-		// with ids and targets filled in. No snapshots yet.
-		const rootBranch = buildPatchBranch(scope, patchClassNameFor(partialName), liveVarNames, gen);
+			// Pass 1 — all AST mutation, every scope at every depth: allocate bfids and
+			// splice in every marker pair (attr/print/if-set), building the PatchBranch tree
+			// with ids and targets filled in. No snapshots yet.
+			rootBranch = buildPatchBranch(scope, patchClassNameFor(partialName), liveVarNames, gen);
 
-		if (rootBranch.sites.length === 0 && rootBranch.sets.length === 0) continue;
+			// Pass 2 — snapshots, now that every marker at every depth is in the tree.
+			fillSnapshots(rootBranch);
+		}
 
-		// Pass 2 — snapshots, now that every marker at every depth is in the tree.
-		fillSnapshots(rootBranch);
-		if (hasAnySet(rootBranch)) anyIfSet = true;
+		const cls = generateClassForPartial(partialName, bAttrs, rootBranch, mode);
+		if (!cls) continue;
 
-		const cls = generateClassForPartial(partialName, bAttrs, rootBranch);
-		if (cls) {
-			classes.push(cls);
-			// Only partials that produce a patch class need (and get) a generated module.
-			// Record it as a 'dependency' the renderer will <link rel="modulepreload">.
-			if (opts?.scriptUrl !== undefined) {
-				const url = opts.scriptUrl;
-				root.scripts ??= [];
-				if (!root.scripts.some(s => s.url === url && s.kind === 'dependency')) {
-					root.scripts.push({ url, kind: 'dependency' });
-				}
+		const needsRender = hasAnySet(rootBranch);
+		const renderImport = needsRender ? (opts?.renderImportPath ?? RENDER_IMPORT_PATH) : undefined;
+		modules.push({ tagName: partialName, js: generateFile([cls], renderImport), needsRender });
+
+		// Only partials that produce a module get a script. 'full' registers the element
+		// itself, so its module is an executed entry; otherwise an author module imports it.
+		const url = opts?.scriptUrlFor?.(partialName);
+		if (url !== undefined) {
+			const kind = mode === 'full' ? 'entry' : 'dependency';
+			root.scripts ??= [];
+			if (!root.scripts.some(s => s.url === url && s.kind === kind)) {
+				root.scripts.push({ url, kind });
 			}
 		}
 	}
 
-	if (classes.length === 0) return { js: null, needsRender: false };
-	const renderImport = anyIfSet
-		? (opts?.renderImportPath ?? DEFAULT_RENDER_IMPORT_PATH)
-		: undefined;
-	return { js: generateFile(classes, renderImport), needsRender: anyIfSet };
+	return { modules };
 }
 
 // Pass 1: turn a scope into a PatchBranch, allocating bfids/markers for its own

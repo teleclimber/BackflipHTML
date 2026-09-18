@@ -952,6 +952,37 @@ Deno.test("validateCustomElementUniqueness: error when same name exported in two
     assertStringIncludes(errors[0].message, 'my-card');
 });
 
+Deno.test("validateCustomElementUniqueness: error when a generating partial shares its name", () => {
+    // Two unexported definitions of one name are fine — until one of them generates a
+    // client module, which is named after the tag and registers it in the browser.
+    const reg: PartialRegistry = new Map([
+        ['a.html', [{ ...mkDef({ name: 'my-card', exported: false, customElement: true, filename: 'a.html' }), generatesJs: true }]],
+        ['b.html', [mkDef({ name: 'my-card', exported: false, customElement: true, filename: 'b.html' })]],
+    ]);
+    const errors = validateCustomElementUniqueness(reg);
+    assertEquals(errors.length, 2);   // one per definition, so both spans are flagged
+    assertStringIncludes(errors[0].message, 'generates client JS');
+    assertStringIncludes(errors[0].message, 'a.html:1, b.html:1');
+});
+
+Deno.test("validateCustomElementUniqueness: a generating partial with a unique name is fine", () => {
+    const reg: PartialRegistry = new Map([
+        ['a.html', [{ ...mkDef({ name: 'my-card', exported: false, customElement: true, filename: 'a.html' }), generatesJs: true }]],
+        ['b.html', [{ ...mkDef({ name: 'my-button', exported: false, customElement: true, filename: 'b.html' }), generatesJs: true }]],
+    ]);
+    assertEquals(validateCustomElementUniqueness(reg).length, 0);
+});
+
+Deno.test("scanPartials: b-generate and b-script mark a definition as generating", async () => {
+    const { defs } = await scanPartials(
+        `<plain-el></plain-el>\n<gen-el b-generate="full"></gen-el>\n<script-el b-script="@s/x.js"></script-el>`,
+        'a.html',
+    );
+    assertEquals(defs.map(d => [d.name, d.generatesJs ?? false]), [
+        ['plain-el', false], ['gen-el', true], ['script-el', true],
+    ]);
+});
+
 // --- compileDirectory: custom element partial resolution ---
 
 Deno.test("compileDirectory - same-file custom element call resolves without error", async () => {
@@ -1430,7 +1461,7 @@ Deno.test("compileDirectory - b-attr iterated with elementShape is an error", as
 Deno.test("compileDirectory - bool b-attr printed in body emits a warning", async () => {
     const dir = await makeTempDir("battr_bool_print_warn");
     await writeFile(path.join(dir, "page.html"), `
-        <my-widget b-attr:premium.bool>
+        <my-widget b-generate="full" b-attr:premium.bool>
             <span>{{ premium }}</span>
         </my-widget>
     `);
@@ -1447,7 +1478,7 @@ Deno.test("compileDirectory - bool b-attr printed in body emits a warning", asyn
 Deno.test("compileDirectory - string b-attr printed in body emits no warning or error", async () => {
     const dir = await makeTempDir("battr_string_print_ok");
     await writeFile(path.join(dir, "page.html"), `
-        <my-widget b-attr:premium>
+        <my-widget b-generate="full" b-attr:premium>
             <span>{{ premium }}</span>
         </my-widget>
     `);
@@ -1464,7 +1495,7 @@ Deno.test("compileDirectory - string b-attr printed in body emits no warning or 
 Deno.test("compileDirectory - string b-attr used as boolean (b-if) emits no warning", async () => {
     const dir = await makeTempDir("battr_string_as_bool_ok");
     await writeFile(path.join(dir, "page.html"), `
-        <my-widget b-attr:premium>
+        <my-widget b-generate="full" b-attr:premium>
             <p b-if="premium">premium content</p>
         </my-widget>
     `);
@@ -1479,7 +1510,7 @@ Deno.test("compileDirectory - string b-attr used as boolean (b-if) emits no warn
 Deno.test("compileDirectory - bool b-attr used as boolean (b-if) emits no warning (correct usage)", async () => {
     const dir = await makeTempDir("battr_bool_as_bool_ok");
     await writeFile(path.join(dir, "page.html"), `
-        <my-widget b-attr:premium.bool>
+        <my-widget b-generate="full" b-attr:premium.bool>
             <p b-if="premium">premium content</p>
         </my-widget>
     `);

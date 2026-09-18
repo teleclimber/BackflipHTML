@@ -215,7 +215,7 @@ async function compileCustomElement(html: string): Promise<CompiledFile> {
 
 Deno.test("preview injects data-bfid on reactive body element (matches build output)", async () => {
 	const compiledFile = await compileCustomElement(
-		`<my-badge b-attr:tone><span :data-tone="tone">badge</span></my-badge>`
+		`<my-badge b-attr:tone b-generate="full"><span :data-tone="tone">badge</span></my-badge>`
 	);
 	const result = await previewPartial({
 		partialName: 'my-badge',
@@ -229,7 +229,7 @@ Deno.test("preview injects data-bfid on reactive body element (matches build out
 
 Deno.test("preview captures dom-patch JS whose bfid matches the rendered HTML", async () => {
 	const compiledFile = await compileCustomElement(
-		`<my-badge b-attr:tone><span :data-tone="tone">badge</span></my-badge>`
+		`<my-badge b-attr:tone b-generate="full"><span :data-tone="tone">badge</span></my-badge>`
 	);
 	const outDir = await Deno.makeTempDir({ prefix: 'bfdom-' });
 	const buildDir = '/proj/server/static/bfdom'; // dom-patch output nested inside an asset dir
@@ -244,7 +244,7 @@ Deno.test("preview captures dom-patch JS whose bfid matches the rendered HTML", 
 	assertEquals(result.errors.length, 0);
 
 	// The map keys on the build destination; the value is where the JS was saved.
-	const buildDest = `${buildDir}/badge.js`;
+	const buildDest = `${buildDir}/my-badge.js`;
 	const savedPath = result.domPatchAssets?.[buildDest];
 	assertEquals(typeof savedPath, 'string');
 

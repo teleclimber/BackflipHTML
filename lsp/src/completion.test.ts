@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
-import { deepStrictEqual, strictEqual } from 'node:assert';
+import { deepStrictEqual, ok, strictEqual } from 'node:assert';
 import { CompletionItemKind, TextEdit } from 'vscode-languageserver';
-import { getAssetCompletions, type ReadDir } from './completion.js';
+import { getAssetCompletions, getGenerateCompletions, type ReadDir } from './completion.js';
 
 const assetDirs = new Map([
 	['assets', '/ws/assets'],
@@ -536,5 +536,38 @@ describe('getSlotCompletions', () => {
 		const edit = items[0].textEdit as TextEdit;
 		deepStrictEqual([edit.range.start.character, edit.range.end.character], [18, 22]);
 		strictEqual(edit.newText, 'header');
+	});
+});
+
+describe('getGenerateCompletions', () => {
+	/** Items for a line whose cursor is written as `|`. */
+	const at = (marked: string) =>
+		getGenerateCompletions(marked.replace('|', ''), marked.indexOf('|'), 3);
+
+	it('offers the three modes, most useful first', () => {
+		deepStrictEqual(at('<my-widget b-generate="|">').map(i => i.label), ['full', 'base', 'render']);
+	});
+
+	it('narrows to what has been typed', () => {
+		deepStrictEqual(at('<my-widget b-generate="ba|">').map(i => i.label), ['base']);
+		deepStrictEqual(at('<my-widget b-generate="zz|">').map(i => i.label), []);
+	});
+
+	it('replaces the whole value', () => {
+		const line = '<my-widget b-generate="ren|">';
+		const edit = at(line)[0].textEdit as TextEdit;
+		const valueStart = line.replace('|', '').indexOf('"') + 1;
+		deepStrictEqual([edit.range.start.character, edit.range.end.character], [valueStart, valueStart + 3]);
+		strictEqual(edit.newText, 'render');
+	});
+
+	it('says what each mode generates', () => {
+		const full = at('<my-widget b-generate="|">').find(i => i.label === 'full')!;
+		ok(String(full.detail).includes('no author JS'), String(full.detail));
+	});
+
+	it('offers nothing outside a b-generate value', () => {
+		deepStrictEqual(at('<my-widget b-script="@s/x|.js">'), []);
+		deepStrictEqual(at('<my-widget b-generate="full">|'), []);
 	});
 });

@@ -35,6 +35,7 @@ export function getHover(
 
 	return hoverCssSelector(line, position, filePath, cssAnalysis, cssPaths, templateRoot)
 		?? hoverAssetRef(line, position, assetDirs)
+		?? hoverBGenerate(line, position)
 		?? hoverBPart(line, position, filePath, index)
 		?? hoverBName(line, position, filePath, index, templateRoot)
 		?? hoverBIn(doc, line, position, filePath, index)
@@ -289,6 +290,34 @@ function hoverAssetRef(
 		`**Asset** \`@${ref.name}/${ref.subpath}\``,
 		`**Directory:** \`${dirPath}\``,
 		`**File:** \`${path.join(dirPath, ref.subpath)}\``,
+	]);
+}
+
+// --- b-generate hover ---
+
+const GENERATE_DOCS: Record<string, string[]> = {
+	full: [
+		'Generates the patch class, an `HTMLElement` subclass, and `customElements.define()`.',
+		'The element works with no author JS — so `b-script` is redundant here.',
+	],
+	base: [
+		'Generates the patch class and an `HTMLElement` subclass for you to extend.',
+		'Your `b-script` module subclasses it and calls `customElements.define()`.',
+		'A subclass overriding `observedAttributes` or a lifecycle callback must spread / call `super`.',
+	],
+	render: [
+		'Generates the patch class only; your `b-script` module writes the whole web component',
+		'and drives it: `new BackflipMyWidget(this)` and `update(attrName)`.',
+	],
+};
+
+function hoverBGenerate(line: string, position: Position): Hover | null {
+	const value = matchAttr(line, 'b-generate', position.character);
+	if (value === null) return null;
+	const docs = GENERATE_DOCS[value];
+	return mkHover([
+		`**\`b-generate="${value}"\`** — client JS generated for this custom element partial`,
+		...(docs ?? ['Expected `"render"`, `"base"` or `"full"`.']),
 	]);
 }
 
