@@ -753,3 +753,76 @@ Deno.test("php slot calls: b-for on a tag carrying b-in loops inside the slot", 
         "<div><div>H(<span>a</span><span>b</span>)B()</div></div>"
     );
 });
+
+// ---------------------------------------------------------------------------
+// Partial scope: a partial's context holds its bindings and nothing else.
+//
+// These build the node tree by hand rather than compiling a template, because
+// no compilable template can express a partial reading a variable the call site
+// never binds. Presence is probed with a condition rather than a print, so the
+// assertions don't depend on how a missing variable coerces to text.
+//
+// Mirrors the same four cases in runtime/js/render_test.ts.
+// ---------------------------------------------------------------------------
+
+/** PHP literal for a partial that renders 'SEEN' when `name` is truthy in its own context. */
+function phpProbePartial(name: string): string {
+    return `['type' => 'root', 'nodes' => [
+        ['type' => 'if', 'branches' => [
+            ['condition' => ['fn' => function($${name}) { return $${name}; }, 'vars' => ['${name}']],
+             'nodes' => [['type' => 'raw', 'raw' => 'SEEN']]]
+        ]]
+    ]]`;
+}
+
+/** Run a hand-built node tree through the PHP runtime and return its output. */
+async function renderPhpNodes(rootLiteral: string, ctx: Record<string, unknown>): Promise<string> {
+    return runPhp(`<?php
+declare(strict_types=1);
+require '${RENDER_PHP}';
+echo backflip_renderRoot(${rootLiteral}, ${phpValue(ctx)});
+`);
+}
+
+Deno.test("php: partial-ref does not inherit the caller's context", async () => {
+    const root = `['type' => 'root', 'nodes' => [
+        ['type' => 'partial-ref', 'partial' => ${phpProbePartial('ambient')}, 'slots' => [], 'bindings' => []]
+    ]]`;
+    assertEquals(await renderPhpNodes(root, { ambient: "LEAKED" }), "");
+});
+
+Deno.test("php: partial-ref: a binding is visible, an unbound caller var is not", async () => {
+    const partial = `['type' => 'root', 'nodes' => [
+        ['type' => 'print', 'data' => ['fn' => function($mood) { return $mood; }, 'vars' => ['mood']]],
+        ['type' => 'if', 'branches' => [
+            ['condition' => ['fn' => function($ambient) { return $ambient; }, 'vars' => ['ambient']],
+             'nodes' => [['type' => 'raw', 'raw' => 'SEEN']]]
+        ]]
+    ]]`;
+    const root = `['type' => 'root', 'nodes' => [
+        ['type' => 'partial-ref', 'partial' => ${partial}, 'slots' => [], 'bindings' => [
+            ['name' => 'mood', 'data' => ['fn' => function($user) { return $user['mood']; }, 'vars' => ['user']]]
+        ]]
+    ]]`;
+    assertEquals(await renderPhpNodes(root, { user: { mood: "happy" }, ambient: "LEAKED" }), "happy");
+});
+
+Deno.test("php: custom-element ref does not inherit the caller's context", async () => {
+    const partial = `array_merge(${phpProbePartial('ambient')}, ['customElement' => true, 'definitionAttrNodes' => []])`;
+    const root = `['type' => 'root', 'nodes' => [
+        ['type' => 'partial-ref', 'customElement' => true, 'callerTagName' => 'my-badge',
+         'callerOpenTag' => [], 'partial' => ${partial}, 'slots' => [], 'bindings' => []]
+    ]]`;
+    assertEquals(await renderPhpNodes(root, { ambient: "LEAKED" }), "<my-badge></my-badge>");
+});
+
+Deno.test("php: a b-for value name does not reach a partial called inside the loop", async () => {
+    const root = `['type' => 'root', 'nodes' => [
+        ['type' => 'for', 'valName' => 'item',
+         'iterable' => ['fn' => function($items) { return $items; }, 'vars' => ['items']],
+         'nodes' => [
+            ['type' => 'partial-ref', 'partial' => ${phpProbePartial('item')}, 'slots' => [], 'bindings' => []]
+         ]]
+    ]]`;
+    assertEquals(await renderPhpNodes(root, { items: ["a", "b"] }), "");
+});

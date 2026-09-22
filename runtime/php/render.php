@@ -451,8 +451,9 @@ function backflip_streamRenderPartialRef(array $node, array $ctx, array $slots =
         return;
     }
 
-    // 1. Build child context: start with caller ctx, overlay bindings evaluated in caller ctx
-    $childCtx = $ctx;
+    // 1. Build child context: a partial's context holds its bindings and nothing
+    //    else, so it starts empty. The bindings are evaluated in the caller ctx.
+    $childCtx = [];
     foreach ($node['bindings'] as $binding) {
         $childCtx[$binding['name']] = backflip_evalBinding($binding, $ctx);
     }
@@ -502,8 +503,9 @@ function backflip_streamRenderCustomElementRef(array $node, array $ctx, array $s
     // This reactive partial actually rendered — record its scripts for auto-inclusion.
     backflip_collectScripts($scripts, $node['partial']['scripts'] ?? null);
 
-    // Bindings evaluated in caller ctx, applied to childCtx for body and definition attrs.
-    $childCtx = $ctx;
+    // Bindings evaluated in caller ctx, applied to childCtx for body and definition
+    // attrs. Nothing else reaches it — see backflip_streamRenderPartialRef.
+    $childCtx = [];
     foreach ($node['bindings'] as $binding) {
         $childCtx[$binding['name']] = backflip_evalBinding($binding, $ctx);
     }

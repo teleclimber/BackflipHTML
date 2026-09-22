@@ -16,7 +16,7 @@ See [`docs/runtime-js.md`](../../docs/runtime-js.md) for the full API reference,
 - **print** — evaluates expression, HTML-escapes the result via `escapeHtml()`, and inserts it
 - **for** — iterates over a collection (checked via `Symbol.iterator`), rendering children once per item with an augmented context
 - **if** — evaluates branches in order, renders the first truthy one
-- **partial-ref** — evaluates bindings in the caller's context, renders the referenced partial with a child context and slot map
+- **partial-ref** — evaluates bindings in the caller's context, renders the referenced partial with a child context built from those bindings alone (the caller's context is not inherited) and a slot map
 - **slot** — renders injected content in the caller's original context
 - **attr-bind** — dynamically sets an HTML attribute; boolean attributes are present/absent based on truthiness
 

@@ -242,9 +242,25 @@ Multiple variables can be passed on the same element:
 <div b-part="#card" b-data:title="item.title" b-data:count="item.count"></div>
 ```
 
-Data bindings are scoped to the partial — they are not visible outside it, and they do not override the caller's context for slot content.
-
 Each `b-data:NAME` must correspond to a variable used inside the target partial. Passing `b-data:NAME` for a name the partial doesn't use is a compilation error (it usually means a typo or a stale binding).
+
+### Partial scope
+
+A partial's context holds what the call site binds and nothing else. Variables the caller has are not visible inside the partial unless they are passed:
+
+```html
+<b-unwrap b-name="profile">
+    <b-unwrap b-part="#badge"></b-unwrap>
+</b-unwrap>
+
+<b-unwrap b-name="badge">{{ label }}</b-unwrap>
+```
+
+Here `badge` sees no `label`, whatever `profile` holds. The call needs `b-data:label="..."`.
+
+Bindings travel no further than the call they are written on: they are not visible in the caller, and a partial that the callee itself calls sees only what *that* call binds.
+
+Slot content is the exception. It belongs to the caller, so it is evaluated in the caller's context and `b-data:` bindings do not apply to it — see [Slots](#slots).
 
 ---
 
@@ -333,7 +349,7 @@ Add `b-export` to a custom element definition to make it callable from any file 
 Slots (`b-slot`/`b-in`), data bindings (`b-data:*`), and attribute interpolation (`:attr`, `b-bind:attr`) all work the same as for `b-name` partials:
 
 - Slot content is evaluated in the **caller's** context.
-- The partial body and definition-side attributes are evaluated in the **child** context — that is, the caller's context with `b-data:*` bindings overlaid.
+- The partial body and definition-side attributes are evaluated in the **child** context — the call's `b-data:*` bindings and declared `b-attr` values, and nothing else (see [Partial scope](#partial-scope)).
 - Caller-side attributes on the call tag are evaluated in the caller's context.
 
 This means you can mix dynamic attrs from both sides:

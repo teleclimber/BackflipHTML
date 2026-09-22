@@ -258,6 +258,86 @@ Deno.test("partial-ref binding does not leak to parent context", () => {
 	assertEquals(ctx['injected'], undefined);
 });
 
+// ---------------------------------------------------------------------------
+// Partial scope: a partial's context holds its bindings and nothing else.
+//
+// Presence is probed with a condition rather than a print, so these assertions
+// don't depend on how a missing variable coerces to text.
+// ---------------------------------------------------------------------------
+
+/** A partial that renders 'SEEN' when `name` is truthy in its own context. */
+function probePartial(name: string): RootRNode {
+	return {
+		type: 'root',
+		nodes: [{
+			type: 'if',
+			branches: [{ condition: makeFn(name, [name]), nodes: [{ type: 'raw', raw: 'SEEN' }] }]
+		}]
+	};
+}
+
+Deno.test("partial-ref does not inherit the caller's context", () => {
+	const node: PartialRefRNode = {
+		type: 'partial-ref',
+		partial: probePartial('ambient'),
+		wrapper: null,
+		slots: {},
+		bindings: []
+	};
+	assertEquals(render(node, { ambient: 'LEAKED' }), '');
+});
+
+Deno.test("partial-ref: a binding is visible, an unbound caller var is not", () => {
+	const partial: RootRNode = {
+		type: 'root',
+		nodes: [
+			{ type: 'print', data: makeFn('mood', ['mood']) },
+			{
+				type: 'if',
+				branches: [{ condition: makeFn('ambient', ['ambient']), nodes: [{ type: 'raw', raw: 'SEEN' }] }]
+			}
+		]
+	};
+	const node: PartialRefRNode = {
+		type: 'partial-ref',
+		partial,
+		wrapper: null,
+		slots: {},
+		bindings: [{ name: 'mood', data: makeFn('user.mood', ['user']) }]
+	};
+	assertEquals(render(node, { user: { mood: 'happy' }, ambient: 'LEAKED' }), 'happy');
+});
+
+Deno.test("custom-element ref does not inherit the caller's context", () => {
+	const node: PartialRefRNode = {
+		type: 'partial-ref',
+		customElement: true,
+		callerTagName: 'my-badge',
+		callerOpenTag: [],
+		partial: { ...probePartial('ambient'), customElement: true, definitionAttrNodes: [] },
+		slots: {},
+		bindings: []
+	};
+	assertEquals(render(node, { ambient: 'LEAKED' }), '<my-badge></my-badge>');
+});
+
+Deno.test("a b-for value name does not reach a partial called inside the loop", () => {
+	const call: PartialRefRNode = {
+		type: 'partial-ref',
+		partial: probePartial('item'),
+		wrapper: null,
+		slots: {},
+		bindings: []
+	};
+	const node: ForRNode = {
+		type: 'for',
+		iterable: makeFn('items', ['items']),
+		valName: 'item',
+		nodes: [call as RNode]
+	};
+	assertEquals(render(node, { items: ['a', 'b'] }), '');
+});
+
 Deno.test("partial-ref with default slot", () => {
 	const partial: RootRNode = {
 		type: 'root',

@@ -259,8 +259,9 @@ function* streamRenderPartialRef(node: PartialRefRNode, ctx: any, slots?: SlotMa
 		yield* streamRenderCustomElementRef(node, ctx, slots, scripts);
 		return;
 	}
-	// Evaluate bindings in caller ctx, build child ctx
-	let childCtx = { ...ctx };
+	// A partial's context holds its bindings and nothing else: the child ctx starts
+	// empty, and the bindings that fill it are evaluated in the caller's ctx.
+	const childCtx: any = {};
 	for( const binding of node.bindings ) {
 		childCtx[binding.name] = evalBinding(binding, ctx);
 	}
@@ -298,7 +299,7 @@ function* streamRenderCustomElementRef(node: PartialRefRNode, ctx: any, slots?: 
 
 	// Bindings evaluated in caller ctx, applied to the child ctx that the body and the
 	// definition-side attrs see.
-	let childCtx = { ...ctx };
+	const childCtx: any = {};
 	for (const binding of node.bindings) {
 		childCtx[binding.name] = evalBinding(binding, ctx);
 	}
