@@ -402,16 +402,52 @@ function validateTNode(
             }
         }
 
-        // --- Validate b-data binding names against the target partial's data shape ---
-        // Each b-data:NAME passed at the call site must correspond to a free variable
-        // (or declared b-attr) that the target partial actually uses. Otherwise the
-        // value would be silently discarded — almost certainly a typo or stale code.
+        // --- Validate the call's bindings against the target partial ---------------
         if (targetPartial) {
             const shape = inferDataShape(targetPartial);
+
+            // The declared inputs of a custom-element partial. A b-attr arrives as an
+            // attribute on the call tag rather than as a binding; a declared prop will
+            // arrive as a binding, which is why it is tracked separately here.
+            const ceTarget = targetPartial.kind === 'custom-element' ? targetPartial : undefined;
+            const declaredAttrs = new Set((ceTarget?.bAttrs ?? []).map(a => a.name));
+            // `b-prop:` is not implemented, so no partial declares a prop yet. The names
+            // it declares belong here, which is what reopens b-data: for them below.
+            const declaredProps = new Set<string>();
+            const generatesJs = ceTarget?.generate !== undefined;
+
+            // --- Reject b-data on a partial that generates client JS -------------------
+            // Such a partial is patched in the browser, which sees only what the
+            // definition declares — so it takes declared inputs, not free-form data.
+            // (a b-part call cannot target a custom element, so the kind check is
+            // narrowing for the tag name, not an extra condition)
+            const rejected = new Set<string>();
+            if (generatesJs && ref.kind === 'custom-element') {
+                for (const binding of ref.bindings) {
+                    // Bindings synthesized from a declared attribute, and values bound to a
+                    // declared prop, are the accepted inputs. Anything else came from a
+                    // b-data: the browser could not see. A name that is both b-data and
+                    // b-attr is link.ts's conflict error, so it is not reported twice.
+                    if (declaredAttrs.has(binding.name) || declaredProps.has(binding.name)) continue;
+                    rejected.add(binding.name);
+                    ctx.errors.push(new BackflipError(
+                        `b-data:${binding.name} on <${ref.callerTagName}> is not allowed: <${ref.partialName}> generates client JS, so its data must be declared on the definition. Declare b-attr:${binding.name} for a string or boolean value.`,
+                        errorLoc(ctx.sourceRelPath, binding.nameLoc ?? ref.loc)
+                    ));
+                }
+            }
+
+            // --- Validate b-data binding names against the target partial's data shape ---
+            // Each b-data:NAME passed at the call site must correspond to a free variable
+            // (or declared b-attr) that the target partial actually uses. Otherwise the
+            // value would be silently discarded — almost certainly a typo or stale code.
             for (const binding of ref.bindings) {
                 // Synthesized b-attr bindings (data + cast, or literal) carry b-attr-declared
                 // names which are pre-seeded into the shape, so they always pass the check.
                 if (shape.has(binding.name)) continue;
+                // A binding already rejected above is not also reported as unused: the
+                // rejection says everything, on the same span.
+                if (rejected.has(binding.name)) continue;
                 ctx.errors.push(new BackflipError(
                     `variable ${binding.name} is unused in partial <${ref.partialName}>`,
                     errorLoc(ctx.sourceRelPath, binding.nameLoc ?? ref.loc)
@@ -420,19 +456,19 @@ function validateTNode(
 
             // --- Validate that the call provides every variable the target needs ---
             // A partial's context holds what the call binds and nothing else, so a free
-            // variable the call leaves unbound can only ever render empty. Declared
-            // b-attrs arrive as attributes, not bindings; link.ts reports a missing one.
+            // variable the call leaves unbound can only ever render empty. A missing
+            // declared attribute is link.ts's error, not this one.
             const bound = new Set(ref.bindings.map(b => b.name));
-            const declaredAttrs = new Set(
-                targetPartial.kind === 'custom-element' ? (targetPartial.bAttrs ?? []).map(a => a.name) : []
-            );
             const missing = [...shape.keys()]
                 .filter(v => !bound.has(v) && !declaredAttrs.has(v))
                 .sort();
             if (missing.length > 0) {
                 const subject = missing.length === 1 ? 'variable' : 'variables';
+                const hint = generatesJs
+                    ? 'declare on the definition with b-attr:NAME'
+                    : 'pass with b-data:NAME="expr"';
                 ctx.errors.push(new BackflipError(
-                    `${subject} ${missing.join(', ')} used in partial <${ref.partialName}> but not passed at this call site; pass with b-data:NAME="expr"`,
+                    `${subject} ${missing.join(', ')} used in partial <${ref.partialName}> but not passed at this call site; ${hint}`,
                     errorLoc(ctx.sourceRelPath, ref.loc)
                 ));
             }

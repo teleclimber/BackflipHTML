@@ -9,3 +9,9 @@
 <article b-name="post">
     <my-card></my-card>
 </article>
+
+<my-widget b-generate="full">{{ label }}</my-widget>
+
+<b-unwrap b-name="host">
+    <my-widget b-data:label="x"></my-widget>
+</b-unwrap>

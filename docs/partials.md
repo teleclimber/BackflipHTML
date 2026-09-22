@@ -280,6 +280,7 @@ The compiler reports errors for:
 - A required `b-attr` not provided at the call site, or `b-data:NAME` colliding with a declared `b-attr:NAME`
 - `b-data:NAME` at a call site where `NAME` does not appear in the target partial's data shape (i.e. the partial does not use a variable of that name and does not declare a `b-attr:NAME`). This catches typos and stale bindings that would otherwise be silently discarded.
 - A call site that does not pass a variable the target partial uses. The partial's context holds only what the call binds, so an unbound variable could only render empty (see [Partial scope](#partial-scope)).
+- `b-data:NAME` at a call site whose target generates client JS (see [Rules and limits](#rules-and-limits)). Declare the value with `b-attr:NAME` instead.
 
 ---
 
@@ -477,6 +478,7 @@ Subclassing is not a way to extend a `full` partial: `customElements.define()` r
 #### Rules and limits
 
 - `b-generate` is allowed only on a custom element partial **definition** tag, takes one of the three values above, and cannot be bare.
+- **Data comes in through `b-attr` only.** `b-data:NAME` on a call to a partial that generates JS is an error. The generated code patches the DOM in the browser from the values it can read off the element, so anything the browser cannot see could go stale the moment an attribute changes. This also means such a partial takes strings and booleans, and no other kind of value.
 - With `b-script` present and no `b-generate`, the mode is `base` — your module registers the element.
 - `full` together with `b-script` warns: the element is already registered, and a second `define()` of the same tag throws.
 - A partial that generates JS must have a project-unique tag name (two definitions of one name would fight over the same module and the same registration).

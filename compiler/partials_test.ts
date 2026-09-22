@@ -1753,6 +1753,81 @@ Deno.test("compileDirectory - slot content variables belong to the caller, not t
     assertEquals(fatal.length, 0, JSON.stringify(fatal.map(e => e.message)));
 });
 
+// --- b-data is not accepted by a partial that generates client JS ------------
+//
+// Such a partial is patched in the browser, which sees only what the definition
+// declares. b-attr is the one declared input today; b-prop will be the other.
+
+Deno.test("compileDirectory - b-data on a b-generate=full call is an error", async () => {
+    const fatal = await fatalsFor("bdata_generate_full", `
+        <my-widget b-generate="full">{{ label }}</my-widget>
+        <article b-name="post">
+            <my-widget b-data:label="t"></my-widget>
+        </article>
+    `);
+    assertEquals(fatal.length, 1, JSON.stringify(fatal.map(e => e.message)));
+    assertStringIncludes(fatal[0].message, 'b-data:label on <my-widget> is not allowed');
+    assertStringIncludes(fatal[0].message, 'generates client JS');
+    assertStringIncludes(fatal[0].message, 'Declare b-attr:label');
+});
+
+Deno.test("compileDirectory - b-data on a b-generate=render call is an error too", async () => {
+    const fatal = await fatalsFor("bdata_generate_render", `
+        <my-widget b-generate="render">{{ label }}</my-widget>
+        <article b-name="post">
+            <my-widget b-data:label="t"></my-widget>
+        </article>
+    `);
+    assertEquals(fatal.length, 1, JSON.stringify(fatal.map(e => e.message)));
+    assertStringIncludes(fatal[0].message, 'b-data:label on <my-widget> is not allowed');
+});
+
+Deno.test("compileDirectory - each rejected b-data is reported on its own binding", async () => {
+    const fatal = await fatalsFor("bdata_generate_many", `
+        <my-widget b-generate="full">{{ label }}{{ tone }}</my-widget>
+        <article b-name="post">
+            <my-widget b-data:label="t" b-data:tone="u"></my-widget>
+        </article>
+    `);
+    assertEquals(fatal.length, 2, JSON.stringify(fatal.map(e => e.message)));
+    assertStringIncludes(fatal[0].message, 'b-data:label');
+    assertStringIncludes(fatal[1].message, 'b-data:tone');
+});
+
+Deno.test("compileDirectory - b-data is still accepted by a custom element that generates no JS", async () => {
+    const fatal = await fatalsFor("bdata_no_generate", `
+        <my-card><h2>{{ title }}</h2></my-card>
+        <article b-name="post">
+            <my-card b-data:title="t"></my-card>
+        </article>
+    `);
+    assertEquals(fatal.length, 0, JSON.stringify(fatal.map(e => e.message)));
+});
+
+Deno.test("compileDirectory - a b-data/b-attr conflict is not also reported as rejected b-data", async () => {
+    const fatal = await fatalsFor("bdata_generate_conflict", `
+        <my-widget b-attr:label b-generate="full"><h2>{{ label }}</h2></my-widget>
+        <article b-name="post">
+            <my-widget label="Hi" b-data:label="t"></my-widget>
+        </article>
+    `);
+    assertEquals(fatal.length, 1, JSON.stringify(fatal.map(e => e.message)));
+    assertStringIncludes(fatal[0].message, 'conflicts with b-attr:label');
+});
+
+Deno.test("compileDirectory - an unpassed variable on a generating partial points at b-attr", async () => {
+    // b-data is not available here, so the hint must not suggest it.
+    const fatal = await fatalsFor("bdata_generate_missing", `
+        <my-widget b-generate="full">{{ title }}</my-widget>
+        <article b-name="post">
+            <my-widget></my-widget>
+        </article>
+    `);
+    assertEquals(fatal.length, 1, JSON.stringify(fatal.map(e => e.message)));
+    assertStringIncludes(fatal[0].message, 'variable title used in partial <my-widget>');
+    assertStringIncludes(fatal[0].message, 'declare on the definition with b-attr:NAME');
+});
+
 Deno.test("compileDirectory - b-data:NAME on unresolved custom element does not error", async () => {
     // Unresolved custom elements fall through as raw HTML and only emit a warning
     // for the unknown tag; we shouldn't add a confusing b-data error on top.
@@ -1995,4 +2070,16 @@ Deno.test("compileFiles - reports the same errors as compileDirectory", async ()
     ]));
     assertEquals(errors.length > 0, true);
     assertStringIncludes(errors[0].message, "missing.html");
+});
+
+Deno.test("compileDirectory - a rejected b-data is not also reported as unused", async () => {
+    // The rejection says everything the unused-binding error would, on the same span.
+    const fatal = await fatalsFor("bdata_generate_unused", `
+        <my-widget b-generate="full">hi</my-widget>
+        <article b-name="post">
+            <my-widget b-data:foo="x"></my-widget>
+        </article>
+    `);
+    assertEquals(fatal.length, 1, JSON.stringify(fatal.map(e => e.message)));
+    assertStringIncludes(fatal[0].message, 'b-data:foo on <my-widget> is not allowed');
 });

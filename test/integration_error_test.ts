@@ -107,10 +107,12 @@ Deno.test("structural-errors.html: multiple b-attrs at line 3", () => {
 // data-errors.html
 //   line 4:  <b-unwrap b-part="#badge">  — #badge uses `label`, the call binds nothing
 //   line 10: <my-card>                   — my-card uses `title`, the call binds nothing
+//   line 16: <my-widget b-data:label>    — my-widget generates client JS, so it takes
+//                                          declared inputs, not b-data
 // ---------------------------------------------------------------------------
 
-Deno.test("data-errors.html: reports 2 errors", () => {
-    assertEquals(errorsFor("data-errors.html").length, 2);
+Deno.test("data-errors.html: reports 3 errors", () => {
+    assertEquals(errorsFor("data-errors.html").length, 3);
 });
 
 Deno.test("data-errors.html: b-part call missing a variable at line 4", () => {
@@ -123,10 +125,15 @@ Deno.test("data-errors.html: custom element call missing a variable at line 10",
     assertEquals(err.line, 10);
 });
 
+Deno.test("data-errors.html: b-data on a generating partial at line 16", () => {
+    const err = findError("data-errors.html", "b-data:label on <my-widget> is not allowed");
+    assertEquals(err.line, 16);
+});
+
 // ---------------------------------------------------------------------------
 // All files combined: verify total error count across the directory
 // ---------------------------------------------------------------------------
 
 Deno.test("total errors across all files", () => {
-    assertEquals(errors.length, 9);
+    assertEquals(errors.length, 10);
 });
