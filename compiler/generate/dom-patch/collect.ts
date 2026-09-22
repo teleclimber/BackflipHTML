@@ -25,8 +25,8 @@ export type BackcodeSiteKind =
 export interface BackcodeSite {
 	site: BackcodeSiteKind;
 	parsed: Parsed;
+	/** The declared attributes this site's expression names — every variable in it. */
 	liveVars: string[];
-	otherVars: string[];
 	inForLoop: boolean;
 }
 
@@ -34,9 +34,9 @@ export interface BackcodeSite {
  * A whole `b-if` / `b-else-if` / `b-else` set, tracked as one patch site.
  *
  * Unlike a `BackcodeSite` it has *N* expressions (one per conditional branch),
- * so it can't carry a single `parsed`. `liveVars`/`otherVars` are the union
- * across the set's **own** branch conditions only — expressions nested inside
- * the branches never trigger the set (see the dom-patch README).
+ * so it can't carry a single `parsed`. `liveVars` is the union across the set's
+ * **own** branch conditions only — expressions nested inside the branches never
+ * trigger the set (see the dom-patch README).
  *
  * Anchoring mirrors a print site: `container` is the TNode[] the `IfTNode` lives
  * in (where the marker comments get spliced) and `parentElement` is the nearest
@@ -48,7 +48,6 @@ export interface IfSetSite {
 	container: TNode[];
 	parentElement: ElementTNode | null;
 	liveVars: string[];
-	otherVars: string[];
 	inForLoop: boolean;
 }
 
@@ -88,14 +87,13 @@ export interface IfSetScope {
  * Walk a custom-element partial into a tree of patch-branch scopes, keeping only
  * qualifying sites and partitioning at every qualifying `b-if` set. The `qualifies`
  * predicate is injected (rather than imported) so this module takes no dependency
- * on `filter.ts`; callers wire it as `s => qualifies(s, liveVarNames)`.
+ * on `filter.ts`.
  *
  * Replaces the old flat `collectBackcodeSites`: because the tree's *shape* depends
  * on which sets qualify, the filter can no longer run downstream.
  */
 export function collectPatchTree(
 	root: CustomElementPartialRoot,
-	liveVarNames: Set<string>,
 	qualifies: (s: Site) => boolean,
 ): BranchScope {
 	const scope: BranchScope = { refElement: null, sites: [], sets: [] };
@@ -103,29 +101,27 @@ export function collectPatchTree(
 	if (root.definitionAttrs) {
 		for (const a of root.definitionAttrs) {
 			if (a.type === 'dynamic') {
-				const site = makeBackcodeSite({ kind: 'definition-root-attr', attr: a }, a.expr, liveVarNames, false);
+				const site = makeBackcodeSite({ kind: 'definition-root-attr', attr: a }, a.expr, false);
 				if (qualifies(site)) scope.sites.push(site);
 			}
 		}
 	}
-	walkList(root.tnodes, liveVarNames, false, scope, null, qualifies);
+	walkList(root.tnodes, false, scope, null, qualifies);
 	return scope;
 }
 
 function walkList(
 	tnodes: TNode[],
-	liveVarNames: Set<string>,
 	inForLoop: boolean,
 	scope: BranchScope,
 	parentElement: ElementTNode | null,
 	qualifies: (s: Site) => boolean,
 ): void {
-	for (const n of tnodes) walkNode(n, liveVarNames, inForLoop, scope, parentElement, tnodes, qualifies);
+	for (const n of tnodes) walkNode(n, inForLoop, scope, parentElement, tnodes, qualifies);
 }
 
 function walkNode(
 	n: TNode,
-	liveVarNames: Set<string>,
 	inForLoop: boolean,
 	scope: BranchScope,
 	parentElement: ElementTNode | null,
@@ -139,7 +135,7 @@ function walkNode(
 		case 'attr-bind':
 			return;
 		case 'print': {
-			const site = makeBackcodeSite({ kind: 'print', node: n, container, parentElement }, n.data, liveVarNames, inForLoop);
+			const site = makeBackcodeSite({ kind: 'print', node: n, container, parentElement }, n.data, inForLoop);
 			if (qualifies(site)) scope.sites.push(site);
 			return;
 		}
@@ -147,25 +143,25 @@ function walkNode(
 			// A for-iterable never qualifies, and every site inside the loop is
 			// `inForLoop` (also non-qualifying). b-for/b-if don't create a DOM element,
 			// so the nearest enclosing element for descendants is unchanged.
-			walkList(n.tnodes, liveVarNames, true, scope, parentElement, qualifies);
+			walkList(n.tnodes, true, scope, parentElement, qualifies);
 			return;
 		}
 		case 'if': {
-			const set = makeIfSetSite(n, container, parentElement, liveVarNames, inForLoop);
+			const set = makeIfSetSite(n, container, parentElement, inForLoop);
 			if (qualifies(set)) {
 				// A qualifying set is a patch-branch boundary: each branch becomes a fresh
 				// child scope whose ref element is the set's nearest enclosing element —
 				// exactly what renderIf_ resolves and hands the child as `ref_elem`.
 				const branches = n.branches.map(b => {
 					const child: BranchScope = { refElement: parentElement, sites: [], sets: [] };
-					walkList(b.tnodes, liveVarNames, inForLoop, child, parentElement, qualifies);
+					walkList(b.tnodes, inForLoop, child, parentElement, qualifies);
 					return child;
 				});
 				scope.sets.push({ set, branches });
 			} else {
 				// Inert client-side: its content sites stay owned by the enclosing scope.
 				for (const b of n.branches) {
-					walkList(b.tnodes, liveVarNames, inForLoop, scope, parentElement, qualifies);
+					walkList(b.tnodes, inForLoop, scope, parentElement, qualifies);
 				}
 			}
 			return;
@@ -173,11 +169,11 @@ function walkNode(
 		case 'element': {
 			for (const a of n.attrs) {
 				if (a.type === 'dynamic') {
-					const site = makeBackcodeSite({ kind: 'attr', element: n, attr: a }, a.expr, liveVarNames, inForLoop);
+					const site = makeBackcodeSite({ kind: 'attr', element: n, attr: a }, a.expr, inForLoop);
 					if (qualifies(site)) scope.sites.push(site);
 				}
 			}
-			walkList(n.tnodes, liveVarNames, inForLoop, scope, n, qualifies);
+			walkList(n.tnodes, inForLoop, scope, n, qualifies);
 			return;
 		}
 		case 'partial-ref':
@@ -189,7 +185,7 @@ function walkNode(
 			if (n.kind === 'custom-element' && n.callerAttrs) {
 				for (const a of n.callerAttrs) {
 					if (a.type !== 'dynamic') continue;
-					const site = makeBackcodeSite({ kind: 'caller-attr-expr', ref: n, attr: a }, a.expr, liveVarNames, inForLoop);
+					const site = makeBackcodeSite({ kind: 'caller-attr-expr', ref: n, attr: a }, a.expr, inForLoop);
 					if (qualifies(site)) scope.sites.push(site);
 				}
 			}
@@ -203,32 +199,22 @@ function makeIfSetSite(
 	node: IfTNode,
 	container: TNode[],
 	parentElement: ElementTNode | null,
-	liveVarNames: Set<string>,
 	inForLoop: boolean,
 ): IfSetSite {
 	const liveVars: string[] = [];
-	const otherVars: string[] = [];
 	for (const b of node.branches) {
 		if (!b.condition) continue;
 		for (const v of b.condition.vars) {
-			const bucket = liveVarNames.has(v) ? liveVars : otherVars;
-			if (!bucket.includes(v)) bucket.push(v);
+			if (!liveVars.includes(v)) liveVars.push(v);
 		}
 	}
-	return { kind: 'if-set', node, container, parentElement, liveVars, otherVars, inForLoop };
+	return { kind: 'if-set', node, container, parentElement, liveVars, inForLoop };
 }
 
 function makeBackcodeSite(
 	site: BackcodeSiteKind,
 	parsed: Parsed,
-	liveVarNames: Set<string>,
 	inForLoop: boolean,
 ): BackcodeSite {
-	const liveVars: string[] = [];
-	const otherVars: string[] = [];
-	for (const v of parsed.vars) {
-		if (liveVarNames.has(v)) liveVars.push(v);
-		else otherVars.push(v);
-	}
-	return { site, parsed, liveVars, otherVars, inForLoop };
+	return { site, parsed, liveVars: [...parsed.vars], inForLoop };
 }

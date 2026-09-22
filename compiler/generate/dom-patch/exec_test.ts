@@ -36,7 +36,6 @@ function printSite(target: PatchTarget, code: string, startId: string, endId: st
 		site: { kind: 'print', node, container: [node], parentElement: null },
 		parsed: interpretBackcode(code),
 		liveVars: interpretBackcode(code).vars,
-		otherVars: [],
 		inForLoop: false,
 	};
 	return { target, backcode, comments: { startId, endId } };
@@ -47,7 +46,7 @@ function attrSite(bfid: string, name: string, code: string): BfidSite {
 	const element: ElementTNode = { type: 'element', tagName: 'div', attrs: [attr], tnodes: [] };
 	const backcode: BackcodeSite = {
 		site: { kind: 'attr', element, attr },
-		parsed: attr.expr, liveVars: attr.expr.vars, otherVars: [], inForLoop: false,
+		parsed: attr.expr, liveVars: attr.expr.vars, inForLoop: false,
 	};
 	return { target: { kind: 'bfid-element', bfid }, backcode };
 }
@@ -71,7 +70,7 @@ function ifSite(opts: {
 	const node: IfTNode = { type: 'if', branches: brs };
 	const set: IfSetSite = {
 		kind: 'if-set', node, container: [node], parentElement: null,
-		liveVars: opts.liveVars, otherVars: [], inForLoop: false,
+		liveVars: opts.liveVars, inForLoop: false,
 	};
 	return {
 		target: opts.target, ifSet: set, setId: opts.setId, endId: opts.endId, snapshot: opts.snapshot,

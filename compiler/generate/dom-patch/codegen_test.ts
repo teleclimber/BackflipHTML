@@ -41,7 +41,7 @@ function attrBfidSite(bfid: string, attr: AttrPart, liveVars: string[]): BfidSit
 	const element: ElementTNode = { type: 'element', tagName: 'div', attrs: [attr], tnodes: [] };
 	const backcode: BackcodeSite = {
 		site: { kind: 'attr', element, attr },
-		parsed: attr.expr, liveVars, otherVars: [], inForLoop: false,
+		parsed: attr.expr, liveVars, inForLoop: false,
 	};
 	return { target: { kind: 'bfid-element', bfid }, backcode };
 }
@@ -52,7 +52,7 @@ function printBfidSite(
 	const node: PrintTNode = { type: 'print', data: interpretBackcode(code) };
 	const backcode: BackcodeSite = {
 		site: { kind: 'print', node, container: [node], parentElement: null },
-		parsed: interpretBackcode(code), liveVars, otherVars: [], inForLoop: false,
+		parsed: interpretBackcode(code), liveVars, inForLoop: false,
 	};
 	return { target, backcode, comments: { startId, endId } };
 }
@@ -61,7 +61,7 @@ function defRootBfidSite(attr: AttrPart, liveVars: string[]): BfidSite {
 	if (attr.type !== 'dynamic') throw new Error('expected dynamic');
 	const backcode: BackcodeSite = {
 		site: { kind: 'definition-root-attr', attr },
-		parsed: attr.expr, liveVars, otherVars: [], inForLoop: false,
+		parsed: attr.expr, liveVars, inForLoop: false,
 	};
 	return { target: { kind: 'ref-element' }, backcode };
 }
@@ -71,7 +71,7 @@ function callerAttrBfidSite(bfid: string, attr: AttrPart, liveVars: string[]): B
 	// `ref` is only stamped in nodes2patch; codegen never reads it, so a null cast is fine here.
 	const backcode: BackcodeSite = {
 		site: { kind: 'caller-attr-expr', ref: null as never, attr },
-		parsed: attr.expr, liveVars, otherVars: [], inForLoop: false,
+		parsed: attr.expr, liveVars, inForLoop: false,
 	};
 	return { target: { kind: 'bfid-element', bfid }, backcode };
 }
@@ -93,7 +93,7 @@ function ifPatchSite(opts: {
 	const node: IfTNode = { type: 'if', branches: brs };
 	const ifSet: IfSetSite = {
 		kind: 'if-set', node, container: [node], parentElement: null,
-		liveVars: opts.liveVars, otherVars: [], inForLoop: false,
+		liveVars: opts.liveVars, inForLoop: false,
 	};
 	return {
 		target: opts.target, ifSet, setId: opts.setId, endId: opts.endId,
@@ -287,7 +287,7 @@ Deno.test("unsupported site kind throws (must be filtered before reaching codege
 		target: { kind: 'bfid-element', bfid: 'bf0' },
 		backcode: {
 			site: { kind: 'binding', ref: {} as any, binding: { kind: 'expr', name: 'x', data: interpretBackcode('x') } },
-			parsed: interpretBackcode('x'), liveVars: ['x'], otherVars: [], inForLoop: false,
+			parsed: interpretBackcode('x'), liveVars: ['x'], inForLoop: false,
 		},
 	};
 	let threw = false;

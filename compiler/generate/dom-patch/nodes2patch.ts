@@ -66,23 +66,24 @@ export function applyDomPatch(file: CompiledFile, opts?: DomPatchOptions): DomPa
 		if (mode === undefined) continue;
 
 		const bAttrs = root.bAttrs ?? [];
-		const liveVarNames = new Set(bAttrs.map(b => b.name));
 
-		// With no live vars there is nothing to patch, but 'base' and 'full' still owe
-		// the author a class — an empty patch-branch gives them one.
+		// With no declared attributes there is nothing to patch, but 'base' and 'full'
+		// still owe the author a class — an empty patch-branch gives them one.
 		let rootBranch: PatchBranch = { className: patchClassNameFor(partialName), sites: [], sets: [], vars: [] };
-		if (liveVarNames.size > 0) {
+		if (bAttrs.length > 0) {
 			// Walk into a scope tree (qualification folded in — the tree's shape depends
 			// on which sets qualify).
-			const scope = collectPatchTree(root, liveVarNames, s => qualifies(s, liveVarNames));
+			const scope = collectPatchTree(root, qualifies);
 
 			// Pass 1 — all AST mutation, every scope at every depth: allocate bfids and
 			// splice in every marker pair (attr/print/if-set), building the PatchBranch tree
 			// with ids and targets filled in. No snapshots yet.
-			rootBranch = buildPatchBranch(scope, patchClassNameFor(partialName), liveVarNames, gen);
+			rootBranch = buildPatchBranch(scope, patchClassNameFor(partialName), gen);
 
 			// Pass 2 — snapshots, now that every marker at every depth is in the tree.
 			fillSnapshots(rootBranch);
+
+			assertDeclared(rootBranch, new Set(bAttrs.map(b => b.name)), partialName);
 		}
 
 		const cls = generateClassForPartial(partialName, bAttrs, rootBranch, mode);
@@ -113,11 +114,10 @@ export function applyDomPatch(file: CompiledFile, opts?: DomPatchOptions): DomPa
 function buildPatchBranch(
 	scope: BranchScope,
 	className: string,
-	liveVarNames: Set<string>,
 	gen: BfidGen,
 ): PatchBranch {
 	const sites = scope.sites.map(s => toBfidSite(s, scope.refElement, gen));
-	const sets = scope.sets.map(ss => toIfSetPatchSite(ss, scope.refElement, liveVarNames, gen));
+	const sets = scope.sets.map(ss => toIfSetPatchSite(ss, scope.refElement, gen));
 	return { className, sites, sets, vars: computeVars(sites, sets) };
 }
 
@@ -143,7 +143,6 @@ function toBfidSite(
 function toIfSetPatchSite(
 	scope: IfSetScope,
 	refElement: ElementTNode | null,
-	liveVarNames: Set<string>,
 	gen: BfidGen,
 ): IfSetPatchSite {
 	const set = scope.set;
@@ -153,10 +152,10 @@ function toIfSetPatchSite(
 	const branches = scope.branches.map((child, i) =>
 		child.sites.length === 0 && child.sets.length === 0
 			? null
-			: buildPatchBranch(child, `BackflipPatch_${setId}_${i}`, liveVarNames, gen));
+			: buildPatchBranch(child, `BackflipPatch_${setId}_${i}`, gen));
 	return {
 		target, ifSet: set, setId, endId, snapshot: '',
-		subtreeVars: computeSubtreeVars(set.node, liveVarNames),
+		subtreeVars: computeSubtreeVars(set.node),
 		branches,
 	};
 }
@@ -187,6 +186,24 @@ function hasAnySet(branch: PatchBranch): boolean {
 		|| branch.sets.some(s => s.branches.some(c => c !== null && hasAnySet(c)));
 }
 
+// Guard the invariant this module is built on: the compiler rejects a partial that
+// generates client JS and reads anything it does not declare, so every var reaching
+// codegen resolves through collectData(). Nothing downstream re-checks it — a name
+// that slipped through would compile into a patch writing `undefined` into the page,
+// so it fails here instead.
+function assertDeclared(branch: PatchBranch, declared: Set<string>, partialName: string): void {
+	for (const v of branch.vars) {
+		if (!declared.has(v)) {
+			throw new Error(`dom-patch: <${partialName}> patches on "${v}", which is not a declared b-attr`);
+		}
+	}
+	for (const s of branch.sets) {
+		for (const child of s.branches) {
+			if (child) assertDeclared(child, declared, partialName);
+		}
+	}
+}
+
 // PatchBranch.vars, first-seen: site live vars, then each set's condition and
 // subtree vars.
 function computeVars(sites: BfidSite[], sets: IfSetPatchSite[]): string[] {
@@ -200,24 +217,24 @@ function computeVars(sites: BfidSite[], sets: IfSetPatchSite[]): string[] {
 	return out;
 }
 
-// Live vars referenced anywhere in the set's branch content (nested conditions and
-// b-for iterables included), minus b-for-bound value names. Deliberately over-broad
-// per the spec — a var in a non-patchable position still yields a no-op mutate.
-function computeSubtreeVars(node: IfTNode, liveVarNames: Set<string>): string[] {
+// Vars referenced anywhere in the set's branch content (nested conditions and
+// b-for iterables included), minus b-for-bound value names — those are bound by the
+// loop, not supplied by the element. Deliberately over-broad per the spec: a var in
+// a non-patchable position still yields a no-op mutate.
+function computeSubtreeVars(node: IfTNode): string[] {
 	const out: string[] = [];
-	for (const b of node.branches) walkSubtreeVars(b.tnodes, liveVarNames, new Set(), out);
+	for (const b of node.branches) walkSubtreeVars(b.tnodes, new Set(), out);
 	return out;
 }
 
 function walkSubtreeVars(
 	tnodes: TNode[],
-	liveVarNames: Set<string>,
 	scope: Set<string>,
 	out: string[],
 ): void {
 	const add = (p: Parsed) => {
 		for (const v of p.vars) {
-			if (liveVarNames.has(v) && !scope.has(v) && !out.includes(v)) out.push(v);
+			if (!scope.has(v) && !out.includes(v)) out.push(v);
 		}
 	};
 	for (const n of tnodes) {
@@ -227,7 +244,7 @@ function walkSubtreeVars(
 				break;
 			case 'element':
 				for (const a of n.attrs) if (a.type === 'dynamic') add(a.expr);
-				walkSubtreeVars(n.tnodes, liveVarNames, scope, out);
+				walkSubtreeVars(n.tnodes, scope, out);
 				break;
 			case 'attr-bind':
 				for (const a of n.attrs) if (a.type === 'dynamic') add(a.expr);
@@ -236,13 +253,13 @@ function walkSubtreeVars(
 				add(n.iterable);
 				const inner = new Set(scope);
 				inner.add(n.valName);
-				walkSubtreeVars(n.tnodes, liveVarNames, inner, out);
+				walkSubtreeVars(n.tnodes, inner, out);
 				break;
 			}
 			case 'if':
 				for (const b of n.branches) {
 					if (b.condition) add(b.condition);
-					walkSubtreeVars(b.tnodes, liveVarNames, scope, out);
+					walkSubtreeVars(b.tnodes, scope, out);
 				}
 				break;
 		}

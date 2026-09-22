@@ -92,6 +92,13 @@ export function inferDataShape(root: RootTNode): Map<string, DataShape> {
 			shape.scalar = a.isBool ? 'bool' : 'string';
 		}
 	}
+	// Attributes on the definition's own tag render in the child context, so the
+	// variables they name are data the partial needs, like any used in the body.
+	if (root.kind === 'custom-element' && root.definitionAttrs) {
+		for (const a of root.definitionAttrs) {
+			if (a.type === 'dynamic') collectFromParsed(a.expr, 'attribute', a.name, new Set(), shapes);
+		}
+	}
 	walkNodesForShape(root.tnodes, new Set(), shapes);
 	return shapes;
 }

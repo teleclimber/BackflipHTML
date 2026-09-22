@@ -8,48 +8,43 @@ import { interpretBackcode } from "../../backcode.ts";
 import type { BackcodeSite, IfSetSite } from "./collect.ts";
 import { qualifies } from "./filter.ts";
 
-// These sites carry their own liveVars/otherVars split, so the set only matters
-// for if-sets (which check expressions deep in their subtree).
-const LIVE = new Set(['foo', 'bar', 'x', 'y', 'flag', 'used']);
+// Every variable a site can name is one of the partial's declared attributes, so
+// there is no live-var set to qualify against — only where a site sits and what
+// its subtree contains.
 
-function makeAttrSite(
-	attrCode: string,
-	liveVars: string[],
-	otherVars: string[],
-	inForLoop = false,
-): BackcodeSite {
+function makeAttrSite(attrCode: string, liveVars: string[], inForLoop = false): BackcodeSite {
 	const attr: AttrPart = { type: 'dynamic', name: 'title', expr: interpretBackcode(attrCode), isBoolean: false };
 	const element: ElementTNode = { type: 'element', tagName: 'div', attrs: [attr], tnodes: [] };
 	return {
 		site: { kind: 'attr', element, attr: attr as any },
 		parsed: attr.type === 'dynamic' ? attr.expr : interpretBackcode(attrCode),
-		liveVars, otherVars, inForLoop,
+		liveVars, inForLoop,
 	};
 }
 
-function makePrintSite(
-	code: string,
-	liveVars: string[],
-	otherVars: string[],
-	inForLoop = false,
-): BackcodeSite {
+function makePrintSite(code: string, liveVars: string[], inForLoop = false): BackcodeSite {
 	const node: PrintTNode = { type: 'print', data: interpretBackcode(code) };
 	const container: PrintTNode[] = [node];
 	return {
 		site: { kind: 'print', node, container, parentElement: null },
 		parsed: interpretBackcode(code),
-		liveVars, otherVars, inForLoop,
+		liveVars, inForLoop,
 	};
 }
 
-Deno.test("accepts pure-live print sites", () => {
-	assertEquals(qualifies(makePrintSite('x', ['x'], []), LIVE), true);
+Deno.test("accepts print sites", () => {
+	assertEquals(qualifies(makePrintSite('x', ['x'])), true);
 });
 
-Deno.test("print sites obey the cross-kind rules (no-live / mixed / in-for rejected)", () => {
-	assertEquals(qualifies(makePrintSite('x', [], ['x']), LIVE), false);
-	assertEquals(qualifies(makePrintSite('x + y', ['x'], ['y']), LIVE), false);
-	assertEquals(qualifies(makePrintSite('x', ['x'], [], true), LIVE), false);
+Deno.test("rejects a site whose expression names no variable", () => {
+	// Nothing could ever change it, so it is not a patch site.
+	assertEquals(qualifies(makePrintSite(`'static'`, [])), false);
+	assertEquals(qualifies(makeAttrSite(`'static'`, [])), false);
+});
+
+Deno.test("rejects sites inside a b-for", () => {
+	assertEquals(qualifies(makePrintSite('x', ['x'], true)), false);
+	assertEquals(qualifies(makeAttrSite('foo', ['foo'], true)), false);
 });
 
 Deno.test("rejects still-unsupported kinds (e.g. for-iterable)", () => {
@@ -57,67 +52,68 @@ Deno.test("rejects still-unsupported kinds (e.g. for-iterable)", () => {
 	const site: BackcodeSite = {
 		site: { kind: 'for-iterable', node },
 		parsed: interpretBackcode('items'),
-		liveVars: ['items'], otherVars: [], inForLoop: false,
+		liveVars: ['items'], inForLoop: false,
 	};
-	assertEquals(qualifies(site, LIVE), false);
+	assertEquals(qualifies(site), false);
 });
 
-Deno.test("rejects sites with no live vars (any kind)", () => {
-	assertEquals(qualifies(makeAttrSite('bar', [], ['bar']), LIVE), false);
+Deno.test("accepts attr sites", () => {
+	assertEquals(qualifies(makeAttrSite('foo', ['foo'])), true);
 });
 
-Deno.test("rejects sites that mix live and non-live vars", () => {
-	assertEquals(qualifies(makeAttrSite('foo + bar', ['foo'], ['bar']), LIVE), false);
+Deno.test("accepts attr sites with multiple vars", () => {
+	assertEquals(qualifies(makeAttrSite('foo + bar', ['foo', 'bar'])), true);
 });
 
-Deno.test("rejects sites inside for loop", () => {
-	assertEquals(qualifies(makeAttrSite('foo', ['foo'], [], true), LIVE), false);
-});
-
-Deno.test("accepts attr sites that are pure-live", () => {
-	assertEquals(qualifies(makeAttrSite('foo', ['foo'], []), LIVE), true);
-});
-
-Deno.test("accepts attr sites with multiple live vars", () => {
-	assertEquals(qualifies(makeAttrSite('foo + bar', ['foo', 'bar'], []), LIVE), true);
-});
-
-Deno.test("accepts definition-root-attr sites that are pure-live", () => {
+Deno.test("accepts definition-root-attr sites", () => {
 	const attr: AttrPart = { type: 'dynamic', name: 'class', expr: interpretBackcode('foo'), isBoolean: false };
 	const site: BackcodeSite = {
 		site: { kind: 'definition-root-attr', attr: attr as any },
 		parsed: interpretBackcode('foo'),
-		liveVars: ['foo'], otherVars: [], inForLoop: false,
+		liveVars: ['foo'], inForLoop: false,
 	};
-	assertEquals(qualifies(site, LIVE), true);
+	assertEquals(qualifies(site), true);
+});
+
+Deno.test("rejects an asset-bearing caller attr (the browser has no asset map)", () => {
+	const attr: AttrPart = {
+		type: 'dynamic', name: 'src', expr: interpretBackcode('foo'), isBoolean: false, isAsset: true,
+	};
+	const ref: PartialRefTNode = {
+		type: 'partial-ref', kind: 'custom-element', file: null, partialName: 'child-el',
+		slots: {}, bindings: [], callerAttrs: [attr],
+	};
+	const site: BackcodeSite = {
+		site: { kind: 'caller-attr-expr', ref: ref as any, attr: attr as any },
+		parsed: attr.expr, liveVars: ['foo'], inForLoop: false,
+	};
+	assertEquals(qualifies(site), false);
+	assertEquals(qualifies({ ...site, site: { ...site.site, attr: { ...attr, isAsset: false } } } as BackcodeSite), true);
 });
 
 Deno.test("composes with Array.prototype.filter for the standard use", () => {
-	const ok = makeAttrSite('foo', ['foo'], []);
-	const inFor = makeAttrSite('foo', ['foo'], [], true);
-	const mixed = makeAttrSite('foo + bar', ['foo'], ['bar']);
-	const filtered = [ok, inFor, mixed].filter(s => qualifies(s, LIVE));
+	const ok = makeAttrSite('foo', ['foo']);
+	const inFor = makeAttrSite('foo', ['foo'], true);
+	const noVars = makeAttrSite(`'static'`, []);
+	const filtered = [ok, inFor, noVars].filter(qualifies);
 	assertEquals(filtered.length, 1);
 	assertEquals(filtered[0], ok);
 });
 
 // --- if-sets ---------------------------------------------------------------
 //
-// An if-set qualifies only when the whole subtree can be re-rendered in the
-// browser from live vars alone. Each test below flips exactly one rule.
+// An if-set qualifies only when its whole subtree can be re-rendered in the
+// browser. Each test below flips exactly one rule.
 
-const IF_LIVE = new Set(['a', 'b', 'items', 'name']);
-
-function ifSet(branches: IfBranch[], over = IF_LIVE, flags: Partial<IfSetSite> = {}): IfSetSite {
+function ifSet(branches: IfBranch[], flags: Partial<IfSetSite> = {}): IfSetSite {
 	const node: IfTNode = { type: 'if', branches };
 	const liveVars: string[] = [];
-	const otherVars: string[] = [];
 	for (const br of branches) {
-		for (const v of br.condition?.vars ?? []) (over.has(v) ? liveVars : otherVars).push(v);
+		for (const v of br.condition?.vars ?? []) if (!liveVars.includes(v)) liveVars.push(v);
 	}
 	return {
 		kind: 'if-set', node, container: [node], parentElement: null,
-		liveVars, otherVars, inForLoop: false, ...flags,
+		liveVars, inForLoop: false, ...flags,
 	};
 }
 
@@ -125,53 +121,29 @@ function branch(cond: string | null, tnodes: TNode[] = []): IfBranch {
 	return cond === null ? { tnodes } : { condition: interpretBackcode(cond), tnodes };
 }
 
-Deno.test("if-set: simple live-var condition with a b-else qualifies", () => {
-	assertEquals(qualifies(ifSet([branch('a'), branch(null)]), IF_LIVE), true);
-});
-
-Deno.test("if-set: a non-live var in any branch condition disqualifies the whole set", () => {
-	assertEquals(qualifies(ifSet([branch('a'), branch('nope')]), IF_LIVE), false);
+Deno.test("if-set: a condition with a b-else qualifies", () => {
+	assertEquals(qualifies(ifSet([branch('a'), branch(null)])), true);
 });
 
 Deno.test("if-set: a condition with no variables disqualifies", () => {
-	assertEquals(qualifies(ifSet([branch('a'), branch('1 == 1')]), IF_LIVE), false);
+	assertEquals(qualifies(ifSet([branch('a'), branch('1 == 1')])), false);
 });
 
 Deno.test("if-set: inside a b-for is skipped", () => {
-	assertEquals(qualifies(ifSet([branch('a')], IF_LIVE, { inForLoop: true }), IF_LIVE), false);
+	assertEquals(qualifies(ifSet([branch('a')], { inForLoop: true })), false);
 });
 
-Deno.test("if-set: a set nested inside another set now qualifies (nesting allowed)", () => {
-	// The set itself is fine; nesting is no longer a disqualifier. Whether the *outer*
-	// set survives depends on its whole-subtree check (covered below).
+Deno.test("if-set: a set nested inside another set qualifies (nesting allowed)", () => {
 	const nested: IfTNode = { type: 'if', branches: [branch('b')] };
-	assertEquals(qualifies(ifSet([branch('a', [nested])]), IF_LIVE), true);
-	assertEquals(qualifies(ifSet([branch('b')]), IF_LIVE), true);
-});
-
-Deno.test("if-set: an inner set with a non-live var still sinks the outer set", () => {
-	// The outer set's whole-subtree check walks the inner condition too.
-	const nested: IfTNode = { type: 'if', branches: [branch('stranger')] };
-	assertEquals(qualifies(ifSet([branch('a', [nested])]), IF_LIVE), false);
+	assertEquals(qualifies(ifSet([branch('a', [nested])])), true);
+	assertEquals(qualifies(ifSet([branch('b')])), true);
 });
 
 Deno.test("if-set: a var-free inner condition leaves the outer set qualifying", () => {
 	// `b-if="1 == 1"` names no var — it can't be its own patch site, but it does not
-	// disqualify the outer set (nothing non-live in the subtree).
+	// disqualify the outer set.
 	const nested: IfTNode = { type: 'if', branches: [branch('1 == 1')] };
-	assertEquals(qualifies(ifSet([branch('a', [nested])]), IF_LIVE), true);
-});
-
-Deno.test("if-set: a non-live var deep in the subtree disqualifies", () => {
-	const print: PrintTNode = { type: 'print', data: interpretBackcode('stranger') };
-	const el: ElementTNode = { type: 'element', tagName: 'p', attrs: [], tnodes: [print] };
-	assertEquals(qualifies(ifSet([branch('a', [el])]), IF_LIVE), false);
-});
-
-Deno.test("if-set: a non-live var in a dynamic attr deep in the subtree disqualifies", () => {
-	const attr: AttrPart = { type: 'dynamic', name: 'title', expr: interpretBackcode('stranger'), isBoolean: false };
-	const el: ElementTNode = { type: 'element', tagName: 'p', attrs: [attr], tnodes: [] };
-	assertEquals(qualifies(ifSet([branch('a', [el])]), IF_LIVE), false);
+	assertEquals(qualifies(ifSet([branch('a', [nested])])), true);
 });
 
 Deno.test("if-set: a partial ref anywhere in the subtree disqualifies", () => {
@@ -179,12 +151,12 @@ Deno.test("if-set: a partial ref anywhere in the subtree disqualifies", () => {
 		type: 'partial-ref', kind: 'custom-element', file: null, partialName: 'my-card',
 		slots: {}, bindings: [],
 	};
-	assertEquals(qualifies(ifSet([branch('a', [ref])]), IF_LIVE), false);
+	assertEquals(qualifies(ifSet([branch('a', [ref])])), false);
 });
 
 Deno.test("if-set: a slot anywhere in the subtree disqualifies", () => {
 	const slot: SlotTNode = { type: 'slot', name: undefined };
-	assertEquals(qualifies(ifSet([branch('a', [slot])]), IF_LIVE), false);
+	assertEquals(qualifies(ifSet([branch('a', [slot])])), false);
 });
 
 Deno.test("if-set: asset references disqualify (unresolved, dynamic and static forms)", () => {
@@ -198,34 +170,26 @@ Deno.test("if-set: asset references disqualify (unresolved, dynamic and static f
 	const staticAsset: AttrPart = { type: 'static', raw: ' src="@img/a.png"' };
 	for (const attr of [unresolved, dynamicAsset, staticAsset]) {
 		const el: ElementTNode = { type: 'element', tagName: 'img', attrs: [attr], tnodes: [] };
-		assertEquals(qualifies(ifSet([branch('a', [el])]), IF_LIVE), false);
+		assertEquals(qualifies(ifSet([branch('a', [el])])), false);
 	}
 });
 
-Deno.test("if-set: a nested b-for over a live var qualifies, and binds its value name", () => {
-	// `item` is not a live var, but it is locally bound by the loop.
+Deno.test("if-set: an unparseable expression in the subtree disqualifies", () => {
+	const print: PrintTNode = { type: 'print', data: { expr: undefined, errs: ['bad'], vars: [] } };
+	const el: ElementTNode = { type: 'element', tagName: 'p', attrs: [], tnodes: [print] };
+	assertEquals(qualifies(ifSet([branch('a', [el])])), false);
+});
+
+Deno.test("if-set: a nested b-for qualifies, body and all", () => {
 	const print: PrintTNode = { type: 'print', data: interpretBackcode('item.label') };
 	const li: ElementTNode = { type: 'element', tagName: 'li', attrs: [], tnodes: [print] };
 	const forNode: ForTNode = {
 		type: 'for', iterable: interpretBackcode('items'), valName: 'item', tnodes: [li],
 	};
-	assertEquals(qualifies(ifSet([branch('a', [forNode])]), IF_LIVE), true);
+	assertEquals(qualifies(ifSet([branch('a', [forNode])])), true);
 });
 
-Deno.test("if-set: a b-for value name does not leak past the loop body", () => {
-	const forNode: ForTNode = {
-		type: 'for', iterable: interpretBackcode('items'), valName: 'item', tnodes: [],
-	};
-	const stray: PrintTNode = { type: 'print', data: interpretBackcode('item') };
-	assertEquals(qualifies(ifSet([branch('a', [forNode, stray])]), IF_LIVE), false);
-});
-
-Deno.test("if-set: a nested b-if over live vars qualifies", () => {
+Deno.test("if-set: a nested b-if qualifies", () => {
 	const nested: IfTNode = { type: 'if', branches: [branch('b'), branch(null)] };
-	assertEquals(qualifies(ifSet([branch('a', [nested])]), IF_LIVE), true);
-});
-
-Deno.test("if-set: a nested b-if over a non-live var disqualifies the outer set", () => {
-	const nested: IfTNode = { type: 'if', branches: [branch('stranger')] };
-	assertEquals(qualifies(ifSet([branch('a', [nested])]), IF_LIVE), false);
+	assertEquals(qualifies(ifSet([branch('a', [nested])])), true);
 });

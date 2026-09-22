@@ -24,17 +24,19 @@ A site qualifies when **all** of these hold:
 
 - The owning partial is a **custom-element partial** (`b-attr:` declarations are the source of "live" variables).
 - For attrs (element and caller): the attribute is a `b-bind:`/`:` dynamic attribute (a `Parsed` expression in `AttrPart.dynamic.expr`). For prints: the `{{ expr }}`'s `Parsed`. For if-sets: every branch condition.
-- Every variable in `parsed.vars` is one of the partial's live vars. Mixed live + non-live expressions are skipped entirely — a guard, since the compiler rejects a partial that generates JS and reads a variable it does not declare.
+- The expression parses and names at least one variable. A variable-free expression can never change, so it is not a patch site. Its variables need no check: the compiler rejects a partial that generates JS and reads anything it does not declare, so every variable here is a `b-attr` that `collectData()` returns.
 - The site is **not** inside a `b-for` loop. (v1 limitation — see below.)
 - For caller attrs: the attribute is **not** asset-bearing (`isAsset`), since the browser has no asset map.
 
-Sites that don't qualify are silently ignored: `b-for` iterables and `b-data:` bindings. Static caller attrs and caller attrs referencing non-live vars are not patched. Slot contents are not entered (they live in the caller's scope). A `b-part` call inlines its partial with no stable element, so nothing on it is patchable.
+Sites that don't qualify are silently ignored: `b-for` iterables and `b-data:` bindings. Static caller attrs are not patched. Slot contents are not entered (they live in the caller's scope). A `b-part` call inlines its partial with no stable element, so nothing on it is patchable.
 
 A partial with no `b-generate` (and no `b-script` implying one) is skipped entirely. In `render` mode a partial with no qualifying site produces nothing; in `base` and `full` the module is emitted anyway, since the author asked for a class whether or not it patches.
 
 ## v1 limitation: no for-loop sites
 
 Sites whose ancestor chain contains a `ForTNode` are skipped (attrs, prints and if-sets alike). The bfid mechanism relies on `querySelector`, which returns only the first match — so a site on a `b-for`'d element would only update one of N rendered copies. This is documented rather than worked around; an explicit error is not raised (it's a silent skip, as for any non-qualifying site).
+
+No `b-for` can currently reach here from valid source: a loop needs an iterable, a generating partial reads only its declared attributes, and a `b-attr` used as an iterable is a compile error. The loop handling — the skip, the subtree walk, and the value-name scoping in `computeSubtreeVars` — is kept because a declared input that is a collection is what makes `b-for` meaningful, and the `querySelector` problem above is what will then need solving.
 
 Other deliberate limitations, all covered above: patch sites inside an inactive branch of a **non-qualifying** nested set log `console.error` on every mutate (only qualifying sets get the patch-branch treatment that avoids this); `<script>` tags inside a branch do not execute when inserted via a fragment; and the initial active index is recomputed and trusted to match the server render. Nested `b-if` **is** supported — see [patch-branches](#patch-branches).
 
@@ -67,12 +69,12 @@ Each patch-branch's constructor computes every owned set's active branch index f
 Beyond the cross-kind rules, an if-set qualifies only when all of these hold. Any failure disqualifies the **entire set** (all branches), silently:
 
 1. Every branch condition parses and names **at least one** variable.
-2. Every expression **anywhere in the subtree** references only live vars — prints, dynamic attrs, nested `b-if` conditions, nested `b-for` iterables. A `b-for`'s value name is locally bound inside its own body, so `valName` and `valName.x` are exempt within that scope (scope tracking is required, since nested `b-for` is allowed).
+2. Every expression **anywhere in the subtree** parses — prints, dynamic attrs, nested `b-if` conditions, nested `b-for` iterables.
 3. No **partial references** of any kind in the subtree — no `b-part` calls, no custom-element calls.
 4. No **slot** nodes in the subtree.
 5. No **asset references** in the subtree: no unresolved `asset` AttrPart, no dynamic attr with `isAsset`, no static attr whose raw text contains an `@name/` reference. (The browser has no asset map.)
 
-Nesting is allowed: a qualifying set may sit inside another. Because rule 2 walks the **whole** subtree, a disqualifier inside a nested set (a non-live var, a partial ref) sinks the enclosing set too — so a qualifying parent only ever contains nested sets that themselves qualify or are var-free (`b-if="1 == 1"`, which can't be its own patch site but doesn't disqualify anyone). A nested `b-for` is rendered statically as part of the branch that owns it and is not a patch site.
+Nesting is allowed: a qualifying set may sit inside another. Because the rules walk the **whole** subtree, a disqualifier inside a nested set (a partial ref, a slot) sinks the enclosing set too — so a qualifying parent only ever contains nested sets that themselves qualify or are var-free (`b-if="1 == 1"`, which can't be its own patch site but doesn't disqualify anyone). A nested `b-for` is rendered statically as part of the branch that owns it and is not a patch site.
 
 ### Ordering within `mutate_<var>`
 
@@ -167,6 +169,8 @@ Known limitation: the replay covers attr and print sites, but not an if-set whos
 Patching targets server-rendered DOM, so an element created with `document.createElement` has nothing to patch; that is documented as unsupported. No shadow root is ever attached.
 
 ## Entry point
+
+Every var reaching codegen must be one of the partial's declared attributes; the generator asserts this before emitting a module, since a name that slipped through would compile into a patch writing `undefined` into the page.
 
 `applyDomPatch(file, opts?)` mutates the CompiledFile in place and returns `{ modules }` — one `{ tagName, js, needsRender }` per partial in the file that generates client JS. `needsRender` is true when that module imports `render.js`, i.e. it contains at least one if-set. `moduleFileName(tagName)` names its file. `opts` is `{ bfidGen?, scriptUrlFor?, renderImportPath? }`:
 

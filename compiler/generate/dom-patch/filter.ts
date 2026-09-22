@@ -5,17 +5,16 @@ import { isIfSetSite, type IfSetSite, type Site } from './collect.js';
 /**
  * Predicate: true when a site should drive dom-patch codegen.
  *
- * `liveVarNames` is the partial's full live-var set; if-sets need it to check
- * expressions deep in their subtree (a `BackcodeSite` already carries the split
- * as `liveVars`/`otherVars`). Use as `sites.filter(s => qualifies(s, liveVars))`
- * — never bare `filter(qualifies)`, which would pass the array index as the set.
+ * Every variable a qualifying partial can name is one of its declared attributes —
+ * the compiler rejects a partial that generates client JS and reads anything else —
+ * so there is no live/non-live split to test here. What remains are the rules about
+ * *where* a site sits and what its subtree contains.
  */
-export function qualifies(s: Site, liveVarNames: Set<string>): boolean {
+export function qualifies(s: Site): boolean {
 	// Cross-kind rules:
-	if (s.liveVars.length === 0) return false;
-	if (s.otherVars.length > 0) return false;
+	if (s.liveVars.length === 0) return false;   // nothing to drive a patch
 	if (s.inForLoop) return false;
-	if (isIfSetSite(s)) return ifSetQualifies(s, liveVarNames);
+	if (isIfSetSite(s)) return ifSetQualifies(s);
 	// Per-kind support (extend as new kinds become patchable):
 	switch (s.site.kind) {
 		case 'attr':
@@ -34,37 +33,36 @@ export function qualifies(s: Site, liveVarNames: Set<string>): boolean {
 /**
  * If-set rules beyond the cross-kind ones (see the dom-patch README):
  *  - every conditional branch parses and names at least one variable,
- *  - the whole subtree is renderable client-side from live vars alone —
- *    no non-live vars, no partial refs, no slots, no asset references.
+ *  - the whole subtree is renderable client-side — no partial refs, no slots,
+ *    no asset references.
  *
  * Nesting is allowed: a qualifying set may sit inside another. The whole-subtree
  * check below still runs for every set, so a disqualifier anywhere (including in a
  * nested set) sinks the enclosing set too. A failure disqualifies the set silently.
  */
-function ifSetQualifies(s: IfSetSite, liveVarNames: Set<string>): boolean {
+function ifSetQualifies(s: IfSetSite): boolean {
 	for (const b of s.node.branches) {
 		if (!b.condition) continue;   // b-else: no expression to check
-		if (!exprOk(b.condition, liveVarNames, new Set())) return false;
+		if (!exprOk(b.condition)) return false;
 		if (b.condition.vars.length === 0) return false;
 	}
-	// The whole subtree must be renderable from live vars alone.
+	// The whole subtree must be renderable client-side.
 	for (const b of s.node.branches) {
-		if (!subtreeOk(b.tnodes, liveVarNames, new Set())) return false;
+		if (!subtreeOk(b.tnodes)) return false;
 	}
 	return true;
 }
 
-// An expression is usable when it parsed and every variable it names is either a
-// live var or locally bound by an enclosing b-for.
-function exprOk(parsed: Parsed, liveVarNames: Set<string>, scope: Set<string>): boolean {
-	if (!parsed.expr) return false;
-	return parsed.vars.every(v => liveVarNames.has(v) || scope.has(v));
+// An expression is usable when it parsed. Its variables need no check: they are
+// the partial's declared attributes, which collectData() hands the browser.
+function exprOk(parsed: Parsed): boolean {
+	return !!parsed.expr;
 }
 
 // Matches an unresolved "@name/..." asset reference inside a static attr's raw text.
 const ASSET_REF_RE = /@[A-Za-z0-9_-]+\//;
 
-function attrsOk(attrs: AttrPart[], liveVarNames: Set<string>, scope: Set<string>): boolean {
+function attrsOk(attrs: AttrPart[]): boolean {
 	for (const a of attrs) {
 		// Asset parts (unresolved) and asset-bearing expressions can't be rendered
 		// client-side — the browser has no asset map.
@@ -74,12 +72,12 @@ function attrsOk(attrs: AttrPart[], liveVarNames: Set<string>, scope: Set<string
 			continue;
 		}
 		if (a.isAsset) return false;
-		if (!exprOk(a.expr, liveVarNames, scope)) return false;
+		if (!exprOk(a.expr)) return false;
 	}
 	return true;
 }
 
-function subtreeOk(tnodes: TNode[], liveVarNames: Set<string>, scope: Set<string>): boolean {
+function subtreeOk(tnodes: TNode[]): boolean {
 	for (const n of tnodes) {
 		switch (n.type) {
 			case 'raw':
@@ -91,28 +89,23 @@ function subtreeOk(tnodes: TNode[], liveVarNames: Set<string>, scope: Set<string
 				// referenced partial's tree, neither of which the snapshot carries.
 				return false;
 			case 'print':
-				if (!exprOk(n.data, liveVarNames, scope)) return false;
+				if (!exprOk(n.data)) return false;
 				break;
 			case 'attr-bind':
-				if (!attrsOk(n.attrs, liveVarNames, scope)) return false;
+				if (!attrsOk(n.attrs)) return false;
 				break;
 			case 'element':
-				if (!attrsOk(n.attrs, liveVarNames, scope)) return false;
-				if (!subtreeOk(n.tnodes, liveVarNames, scope)) return false;
+				if (!attrsOk(n.attrs)) return false;
+				if (!subtreeOk(n.tnodes)) return false;
 				break;
-			case 'for': {
-				if (!exprOk(n.iterable, liveVarNames, scope)) return false;
-				// The value name is bound for the loop body only, so it is exempt
-				// from the live-var check there (`item` and `item.x` alike).
-				const inner = new Set(scope);
-				inner.add(n.valName);
-				if (!subtreeOk(n.tnodes, liveVarNames, inner)) return false;
+			case 'for':
+				if (!exprOk(n.iterable)) return false;
+				if (!subtreeOk(n.tnodes)) return false;
 				break;
-			}
 			case 'if':
 				for (const b of n.branches) {
-					if (b.condition && !exprOk(b.condition, liveVarNames, scope)) return false;
-					if (!subtreeOk(b.tnodes, liveVarNames, scope)) return false;
+					if (b.condition && !exprOk(b.condition)) return false;
+					if (!subtreeOk(b.tnodes)) return false;
 				}
 				break;
 		}

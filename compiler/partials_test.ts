@@ -2153,3 +2153,21 @@ Deno.test("compileDirectory - a b-for value name inside a generating partial is 
     assertEquals(fatal.length, 1, JSON.stringify(fatal.map(e => e.message)));
     assertStringIncludes(fatal[0].message, 'variable rows cannot be supplied to <my-widget>');
 });
+
+Deno.test("compileDirectory - an undeclared variable in a definition attr is an error", async () => {
+    const fatal = await fatalsFor("gen_defattr_undeclared", `
+        <my-widget b-attr:label b-generate="full" :data-x="other"><p>{{ label }}</p></my-widget>
+    `);
+    assertEquals(fatal.length, 1, JSON.stringify(fatal.map(e => e.message)));
+    assertStringIncludes(fatal[0].message, 'variable other cannot be supplied to <my-widget>');
+});
+
+Deno.test("compileDirectory - b-data for a variable used only in a definition attr is not unused", async () => {
+    const fatal = await fatalsFor("defattr_bdata_used", `
+        <my-card :data-x="other"><p>hi</p></my-card>
+        <article b-name="post">
+            <my-card b-data:other="v"></my-card>
+        </article>
+    `);
+    assertEquals(fatal.length, 0, JSON.stringify(fatal.map(e => e.message)));
+});

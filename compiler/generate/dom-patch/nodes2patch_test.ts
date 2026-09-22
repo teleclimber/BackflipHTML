@@ -1,4 +1,4 @@
-import { assertEquals } from "jsr:@std/assert";
+import { assertEquals, assertThrows } from "jsr:@std/assert";
 
 import { compilePartial } from "../../compiler.ts";
 import type { CompiledFile, ElementTNode, PartialDef } from "../../types.ts";
@@ -106,14 +106,6 @@ Deno.test("end-to-end: live var declared but never used => no class", async () =
 	assertEquals(js, null);
 });
 
-Deno.test("end-to-end: attr mixing live and non-live var => skipped, no class", async () => {
-	const file = await compileCustomElement(
-		`<my-widget b-attr:title><span :data-x="title + other">hi</span></my-widget>`
-	);
-	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
-	assertEquals(js, null);
-});
-
 Deno.test("end-to-end: attr inside b-for is skipped (v1 limitation)", async () => {
 	const file = await compileCustomElement(
 		`<my-widget b-attr:title><ul><li b-for="item in items" :data-x="title">x</li></ul></my-widget>`
@@ -200,14 +192,6 @@ Deno.test("end-to-end: bool caller attr on a nested custom-element call uses set
 	if (!js) throw new Error('expected js');
 	assertEquals(js.includes("setAttribute('open', '')"), true);
 	assertEquals(js.includes("removeAttribute('open')"), true);
-});
-
-Deno.test("end-to-end: caller attr referencing a non-live var is not patchable", async () => {
-	const file = await compileCustomElement(
-		`<parent-el b-attr:show><child-el :foo="other"></child-el></parent-el>`
-	);
-	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
-	assertEquals(js, null);
 });
 
 // The user-reported bug: two dom-patchable custom-element partials in the same
@@ -361,16 +345,6 @@ Deno.test("end-to-end: print directly in the custom element targets this.ce", as
 	assertEquals(js.includes("this.replaceBetween(elem, 'bfid:bf0', 'bfid:bf1', document.createTextNode(String(this.bc_print_bf0(data))));"), true);
 });
 
-Deno.test("end-to-end: print mixing live and non-live vars => no comments, no class", async () => {
-	const file = await compileCustomElement(
-		`<my-widget b-attr:name><p>{{ name + other }}</p></my-widget>`
-	);
-	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
-	assertEquals(js, null);
-	const root = file.partials.get('my-widget')!;
-	assertEquals(collectComments(root.tnodes), []);
-});
-
 // Compile several custom-element partials into a single CompiledFile.
 async function compileMany(htmls: string[]): Promise<CompiledFile> {
 	const partials = new Map();
@@ -508,10 +482,9 @@ Deno.test("end-to-end: a partial with no if-set imports nothing and needsRender 
 });
 
 Deno.test("end-to-end: disqualified if-sets get no markers and no class", async () => {
-	// One case per disqualifier: non-live condition var, a partial ref in the
-	// subtree, an inner set (which must stay unpatched), and a set inside b-for.
+	// One case per disqualifier: a partial ref in the subtree, a slot, and a set
+	// inside b-for.
 	const cases = [
-		`<my-widget b-attr:mode><p b-if="other == 'a'">A</p><em b-else>B</em></my-widget>`,
 		`<my-widget b-attr:mode><p b-if="mode == 'a'"><other-thing></other-thing></p><em b-else>B</em></my-widget>`,
 		`<my-widget b-attr:mode><p b-if="mode == 'a'"><span b-slot></span></p><em b-else>B</em></my-widget>`,
 		`<my-widget b-attr:mode><ul><li b-for="i in items"><b b-if="mode == 'a'">A</b></li></ul></my-widget>`,
@@ -565,4 +538,19 @@ Deno.test("end-to-end: applyDomPatch is idempotent — a second run reuses marke
 	assertEquals(commentsAfterSecond, commentsAfterFirst);   // no extra markers spliced in
 	assertEquals(second.modules[0].js, first.modules[0].js);          // identical generated module
 	assertEquals(second.modules[0].js.includes('SECOND'), false);     // nothing regenerated
+});
+
+Deno.test("end-to-end: a variable the partial does not declare fails loudly", async () => {
+	// The compiler rejects this source before dom-patch ever sees it (see
+	// validateGeneratedPartialInputs); this fixture skips that stage. The guard
+	// exists so a name that ever slipped through cannot compile into a patch that
+	// writes `undefined` into the page.
+	const file = await compileCustomElement(
+		`<my-widget b-attr:title><span :data-x="title + other">hi</span></my-widget>`
+	);
+	assertThrows(
+		() => domPatch(file, { bfidGen: makeSequentialBfidGen() }),
+		Error,
+		'not a declared b-attr',
+	);
 });

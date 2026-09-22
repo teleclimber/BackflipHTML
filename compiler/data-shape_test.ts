@@ -695,3 +695,31 @@ Deno.test("validateBAttrUsage: error includes filename in loc", () => {
 	assertEquals(errors.length, 1);
 	assertEquals(errors[0].filename, 'pages/index.html');
 });
+
+// --- definition-tag attributes are part of the partial's data shape ----------
+//
+// `definitionAttrs` render in the child context, so the variables they name are
+// data the partial needs, exactly like one used in the body.
+
+Deno.test("inferDataShape: a variable used only in a definition attr is in the shape", () => {
+	const root = asBAttrRoot(makeRoot([]));
+	root.definitionAttrs = [
+		{ type: 'dynamic', name: 'data-x', expr: realParsed('other'), isBoolean: false },
+	];
+	const shapes = inferDataShape(root);
+	assertEquals(shapes.has('other'), true);
+});
+
+Deno.test("inferDataShape: a static definition attr contributes no variable", () => {
+	const root = asBAttrRoot(makeRoot([]));
+	root.definitionAttrs = [{ type: 'static', raw: ' class="card"' }];
+	assertEquals([...inferDataShape(root).keys()], []);
+});
+
+Deno.test("inferDataShape: a definition attr records an attribute usage", () => {
+	const root = asBAttrRoot(makeRoot([]));
+	root.definitionAttrs = [
+		{ type: 'dynamic', name: 'data-x', expr: realParsed('other'), isBoolean: false },
+	];
+	assertEquals(inferDataShape(root).get('other')!.usages.has('attribute'), true);
+});
