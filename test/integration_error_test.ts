@@ -107,12 +107,13 @@ Deno.test("structural-errors.html: multiple b-attrs at line 3", () => {
 // data-errors.html
 //   line 4:  <b-unwrap b-part="#badge">  — #badge uses `label`, the call binds nothing
 //   line 10: <my-card>                   — my-card uses `title`, the call binds nothing
-//   line 16: <my-widget b-data:label>    — my-widget generates client JS, so it takes
-//                                          declared inputs, not b-data
+//   line 13: <my-widget b-generate>      — my-widget generates client JS and reads
+//                                          `label`, which it does not declare
+//   line 16: <my-widget b-data:label>    — and a call site cannot pass it either
 // ---------------------------------------------------------------------------
 
-Deno.test("data-errors.html: reports 3 errors", () => {
-    assertEquals(errorsFor("data-errors.html").length, 3);
+Deno.test("data-errors.html: reports 4 errors", () => {
+    assertEquals(errorsFor("data-errors.html").length, 4);
 });
 
 Deno.test("data-errors.html: b-part call missing a variable at line 4", () => {
@@ -125,6 +126,11 @@ Deno.test("data-errors.html: custom element call missing a variable at line 10",
     assertEquals(err.line, 10);
 });
 
+Deno.test("data-errors.html: undeclared variable in a generating partial at line 13", () => {
+    const err = findError("data-errors.html", "variable label cannot be supplied to <my-widget>");
+    assertEquals(err.line, 13);
+});
+
 Deno.test("data-errors.html: b-data on a generating partial at line 16", () => {
     const err = findError("data-errors.html", "b-data:label on <my-widget> is not allowed");
     assertEquals(err.line, 16);
@@ -135,5 +141,5 @@ Deno.test("data-errors.html: b-data on a generating partial at line 16", () => {
 // ---------------------------------------------------------------------------
 
 Deno.test("total errors across all files", () => {
-    assertEquals(errors.length, 10);
+    assertEquals(errors.length, 11);
 });

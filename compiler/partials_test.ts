@@ -1760,38 +1760,38 @@ Deno.test("compileDirectory - slot content variables belong to the caller, not t
 
 Deno.test("compileDirectory - b-data on a b-generate=full call is an error", async () => {
     const fatal = await fatalsFor("bdata_generate_full", `
-        <my-widget b-generate="full">{{ label }}</my-widget>
+        <my-widget b-attr:label b-generate="full">{{ label }}</my-widget>
         <article b-name="post">
-            <my-widget b-data:label="t"></my-widget>
+            <my-widget label="Hi" b-data:extra="t"></my-widget>
         </article>
     `);
     assertEquals(fatal.length, 1, JSON.stringify(fatal.map(e => e.message)));
-    assertStringIncludes(fatal[0].message, 'b-data:label on <my-widget> is not allowed');
+    assertStringIncludes(fatal[0].message, 'b-data:extra on <my-widget> is not allowed');
     assertStringIncludes(fatal[0].message, 'generates client JS');
-    assertStringIncludes(fatal[0].message, 'Declare b-attr:label');
+    assertStringIncludes(fatal[0].message, 'Declare b-attr:extra');
 });
 
 Deno.test("compileDirectory - b-data on a b-generate=render call is an error too", async () => {
     const fatal = await fatalsFor("bdata_generate_render", `
-        <my-widget b-generate="render">{{ label }}</my-widget>
+        <my-widget b-attr:label b-generate="render">{{ label }}</my-widget>
         <article b-name="post">
-            <my-widget b-data:label="t"></my-widget>
+            <my-widget label="Hi" b-data:extra="t"></my-widget>
         </article>
     `);
     assertEquals(fatal.length, 1, JSON.stringify(fatal.map(e => e.message)));
-    assertStringIncludes(fatal[0].message, 'b-data:label on <my-widget> is not allowed');
+    assertStringIncludes(fatal[0].message, 'b-data:extra on <my-widget> is not allowed');
 });
 
 Deno.test("compileDirectory - each rejected b-data is reported on its own binding", async () => {
     const fatal = await fatalsFor("bdata_generate_many", `
-        <my-widget b-generate="full">{{ label }}{{ tone }}</my-widget>
+        <my-widget b-attr:label b-generate="full">{{ label }}</my-widget>
         <article b-name="post">
-            <my-widget b-data:label="t" b-data:tone="u"></my-widget>
+            <my-widget label="Hi" b-data:one="t" b-data:two="u"></my-widget>
         </article>
     `);
     assertEquals(fatal.length, 2, JSON.stringify(fatal.map(e => e.message)));
-    assertStringIncludes(fatal[0].message, 'b-data:label');
-    assertStringIncludes(fatal[1].message, 'b-data:tone');
+    assertStringIncludes(fatal[0].message, 'b-data:one');
+    assertStringIncludes(fatal[1].message, 'b-data:two');
 });
 
 Deno.test("compileDirectory - b-data is still accepted by a custom element that generates no JS", async () => {
@@ -1815,8 +1815,8 @@ Deno.test("compileDirectory - a b-data/b-attr conflict is not also reported as r
     assertStringIncludes(fatal[0].message, 'conflicts with b-attr:label');
 });
 
-Deno.test("compileDirectory - an unpassed variable on a generating partial points at b-attr", async () => {
-    // b-data is not available here, so the hint must not suggest it.
+Deno.test("compileDirectory - a call site adds no second error for an undeclared variable", async () => {
+    // Nothing the call does could supply `title`, so only the definition is at fault.
     const fatal = await fatalsFor("bdata_generate_missing", `
         <my-widget b-generate="full">{{ title }}</my-widget>
         <article b-name="post">
@@ -1824,8 +1824,7 @@ Deno.test("compileDirectory - an unpassed variable on a generating partial point
         </article>
     `);
     assertEquals(fatal.length, 1, JSON.stringify(fatal.map(e => e.message)));
-    assertStringIncludes(fatal[0].message, 'variable title used in partial <my-widget>');
-    assertStringIncludes(fatal[0].message, 'declare on the definition with b-attr:NAME');
+    assertStringIncludes(fatal[0].message, 'variable title cannot be supplied to <my-widget>');
 });
 
 Deno.test("compileDirectory - b-data:NAME on unresolved custom element does not error", async () => {
@@ -2082,4 +2081,75 @@ Deno.test("compileDirectory - a rejected b-data is not also reported as unused",
     `);
     assertEquals(fatal.length, 1, JSON.stringify(fatal.map(e => e.message)));
     assertStringIncludes(fatal[0].message, 'b-data:foo on <my-widget> is not allowed');
+});
+
+// --- a partial that generates client JS reads only what it declares ----------
+//
+// The browser patches from the values it can read off the element, so an
+// undeclared variable has no way in — it would render empty and stay empty.
+
+Deno.test("compileDirectory - an undeclared variable in a generating partial is an error", async () => {
+    // Never called: the defect is in the definition, so it is reported anyway.
+    const fatal = await fatalsFor("gen_undeclared", `
+        <my-widget b-generate="full">{{ user }}</my-widget>
+    `);
+    assertEquals(fatal.length, 1, JSON.stringify(fatal.map(e => e.message)));
+    assertStringIncludes(fatal[0].message, 'variable user cannot be supplied to <my-widget>');
+    assertStringIncludes(fatal[0].message, 'reads only its declared attributes');
+});
+
+Deno.test("compileDirectory - undeclared variables are named together, sorted", async () => {
+    const fatal = await fatalsFor("gen_undeclared_many", `
+        <my-widget b-attr:label b-generate="full">{{ label }}{{ tone }}{{ size }}</my-widget>
+    `);
+    assertEquals(fatal.length, 1, JSON.stringify(fatal.map(e => e.message)));
+    assertStringIncludes(fatal[0].message, 'variables size, tone cannot be supplied to <my-widget>');
+});
+
+Deno.test("compileDirectory - the error points at the definition tag", async () => {
+    const dir = await makeTempDir("gen_undeclared_loc");
+    await writeFile(path.join(dir, "page.html"), `<b-unwrap b-name="filler">x</b-unwrap>
+
+<my-widget b-generate="full">{{ user }}</my-widget>
+`);
+    const { errors } = await compileDirectory(dir);
+    const err = errors.find(e => e.message.includes('cannot be supplied'))!;
+    assertEquals(err.filename, "page.html");
+    assertEquals(err.line, 3);
+});
+
+Deno.test("compileDirectory - a declared b-attr satisfies the rule", async () => {
+    const fatal = await fatalsFor("gen_declared_ok", `
+        <my-widget b-attr:label b-attr:premium.bool b-generate="full">
+            <h2 :data-label="label">{{ label }}</h2>
+            <p b-if="premium">Premium</p>
+        </my-widget>
+    `);
+    assertEquals(fatal.length, 0, JSON.stringify(fatal.map(e => e.message)));
+});
+
+Deno.test("compileDirectory - a generating partial with no variables is fine", async () => {
+    const fatal = await fatalsFor("gen_no_vars", `
+        <my-widget b-generate="full"><p>static</p></my-widget>
+    `);
+    assertEquals(fatal.length, 0, JSON.stringify(fatal.map(e => e.message)));
+});
+
+Deno.test("compileDirectory - a custom element that generates no JS still takes b-data", async () => {
+    const fatal = await fatalsFor("gen_none_bdata_ok", `
+        <my-card><h2>{{ title }}</h2></my-card>
+        <article b-name="post">
+            <my-card b-data:title="t"></my-card>
+        </article>
+    `);
+    assertEquals(fatal.length, 0, JSON.stringify(fatal.map(e => e.message)));
+});
+
+Deno.test("compileDirectory - a b-for value name inside a generating partial is not undeclared", async () => {
+    // `row` is bound by the loop, not supplied from outside; only `rows` is at fault.
+    const fatal = await fatalsFor("gen_for_local", `
+        <my-widget b-generate="full"><p b-for="row in rows">{{ row }}</p></my-widget>
+    `);
+    assertEquals(fatal.length, 1, JSON.stringify(fatal.map(e => e.message)));
+    assertStringIncludes(fatal[0].message, 'variable rows cannot be supplied to <my-widget>');
 });

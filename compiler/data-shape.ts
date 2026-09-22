@@ -448,6 +448,45 @@ function walkNodesForShape(
  *   bool b-attrs being printed).
  * - 'passed' usage (passing the value to another partial via b-data:) is fine.
  */
+/**
+ * Validate that a custom-element partial which generates client JS reads only the
+ * data it declares.
+ *
+ * The generated code patches the DOM in the browser from the values it can read off
+ * the element, so a free variable that no declaration covers has no way in: the
+ * partial's context holds what the call site binds, and such a call may bind only
+ * declared inputs. The variable would render empty on the server and stay empty.
+ *
+ * `b-attr:` is the one declaration today. `b-prop:` will be the other, and the names
+ * it declares join `declared` below.
+ */
+export function validateGeneratedPartialInputs(
+	root: RootTNode,
+	partialName: string,
+	sourceRelPath: string,
+): BackflipError[] {
+	const errors: BackflipError[] = [];
+	if (root.kind !== 'custom-element' || root.generate === undefined) return errors;
+
+	const declared = new Set((root.bAttrs ?? []).map(a => a.name));
+	const undeclared = [...inferDataShape(root).keys()].filter(v => !declared.has(v)).sort();
+	if (undeclared.length === 0) return errors;
+
+	const loc = root.loc;
+	const subject = undeclared.length === 1 ? 'variable' : 'variables';
+	errors.push(new BackflipError(
+		`${subject} ${undeclared.join(', ')} cannot be supplied to <${partialName}>: a partial that generates client JS reads only its declared attributes. Declare b-attr:NAME on the definition tag for a string or boolean value.`,
+		{
+			filename: sourceRelPath,
+			line: loc?.startLine,
+			col: loc?.startCol,
+			endLine: loc?.endLine,
+			endCol: loc?.endCol,
+		}
+	));
+	return errors;
+}
+
 export function validateBAttrUsage(root: RootTNode, sourceRelPath: string): BackflipError[] {
 	const errors: BackflipError[] = [];
 	if (root.kind !== 'custom-element' || !root.bAttrs || root.bAttrs.length === 0) return errors;

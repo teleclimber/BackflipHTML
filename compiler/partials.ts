@@ -8,7 +8,7 @@ import { collectSlots, isCustomElementTagName, parseBPartValue, VOID_ELEMENTS } 
 import { resolvePartial, resolveCustomElementCalls, linkBAttrBindings } from './link.js';
 import type { CompiledFile, CompileOptions, PartialRegistry, PartialRefTNode, PartialDef, TNode, RawTNode, SourceLoc } from './types.js';
 import { BackflipError } from './errors.js';
-import { validateBAttrUsage, inferDataShape } from './data-shape.js';
+import { validateBAttrUsage, validateGeneratedPartialInputs, inferDataShape } from './data-shape.js';
 
 export interface CompiledDirectory {
     files: Map<string, CompiledFile>  // key: relative file path e.g. "blog/general.html"
@@ -458,17 +458,18 @@ function validateTNode(
             // A partial's context holds what the call binds and nothing else, so a free
             // variable the call leaves unbound can only ever render empty. A missing
             // declared attribute is link.ts's error, not this one.
+            //
+            // A partial that generates client JS is exempt: nothing a call site does can
+            // supply an undeclared variable there, so the defect is in the definition and
+            // validateGeneratedPartialInputs reports it — once, whether or not it is called.
             const bound = new Set(ref.bindings.map(b => b.name));
-            const missing = [...shape.keys()]
+            const missing = generatesJs ? [] : [...shape.keys()]
                 .filter(v => !bound.has(v) && !declaredAttrs.has(v))
                 .sort();
             if (missing.length > 0) {
                 const subject = missing.length === 1 ? 'variable' : 'variables';
-                const hint = generatesJs
-                    ? 'declare on the definition with b-attr:NAME'
-                    : 'pass with b-data:NAME="expr"';
                 ctx.errors.push(new BackflipError(
-                    `${subject} ${missing.join(', ')} used in partial <${ref.partialName}> but not passed at this call site; ${hint}`,
+                    `${subject} ${missing.join(', ')} used in partial <${ref.partialName}> but not passed at this call site; pass with b-data:NAME="expr"`,
                     errorLoc(ctx.sourceRelPath, ref.loc)
                 ));
             }
@@ -682,9 +683,10 @@ export async function compileFiles(fileContents: Map<string, string>, options?: 
         // and warnings (returned by validateBAttrUsage) flow through alongside
         // the other compile-time diagnostics — same channel as the unresolved
         // custom-element warnings emitted earlier.
-        for (const [, root] of compiled.partials) {
+        for (const [name, root] of compiled.partials) {
             if (root.kind === 'custom-element') {
                 allErrors.push(...validateBAttrUsage(root, relPath));
+                allErrors.push(...validateGeneratedPartialInputs(root, name, relPath));
             }
         }
     }

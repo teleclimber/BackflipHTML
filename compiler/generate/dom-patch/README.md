@@ -24,7 +24,7 @@ A site qualifies when **all** of these hold:
 
 - The owning partial is a **custom-element partial** (`b-attr:` declarations are the source of "live" variables).
 - For attrs (element and caller): the attribute is a `b-bind:`/`:` dynamic attribute (a `Parsed` expression in `AttrPart.dynamic.expr`). For prints: the `{{ expr }}`'s `Parsed`. For if-sets: every branch condition.
-- Every variable in `parsed.vars` is one of the partial's live vars. Mixed live + non-live expressions are skipped entirely.
+- Every variable in `parsed.vars` is one of the partial's live vars. Mixed live + non-live expressions are skipped entirely — a guard, since the compiler rejects a partial that generates JS and reads a variable it does not declare.
 - The site is **not** inside a `b-for` loop. (v1 limitation — see below.)
 - For caller attrs: the attribute is **not** asset-bearing (`isAsset`), since the browser has no asset map.
 
