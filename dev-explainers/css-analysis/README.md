@@ -195,13 +195,12 @@ this tool exists to explain.
 ## Testing
 
 ```bash
-npm run build            # from the repo root: @backflip/html resolves to dist/
+npm run build            # from the repo root, after any compiler/ or runtime/ change
 npm --prefix dev-explainers test
 ```
 
-It also asserts that the forest is split into one tree per root, that a tree
-whose root renders no element leaves the rest unattributed rather than
-mislabelled, and that two entry points' trees stay apart.
+`@backflip/html` resolves to `dist/`, so these tests run against the last build
+rather than the working tree. Without the rebuild you're testing against old code.
 
 The suite asserts the demo's expansion counts and match types, that the page
 carries its payload and renders in jsdom without the inline script throwing,
@@ -209,3 +208,7 @@ that compile diagnostics reach both outputs and stay folded shut on the page,
 and that a project's asset directories are read out of its `backflip.json` and
 compiled with — including the failure they prevent, where the dropped attribute
 takes its selector match with it.
+
+It also asserts that the forest is split into one tree per root, that a tree
+whose root renders no element leaves the rest unattributed rather than
+mislabelled, and that two entry points' trees stay apart.

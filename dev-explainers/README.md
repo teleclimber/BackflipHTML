@@ -28,5 +28,8 @@ npm run build                         # from the repo root; @backflip/html resol
 ## Testing
 
 ```bash
+npm run build                         # from the repo root, after any compiler/ or runtime/ change
 npm --prefix dev-explainers test
 ```
+
+Always build before testing!
