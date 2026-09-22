@@ -256,11 +256,11 @@ A partial's context holds what the call site binds and nothing else. Variables t
 <b-unwrap b-name="badge">{{ label }}</b-unwrap>
 ```
 
-Here `badge` sees no `label`, whatever `profile` holds. The call needs `b-data:label="..."`.
+That is a compilation error: a call must pass every variable the target partial uses. Here the call needs `b-data:label="..."`. Declared `b-attr`s are the exception — they arrive as attributes on the call tag, not as bindings.
 
 Bindings travel no further than the call they are written on: they are not visible in the caller, and a partial that the callee itself calls sees only what *that* call binds.
 
-Slot content is the exception. It belongs to the caller, so it is evaluated in the caller's context and `b-data:` bindings do not apply to it — see [Slots](#slots).
+Slot content sits outside all of this. It belongs to the caller, so it is evaluated in the caller's context and `b-data:` bindings do not apply to it — see [Slots](#slots).
 
 ---
 
@@ -279,6 +279,7 @@ The compiler reports errors for:
 - `b-attr` outside a custom element partial definition, with a value, with an unknown modifier, or with a conflicting plain attribute on the same tag (see [Declared attributes](#declared-attributes-b-attr))
 - A required `b-attr` not provided at the call site, or `b-data:NAME` colliding with a declared `b-attr:NAME`
 - `b-data:NAME` at a call site where `NAME` does not appear in the target partial's data shape (i.e. the partial does not use a variable of that name and does not declare a `b-attr:NAME`). This catches typos and stale bindings that would otherwise be silently discarded.
+- A call site that does not pass a variable the target partial uses. The partial's context holds only what the call binds, so an unbound variable could only render empty (see [Partial scope](#partial-scope)).
 
 ---
 

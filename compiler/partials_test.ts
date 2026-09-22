@@ -1647,6 +1647,112 @@ Deno.test("compileDirectory - b-data:NAME for b-attr-declared name does not doub
     assertEquals(unknownMsgs.length, 0, `unexpected unknown-binding errors: ${JSON.stringify(unknownMsgs.map(e => e.message))}`);
 });
 
+// --- a call must provide every variable the target partial uses ---------------
+//
+// A partial's context holds what the call binds and nothing else, so an unbound
+// free variable can only ever render empty. These pin the caller-side check.
+
+/** Compile one page.html and return its fatal (non-warning) errors. */
+async function fatalsFor(suffix: string, html: string) {
+    const dir = await makeTempDir(suffix);
+    await writeFile(path.join(dir, "page.html"), html);
+    const { errors } = await compileDirectory(dir);
+    return errors.filter(e => e.severity !== 'warning');
+}
+
+Deno.test("compileDirectory - a call that passes nothing to a partial that needs a var errors", async () => {
+    const fatal = await fatalsFor("missing_one", `
+        <b-unwrap b-name="badge">{{ label }}</b-unwrap>
+        <b-unwrap b-name="profile">
+            <b-unwrap b-part="#badge"></b-unwrap>
+        </b-unwrap>
+    `);
+    assertEquals(fatal.length, 1, JSON.stringify(fatal.map(e => e.message)));
+    assertStringIncludes(fatal[0].message, 'variable label used in partial <badge> but not passed at this call site');
+});
+
+Deno.test("compileDirectory - only the unpassed variables are named, sorted", async () => {
+    const fatal = await fatalsFor("missing_some", `
+        <b-unwrap b-name="badge">{{ label }}{{ tone }}{{ size }}</b-unwrap>
+        <b-unwrap b-name="profile">
+            <b-unwrap b-part="#badge" b-data:tone="t"></b-unwrap>
+        </b-unwrap>
+    `);
+    assertEquals(fatal.length, 1, JSON.stringify(fatal.map(e => e.message)));
+    assertStringIncludes(fatal[0].message, 'variables label, size used in partial <badge>');
+});
+
+Deno.test("compileDirectory - a custom element call must provide the variables its body uses", async () => {
+    const fatal = await fatalsFor("missing_ce", `
+        <my-card><h2>{{ title }}</h2></my-card>
+        <article b-name="post">
+            <my-card></my-card>
+        </article>
+    `);
+    assertEquals(fatal.length, 1, JSON.stringify(fatal.map(e => e.message)));
+    assertStringIncludes(fatal[0].message, 'variable title used in partial <my-card> but not passed at this call site');
+});
+
+Deno.test("compileDirectory - a b-for value name in the caller does not satisfy the callee", async () => {
+    // `tag` is bound in the caller's loop, not in the partial's context.
+    const fatal = await fatalsFor("missing_for", `
+        <b-unwrap b-name="chip">{{ tag }}</b-unwrap>
+        <b-unwrap b-name="list">
+            <b-unwrap b-for="tag in tags"><b-unwrap b-part="#chip"></b-unwrap></b-unwrap>
+        </b-unwrap>
+    `);
+    assertEquals(fatal.length, 1, JSON.stringify(fatal.map(e => e.message)));
+    assertStringIncludes(fatal[0].message, 'variable tag used in partial <chip>');
+});
+
+Deno.test("compileDirectory - the error points at the call site", async () => {
+    const dir = await makeTempDir("missing_loc");
+    await writeFile(path.join(dir, "page.html"), `<b-unwrap b-name="badge">{{ label }}</b-unwrap>
+<b-unwrap b-name="profile">
+    <b-unwrap b-part="#badge"></b-unwrap>
+</b-unwrap>
+`);
+    const { errors } = await compileDirectory(dir);
+    const err = errors.find(e => e.message.includes('not passed at this call site'))!;
+    assertEquals(err.filename, "page.html");
+    assertEquals(err.line, 3);
+});
+
+Deno.test("compileDirectory - a cross-file call must provide the variables too", async () => {
+    const dir = await makeTempDir("missing_crossfile");
+    await writeFile(path.join(dir, "components.html"), `<b-unwrap b-name="badge" b-export>{{ label }}</b-unwrap>`);
+    await writeFile(path.join(dir, "page.html"), `<article b-name="post">
+    <b-unwrap b-part="components.html#badge"></b-unwrap>
+</article>`);
+    const { errors } = await compileDirectory(dir);
+    const fatal = errors.filter(e => e.severity !== 'warning');
+    assertEquals(fatal.length, 1, JSON.stringify(fatal.map(e => e.message)));
+    assertStringIncludes(fatal[0].message, 'variable label used in partial <badge>');
+    assertEquals(fatal[0].filename, "page.html");
+});
+
+Deno.test("compileDirectory - a declared b-attr is not required as a binding", async () => {
+    // b-attr values arrive as attributes; link.ts reports one that is missing.
+    const fatal = await fatalsFor("battr_not_binding", `
+        <my-widget b-attr:label b-generate="full"><h2>{{ label }}</h2></my-widget>
+        <article b-name="post">
+            <my-widget label="Hi"></my-widget>
+        </article>
+    `);
+    assertEquals(fatal.length, 0, JSON.stringify(fatal.map(e => e.message)));
+});
+
+Deno.test("compileDirectory - slot content variables belong to the caller, not the callee", async () => {
+    // `who` is evaluated in the caller's context, so #card does not need it passed.
+    const fatal = await fatalsFor("slot_vars_caller", `
+        <div b-name="card"><b-unwrap b-slot /></div>
+        <b-unwrap b-name="page">
+            <b-unwrap b-part="#card"><span>{{ who }}</span></b-unwrap>
+        </b-unwrap>
+    `);
+    assertEquals(fatal.length, 0, JSON.stringify(fatal.map(e => e.message)));
+});
+
 Deno.test("compileDirectory - b-data:NAME on unresolved custom element does not error", async () => {
     // Unresolved custom elements fall through as raw HTML and only emit a warning
     // for the unknown tag; we shouldn't add a confusing b-data error on top.

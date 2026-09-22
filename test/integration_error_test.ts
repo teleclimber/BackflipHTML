@@ -104,9 +104,29 @@ Deno.test("structural-errors.html: multiple b-attrs at line 3", () => {
 });
 
 // ---------------------------------------------------------------------------
+// data-errors.html
+//   line 4:  <b-unwrap b-part="#badge">  — #badge uses `label`, the call binds nothing
+//   line 10: <my-card>                   — my-card uses `title`, the call binds nothing
+// ---------------------------------------------------------------------------
+
+Deno.test("data-errors.html: reports 2 errors", () => {
+    assertEquals(errorsFor("data-errors.html").length, 2);
+});
+
+Deno.test("data-errors.html: b-part call missing a variable at line 4", () => {
+    const err = findError("data-errors.html", "variable label used in partial <badge>");
+    assertEquals(err.line, 4);
+});
+
+Deno.test("data-errors.html: custom element call missing a variable at line 10", () => {
+    const err = findError("data-errors.html", "variable title used in partial <my-card>");
+    assertEquals(err.line, 10);
+});
+
+// ---------------------------------------------------------------------------
 // All files combined: verify total error count across the directory
 // ---------------------------------------------------------------------------
 
 Deno.test("total errors across all files", () => {
-    assertEquals(errors.length, 7);
+    assertEquals(errors.length, 9);
 });

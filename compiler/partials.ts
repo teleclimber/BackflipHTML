@@ -417,6 +417,25 @@ function validateTNode(
                     errorLoc(ctx.sourceRelPath, binding.nameLoc ?? ref.loc)
                 ));
             }
+
+            // --- Validate that the call provides every variable the target needs ---
+            // A partial's context holds what the call binds and nothing else, so a free
+            // variable the call leaves unbound can only ever render empty. Declared
+            // b-attrs arrive as attributes, not bindings; link.ts reports a missing one.
+            const bound = new Set(ref.bindings.map(b => b.name));
+            const declaredAttrs = new Set(
+                targetPartial.kind === 'custom-element' ? (targetPartial.bAttrs ?? []).map(a => a.name) : []
+            );
+            const missing = [...shape.keys()]
+                .filter(v => !bound.has(v) && !declaredAttrs.has(v))
+                .sort();
+            if (missing.length > 0) {
+                const subject = missing.length === 1 ? 'variable' : 'variables';
+                ctx.errors.push(new BackflipError(
+                    `${subject} ${missing.join(', ')} used in partial <${ref.partialName}> but not passed at this call site; pass with b-data:NAME="expr"`,
+                    errorLoc(ctx.sourceRelPath, ref.loc)
+                ));
+            }
         }
 
         // Validate slot contents recursively
