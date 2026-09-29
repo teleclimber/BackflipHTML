@@ -1,7 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import { JSDOM } from "npm:jsdom";
 
-import { replaceBetween } from "./patch.ts";
+import { BackflipElement, replaceBetween } from "./patch.ts";
 
 function parentWith(innerHtml: string) {
 	const dom = new JSDOM(`<!DOCTYPE html><body><div>${innerHtml}</div></body>`);
@@ -82,3 +82,28 @@ for (const [label, html] of [
 		assertEquals(errors[0][1], parent);
 	});
 }
+
+// --- BackflipElement: what holds without a DOM ------------------------------
+
+Deno.test("BackflipElement: the module loads with no DOM, and the base observes nothing", () => {
+	assertEquals(typeof BackflipElement, 'function');
+	assertEquals(BackflipElement.observedAttributes, []);
+});
+
+Deno.test("BackflipElement: observedAttributes is the subclass's declared attributes", () => {
+	class Generated extends BackflipElement {
+		static override bfDeclared = ['title', 'open'];
+	}
+	assertEquals(Generated.observedAttributes, ['title', 'open']);
+	assertEquals(BackflipElement.observedAttributes, []);
+});
+
+Deno.test("BackflipElement: an author subclass can spread super.observedAttributes", () => {
+	class Generated extends BackflipElement {
+		static override bfDeclared = ['title'];
+	}
+	class Authored extends Generated {
+		static override get observedAttributes() { return [...super.observedAttributes, 'extra']; }
+	}
+	assertEquals(Authored.observedAttributes, ['title', 'extra']);
+});

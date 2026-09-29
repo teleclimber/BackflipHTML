@@ -26,8 +26,8 @@ const APP_HTML = `<mode-badge b-attr:mode b-script="@scripts/mode-badge.js">
 	<body><mode-badge mode="a"></mode-badge></body>
 </b-unwrap>`;
 
-// Same shape but with no b-if and no print, so nothing imports any runtime file.
-const APP_NO_IF = `<mode-badge b-attr:mode b-script="@scripts/mode-badge.js">
+// No b-if, no print, and no element class (render mode), so nothing imports any runtime file.
+const APP_NO_IF = `<mode-badge b-attr:mode b-generate="render" b-script="@scripts/mode-badge.js">
 	<div :data-mode="mode">x</div>
 </mode-badge>`;
 
@@ -107,7 +107,7 @@ Deno.test("integration CLI: render.js and patch.js are copied into the dom-patch
 
 		const generated = await fs.readFile(path.join(workDir, "bfdom", "mode-badge.js"), "utf-8");
 		assertStringIncludes(generated, "import { render } from './render.js';");
-		assertStringIncludes(generated, "import { replaceBetween } from './patch.js';");
+		assertStringIncludes(generated, "import { replaceBetween, BackflipElement } from './patch.js';");
 		assertStringIncludes(generated, "createContextualFragment");
 	} finally {
 		await fs.rm(workDir, { recursive: true, force: true });
@@ -151,7 +151,7 @@ Deno.test("integration CLI: a partial from a nested template still lands flat be
 		assertEquals(await exists(path.join(workDir, "bfdom", "deep")), false);
 
 		// Resolve each specifier the way the browser would, and check it lands on a real file.
-		const specs = [...generated.matchAll(/^import \{ \w+ \} from '([^']+)';/gm)].map(m => m[1]);
+		const specs = [...generated.matchAll(/^import \{[^}]*\} from '([^']+)';/gm)].map(m => m[1]);
 		assertEquals(specs, ['./render.js', './patch.js']);
 		for (const spec of specs) {
 			const resolved = path.resolve(path.dirname(modulePath), spec);
@@ -183,7 +183,7 @@ Deno.test("integration CLI: a print without b-if copies patch.js but not render.
 		const { code, stderr } = await runCli(workDir);
 		assertEquals(code, 0, `cli failed: ${stderr}`);
 		const generated = await fs.readFile(path.join(workDir, "bfdom", "mode-badge.js"), "utf-8");
-		assertStringIncludes(generated, "import { replaceBetween } from './patch.js';");
+		assertStringIncludes(generated, "import { replaceBetween, BackflipElement } from './patch.js';");
 		assertEquals(generated.includes("render.js"), false);
 		assertEquals(await exists(path.join(workDir, "bfdom", "patch.js")), true);
 		assertEquals(await exists(path.join(workDir, "bfdom", "render.js")), false);

@@ -15,8 +15,6 @@ import * as fs from "node:fs/promises";
 import { JSDOM } from "npm:jsdom";
 
 import { renderRoot, type RootRNode } from "../runtime/js/render.ts";
-import * as renderRuntime from "../runtime/js/render.ts";
-import * as patchRuntime from "../runtime/dom-patch/patch.ts";
 
 const TMPDIR = "/tmp/claude-1000/dom-patch-generate";
 const CLI_PATH = new URL("../cli.ts", import.meta.url).pathname;
@@ -55,21 +53,26 @@ async function buildProject(): Promise<string> {
 	return workDir;
 }
 
-// The runtime files a generated module can import, as this test already has them.
-const RUNTIME: Record<string, unknown> = { "render.js": renderRuntime, "patch.js": patchRuntime };
-
 /**
- * Put the server-rendered HTML in a window and run the generated module in it, with
- * each of the module's runtime imports bound to the runtime this test already has.
- * The document is fully parsed first, as it is for the deferred module script the
+ * Put the server-rendered HTML in a window and run the generated module in it. Each
+ * runtime import is bound by running the file the build copied beside the module in
+ * that window, so the element base class extends the window's HTMLElement. The
+ * document is fully parsed first, as it is for the deferred module script the
  * renderer injects.
  */
 async function browserFor(workDir: string, html: string) {
-	const src = (await fs.readFile(path.join(workDir, "bfdom", "count-badge.js"), "utf-8"))
-		.replace(/^import (\{[^}]*\}) from '\.\/([^']+)';$/gm, "const $1 = globalThis.__runtime['$2'];")
-		.replaceAll("export class", "class");
+	const outDir = path.join(workDir, "bfdom");
+	const mod = await fs.readFile(path.join(outDir, "count-badge.js"), "utf-8");
+	const imports = [...mod.matchAll(/^import \{([^}]*)\} from '\.\/([^']+)';$/gm)];
+	const bindings = await Promise.all(imports.map(async ([, names, file]) => {
+		const runtime = (await fs.readFile(path.join(outDir, file), "utf-8")).replace(/^export /gm, "");
+		return `const {${names}} = (() => {\n${runtime}\nreturn {${names}};\n})();`;
+	}));
+	const src = [
+		...bindings,
+		mod.replace(/^import .*$/gm, "").replaceAll("export class", "class"),
+	].join("\n");
 	const dom = new JSDOM(`<!DOCTYPE html>${html}`, { runScripts: "outside-only" });
-	(dom.window as unknown as { __runtime: unknown }).__runtime = RUNTIME;
 	await new Promise(resolve => dom.window.addEventListener("load", resolve, { once: true }));
 	dom.window.eval(src);
 	return dom.window.document;

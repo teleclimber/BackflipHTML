@@ -118,10 +118,10 @@ export function generateClassForPartial(
  */
 export type RuntimeFile = 'render.js' | 'patch.js';
 
-/** The runtime names a patch-branch tree calls, keyed by the file that exports them. */
+/** The runtime names a module uses, keyed by the file that exports them. */
 export type RuntimeImports = Map<RuntimeFile, string[]>;
 
-export function runtimeImportsFor(root: PatchBranch): RuntimeImports {
+export function runtimeImportsFor(root: PatchBranch, mode: GenerateMode): RuntimeImports {
 	let hasSet = false, hasPrint = false;
 	const visit = (b: PatchBranch) => {
 		if (b.sites.some(s => s.backcode.site.kind === 'print')) hasPrint = true;
@@ -131,9 +131,12 @@ export function runtimeImportsFor(root: PatchBranch): RuntimeImports {
 		}
 	};
 	visit(root);
+	const patchNames: string[] = [];
+	if (hasSet || hasPrint) patchNames.push('replaceBetween');
+	if (mode === 'base' || mode === 'full') patchNames.push('BackflipElement');
 	const imports: RuntimeImports = new Map();
 	if (hasSet) imports.set('render.js', ['render']);
-	if (hasSet || hasPrint) imports.set('patch.js', ['replaceBetween']);
+	if (patchNames.length) imports.set('patch.js', patchNames);
 	return imports;
 }
 
@@ -519,73 +522,19 @@ function genElementShell(
 
 // --- the custom element class ('base' and 'full') --------------------------
 
-/**
- * `BackflipMyWidgetElement extends HTMLElement` — the lifecycle half, driving the
- * shell above. Everything it owns is `bf`-prefixed so a 'base' subclass has the
- * plain namespace to itself; `bfPatch` is the documented handle on the shell.
- *
- * Nothing runs in the constructor: a custom element constructor may not inspect its
- * attributes or children, which is exactly what the shell does. `bfInit` is idempotent
- * (connectedCallback fires again whenever the element is moved) and defers while the
- * document is still parsing, since a parser-driven connect happens before the
- * element's children exist.
- */
+// `BackflipMyWidgetElement` — the lifecycle half, driving the shell above. The
+// lifecycle itself lives in the runtime's `BackflipElement`; this subclass only
+// names the shell and the declared attributes it observes.
 function genCustomElementClass(
 	partialName: string,
 	bAttrs: { name: string; isBool: boolean }[],
 ): string {
-	const className = elementClassNameFor(partialName);
-	const shellName = classNameFor(partialName);
-	const observed = bAttrs.map(b => `'${b.name}'`).join(', ');
-
 	const lines = [
-		`export class ${className} extends HTMLElement {`,
-		`\tstatic observedAttributes = [${observed}];`,
-		'\tconnectedCallback() {',
-		'\t\tthis.bfInit();',
-		'\t}',
-		'\tattributeChangedCallback(name, oldValue, newValue) {',
-		'\t\t// setAttribute with an unchanged value still fires this.',
-		'\t\tif (oldValue === newValue) return;',
-		'\t\tif (!this.bfPatch) {',
-		'\t\t\t// Upgrade replays every observed attribute before connectedCallback, and the',
-		'\t\t\t// server-rendered DOM already matches those. A change that really happened',
-		'\t\t\t// before init is replayed by bfInit.',
-		'\t\t\t(this.bfPending ??= new Set()).add(name);',
-		'\t\t\treturn;',
-		'\t\t}',
-		'\t\tthis.bfPatch.update(name);',
-		'\t}',
-		'\tbfInit() {',
-		'\t\tif (this.bfPatch) return;',
-		"\t\tif (this.ownerDocument.readyState === 'loading') {",
-		'\t\t\t// Connected by the parser: our children are not all here yet.',
-		"\t\t\tthis.ownerDocument.addEventListener('DOMContentLoaded', () => this.bfInit(), { once: true });",
-		'\t\t\treturn;',
-		'\t\t}',
+		`export class ${elementClassNameFor(partialName)} extends BackflipElement {`,
+		`\tstatic bfShell = ${classNameFor(partialName)};`,
 	];
-	if (bAttrs.length > 0) lines.push('\t\tthis.bfCheckObserved();');
-	lines.push(
-		`\t\tthis.bfPatch = new ${shellName}(this);`,
-		'\t\tif (this.bfPending) {',
-		'\t\t\tfor (const name of this.bfPending) this.bfPatch.update(name);',
-		'\t\t\tthis.bfPending = null;',
-		'\t\t}',
-		'\t}',
-	);
 	if (bAttrs.length > 0) {
-		// observedAttributes is read once, at define() time, off the registered class, so
-		// a subclass that overrides it without spreading loses reactivity silently.
-		lines.push(
-			'\tbfCheckObserved() {',
-			`\t\tconst declared = [${observed}];`,
-			'\t\tconst observed = this.constructor.observedAttributes ?? [];',
-			'\t\tconst missing = declared.filter(n => !observed.includes(n));',
-			'\t\tif (missing.length) {',
-			`\t\t\tconsole.error('BackflipHTML <${partialName}>: observedAttributes is missing ' + missing.join(', ') + '; a subclass overriding it must spread super.observedAttributes', this);`,
-			'\t\t}',
-			'\t}',
-		);
+		lines.push(`\tstatic bfDeclared = [${bAttrs.map(b => `'${b.name}'`).join(', ')}];`);
 	}
 	lines.push('}');
 	return lines.join('\n');

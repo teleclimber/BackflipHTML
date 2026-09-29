@@ -400,12 +400,14 @@ Deno.test("integration CLI: each partial gets its own module, named after its ta
 		const fullJs = await fs.readFile(path.join(workDir, "bfdom", "full-el.js"), "utf-8");
 		const baseJs = await fs.readFile(path.join(workDir, "bfdom", "base-el.js"), "utf-8");
 		assertEquals(await exists(path.join(workDir, "bfdom", "app.js")), false);
+		// The element class's lifecycle comes from the runtime, copied beside the modules.
+		assertEquals(await exists(path.join(workDir, "bfdom", "patch.js")), true);
 
-		assertStringIncludes(fullJs, "export class BackflipFullElElement extends HTMLElement");
+		assertStringIncludes(fullJs, "export class BackflipFullElElement extends BackflipElement");
 		assertStringIncludes(fullJs, "customElements.define('full-el', BackflipFullElElement)");
 		assertEquals(fullJs.includes("BackflipBaseEl"), false);
 
-		assertStringIncludes(baseJs, "export class BackflipBaseElElement extends HTMLElement");
+		assertStringIncludes(baseJs, "export class BackflipBaseElElement extends BackflipElement");
 		assertEquals(baseJs.includes("customElements.define"), false);
 
 		// Each partial is stamped with its own module, and the mode picks the kind.

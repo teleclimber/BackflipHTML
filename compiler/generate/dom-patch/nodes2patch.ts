@@ -88,7 +88,7 @@ export function applyDomPatch(file: CompiledFile, opts?: DomPatchOptions): DomPa
 		const cls = generateClassForPartial(partialName, bAttrs, rootBranch, mode);
 		if (!cls) continue;
 
-		const imports = runtimeImportsFor(rootBranch);
+		const imports = runtimeImportsFor(rootBranch, mode);
 		modules.push({ tagName: partialName, js: generateFile([cls], imports), runtimeFiles: [...imports.keys()] });
 
 		// Only partials that produce a module get a script. 'full' registers the element

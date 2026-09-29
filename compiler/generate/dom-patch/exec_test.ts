@@ -12,7 +12,7 @@ import { JSDOM } from "npm:jsdom";
 import type { ElementTNode, IfBranch, IfTNode, PrintTNode } from "../../types.ts";
 import { interpretBackcode } from "../../backcode.ts";
 import { render } from "../../../runtime/js/render.ts";
-import { replaceBetween } from "../../../runtime/dom-patch/patch.ts";
+import { BackflipElement, replaceBetween } from "../../../runtime/dom-patch/patch.ts";
 import type { BackcodeSite, IfSetSite } from "./collect.ts";
 import { generateClassForPartial, type BfidSite, type IfSetPatchSite, type PatchBranch, type PatchTarget } from "./codegen.ts";
 
@@ -460,13 +460,20 @@ function widgetModule(mode: 'render' | 'base' | 'full'): string {
 const SERVER_HTML = (name: string) =>
 	`<my-widget name="${name}"><p data-bfid="bf0">Hello <!--bfid:bf1-->${name}<!--bfid:bf2-->!</p></my-widget>`;
 
+// The runtime's patch.js as classic-script source for a jsdom window, standing in for
+// the module's import of it. Its element base resolves to the window's HTMLElement.
+const PATCH_RUNTIME_SCRIPT = [
+	'const ElementBase = HTMLElement;',
+	replaceBetween.toString(),
+	BackflipElement.toString(),
+].join('\n');
+
 // Strip the ES-module syntax so the source can be evaluated as a classic script. The
-// exported names are hung off globalThis, standing in for what an importer would bind,
-// and the runtime's replaceBetween is inlined in place of its import.
+// exported names are hung off globalThis, standing in for what an importer would bind.
 function asScript(js: string): string {
 	const exported = [...js.matchAll(/export class (\w+)/g)].map(m => m[1]);
 	return [
-		replaceBetween.toString(),
+		PATCH_RUNTIME_SCRIPT,
 		js.replaceAll('export class', 'class'),
 		...exported.map(n => `globalThis.${n} = ${n};`),
 	].join('\n');
@@ -549,6 +556,14 @@ Deno.test("exec: a subclass that spreads observedAttributes patches; one that dr
 	assertEquals(badHost.textContent, 'Hello World!');
 	assertEquals(second.errors.length, 1);
 	assertEquals(second.errors[0].includes('observedAttributes is missing name'), true);
+});
+
+Deno.test("exec: an element with no b-attrs registers and initializes without error", async () => {
+	const js = generateClassForPartial('my-widget', [], patchBranch('BackflipPatch_MyWidget'), 'full')!;
+	const { doc, errors } = await defineAfterParse(js, `<my-widget><p>static</p></my-widget>`);
+	const host = doc.querySelector('my-widget')! as unknown as { bfPatch?: unknown };
+	assertEquals(host.bfPatch !== undefined, true);
+	assertEquals(errors, []);
 });
 
 Deno.test("exec: defining the same element twice is skipped, not thrown", async () => {

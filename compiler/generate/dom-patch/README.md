@@ -86,7 +86,7 @@ The mutation logic lives in **patch-branches** (see [patch-branches](#patch-bran
 
 ```js
 import { render } from './render.js';            // only when the module has at least one if-set
-import { replaceBetween } from './patch.js';     // when it has a print site or an if-set
+import { replaceBetween, BackflipElement } from './patch.js';   // each as needed: a print or if-set; base/full
 
 const bfif_<setId> = { type:'if', branches: [ ... ] };   // one per if-set, module level
 
@@ -144,24 +144,24 @@ The bfid and attribute function name must be valid JS identifiers, but the runti
 
 ## The custom element class
 
-`b-generate="base"` and `"full"` add `export class BackflipMyWidgetElement extends HTMLElement` below the shell; `"full"` also adds a guarded `customElements.define('my-widget', BackflipMyWidgetElement)`. The element class is the lifecycle half and does nothing else — it constructs the shell and forwards attribute changes to it:
+`b-generate="base"` and `"full"` add `export class BackflipMyWidgetElement` below the shell; `"full"` also adds a guarded `customElements.define('my-widget', BackflipMyWidgetElement)`. The element class is the lifecycle half and does nothing else — it constructs the shell and forwards attribute changes to it. The lifecycle is the same for every partial, so it lives in the runtime's `BackflipElement` (in `patch.js`, an `HTMLElement` subclass), and the generated class only names its shell and declared attributes:
 
 ```js
-export class BackflipMyWidgetElement extends HTMLElement {
-    static observedAttributes = ['count'];
-    connectedCallback() { this.bfInit(); }
-    attributeChangedCallback(name, oldValue, newValue) { ... }
-    bfInit() { ... this.bfPatch = new BackflipMyWidget(this); ... }
+import { BackflipElement } from './patch.js';
+
+export class BackflipMyWidgetElement extends BackflipElement {
+    static bfShell = BackflipMyWidget;
+    static bfDeclared = ['count'];     // omitted when the partial declares no b-attr
 }
 ```
 
-Each rule it is built around comes from the custom elements spec, not from preference:
+`BackflipElement` derives `observedAttributes` from `bfDeclared` and, on init, constructs `bfShell` with the element. Each rule it is built around comes from the custom elements spec, not from preference:
 
 - **Nothing happens in the constructor.** A custom element constructor may not inspect its attributes or children, which is exactly what the shell does. There is no constructor at all; `bfInit()` runs from `connectedCallback`.
 - **`connectedCallback` can run mid-parse**, when the element's children do not exist yet. `bfInit` checks `ownerDocument.readyState === 'loading'` and, in that case, waits for `DOMContentLoaded` instead of patching into a half-built subtree. It is also idempotent, since moving an element re-fires `connectedCallback`.
 - **`attributeChangedCallback` fires before `connectedCallback`**, once per observed attribute, during upgrade. Those calls must not patch — the server-rendered DOM already matches — so they are collected in `bfPending` and replayed by `bfInit`, which fixes an attribute that genuinely changed between parse and upgrade. A change with `oldValue === newValue` is skipped, since `setAttribute` fires the callback either way.
 - **`observedAttributes` and the lifecycle callbacks are read once**, at `define()` time, off the registered class. A `base` subclass that overrides `observedAttributes` without spreading `super.observedAttributes` silently loses all reactivity, so `bfInit` compares the two and `console.error`s the missing names. A forgotten `super.connectedCallback()` is documented, not detectable.
-- **Everything the class owns is `bf`-prefixed** (`bfPatch`, `bfPending`, `bfInit`, `bfCheckObserved`), leaving the plain namespace to a subclass.
+- **Everything the class owns is `bf`-prefixed** (`bfPatch`, `bfPending`, `bfInit`, `bfCheckObserved`, and the statics `bfShell` and `bfDeclared`), leaving the plain namespace to a subclass.
 - **The define is guarded** with `customElements.get`: a name may be registered once, and an unguarded throw would take the rest of the module with it.
 
 Known limitation: the replay covers attr and print sites, but not an if-set whose condition changed before init — the patch-branch constructor computes the active index from current data and trusts the server to have rendered that branch (the same assumption noted for [active-branch tracking](#active-branch-tracking)).
@@ -182,7 +182,7 @@ Every var reaching codegen must be one of the partial's declared attributes; the
 Generated modules import shared code instead of carrying a copy of it:
 
 - `render.js` — the JS runtime (`runtime/js/render.ts`), for re-rendering an if-set branch.
-- `patch.js` — browser-only helpers for patching (`runtime/dom-patch/patch.ts`), such as `replaceBetween`.
+- `patch.js` — browser-only code for patching (`runtime/dom-patch/patch.ts`): `replaceBetween`, and the `BackflipElement` base class every `base`/`full` element class extends.
 
 Each module imports only what it calls, and reports those files in `runtimeFiles`. The CLI copies each needed file from `dist` (see `RUNTIME_FILE_DIST_PATHS`) into the root of the dom-patch output dir. Every module sits at that root, so a specifier is always `./<file>`. If a needed `dist` file is missing the build **errors and stops**, since a silent skip would ship a page that 404s on import. The preview server maps `<domPatchOutputDir>/<file>` to the same `dist` file.
 

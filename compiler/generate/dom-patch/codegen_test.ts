@@ -280,23 +280,23 @@ Deno.test("generateFile emits one import per runtime file, before the classes", 
 
 Deno.test("runtimeImportsFor: attr sites alone import nothing", () => {
 	const site = attrBfidSite('bf0', dynAttr('title', 'foo'), ['foo']);
-	assertEquals([...runtimeImportsFor(branch([site]))], []);
+	assertEquals([...runtimeImportsFor(branch([site]), 'render')], []);
 });
 
 Deno.test("runtimeImportsFor: an empty branch imports nothing", () => {
-	assertEquals([...runtimeImportsFor(branch())], []);
+	assertEquals([...runtimeImportsFor(branch(), 'render')], []);
 });
 
 Deno.test("runtimeImportsFor: a print site imports replaceBetween only", () => {
 	const site = printBfidSite({ kind: 'ref-element' }, 'name', ['name'], 'bf0', 'bf1');
-	assertEquals([...runtimeImportsFor(branch([site]))], [['patch.js', ['replaceBetween']]]);
+	assertEquals([...runtimeImportsFor(branch([site]), 'render')], [['patch.js', ['replaceBetween']]]);
 });
 
 Deno.test("runtimeImportsFor: an if-set imports render and replaceBetween", () => {
 	const set = ifPatchSite({
 		target: { kind: 'ref-element' }, conditions: ['flag'], liveVars: ['flag'], setId: 'bf0', endId: 'bf1',
 	});
-	assertEquals([...runtimeImportsFor(branch([], [set]))],
+	assertEquals([...runtimeImportsFor(branch([], [set]), 'render')],
 		[['render.js', ['render']], ['patch.js', ['replaceBetween']]]);
 });
 
@@ -313,7 +313,7 @@ Deno.test("runtimeImportsFor: a print that exists only in a nested branch is fou
 		target: { kind: 'ref-element' }, conditions: ['a'], liveVars: ['a'], setId: 'bf0', endId: 'bf1',
 		branches: [outerChild],
 	});
-	const imports = runtimeImportsFor(branch([], [outerSet]));
+	const imports = runtimeImportsFor(branch([], [outerSet]), 'render');
 	assertEquals(imports.get('patch.js'), ['replaceBetween']);
 	assertEquals(imports.get('render.js'), ['render']);
 });
@@ -496,55 +496,35 @@ function forMode(mode: 'render' | 'base' | 'full'): string {
 Deno.test("modes: render emits the shell only — no element class, no define", () => {
 	const js = forMode('render');
 	assertEquals(js.includes('export class BackflipMyWidget {'), true);
-	assertEquals(js.includes('extends HTMLElement'), false);
+	assertEquals(js.includes('BackflipElement'), false);
 	assertEquals(js.includes('customElements.define'), false);
 });
 
 Deno.test("modes: base adds the element class but does not define it", () => {
 	const js = forMode('base');
 	assertEquals(js.includes('export class BackflipMyWidget {'), true);
-	assertEquals(js.includes('export class BackflipMyWidgetElement extends HTMLElement {'), true);
+	assertEquals(js.includes('export class BackflipMyWidgetElement extends BackflipElement {'), true);
 	assertEquals(js.includes('customElements.define'), false);
 });
 
 Deno.test("modes: full adds the define, guarded against a duplicate registration", () => {
 	const js = forMode('full');
-	assertEquals(js.includes('export class BackflipMyWidgetElement extends HTMLElement {'), true);
+	assertEquals(js.includes('export class BackflipMyWidgetElement extends BackflipElement {'), true);
 	assertEquals(
 		js.includes("if (!customElements.get('my-widget')) customElements.define('my-widget', BackflipMyWidgetElement);"),
 		true,
 	);
 });
 
-Deno.test("modes: observedAttributes lists every b-attr, bools included", () => {
-	assertEquals(forMode('base').includes("static observedAttributes = ['title', 'flag'];"), true);
-});
-
-Deno.test("modes: the element class drives the shell and owns only bf-prefixed members", () => {
+Deno.test("modes: the element class names its shell and every b-attr, bools included", () => {
 	const js = forMode('base');
-	assertEquals(js.includes('this.bfPatch = new BackflipMyWidget(this);'), true);
-	// Everything the generated class puts on the element itself is namespaced, so a
-	// subclass has the plain namespace to itself.
 	const elementClass = js.slice(js.indexOf('export class BackflipMyWidgetElement'));
-	const members = [...elementClass.matchAll(/this\.([a-zA-Z_$][\w$]*)/g)].map(m => m[1]);
-	const onElement = members.filter(m => m !== 'constructor' && m !== 'ownerDocument');
-	assertEquals(onElement.every(m => m.startsWith('bf')), true, onElement.join(', '));
-});
-
-Deno.test("modes: nothing touches the DOM in the constructor", () => {
-	// A custom element constructor may not inspect attributes or children; the
-	// element class has no constructor at all and initializes on connect.
-	const js = forMode('full');
-	const elementClass = js.slice(js.indexOf('export class BackflipMyWidgetElement'));
-	assertEquals(/^\tconstructor\(/m.test(elementClass), false);
-	assertEquals(elementClass.includes('connectedCallback() {'), true);
-});
-
-Deno.test("modes: attributeChangedCallback skips no-op changes and pre-init calls", () => {
-	const js = forMode('base');
-	assertEquals(js.includes('if (oldValue === newValue) return;'), true);
-	assertEquals(js.includes('(this.bfPending ??= new Set()).add(name);'), true);
-	assertEquals(js.includes("if (this.ownerDocument.readyState === 'loading') {"), true);
+	assertEquals(elementClass, [
+		'export class BackflipMyWidgetElement extends BackflipElement {',
+		'\tstatic bfShell = BackflipMyWidget;',
+		"\tstatic bfDeclared = ['title', 'flag'];",
+		'}',
+	].join('\n'));
 });
 
 Deno.test("modes: base and full still emit a class when there is nothing to patch", () => {
@@ -552,19 +532,23 @@ Deno.test("modes: base and full still emit a class when there is nothing to patc
 	assertEquals(generateClassForPartial('my-widget', [], empty, 'render'), null);
 	for (const mode of ['base', 'full'] as const) {
 		const js = generateClassForPartial('my-widget', [], empty, mode)!;
-		assertEquals(js.includes('export class BackflipMyWidgetElement extends HTMLElement {'), true);
-		assertEquals(js.includes('static observedAttributes = [];'), true);
-		// No b-attrs to observe → no coverage guard to run.
-		assertEquals(js.includes('bfCheckObserved'), false);
+		assertEquals(js.includes('export class BackflipMyWidgetElement extends BackflipElement {'), true);
+		assertEquals(js.includes('static bfShell = BackflipMyWidget;'), true);
+		// No b-attrs: the base class's empty bfDeclared stands.
+		assertEquals(js.includes('bfDeclared'), false);
 		// An empty patch class means an empty `switch` and an empty `collectData`, so
 		// check the module still parses.
 		new Function(js.replaceAll('export class', 'class'));
 	}
 });
 
-Deno.test("modes: the observedAttributes guard reports what a subclass dropped", () => {
-	const js = forMode('base');
-	assertEquals(js.includes('this.bfCheckObserved();'), true);
-	assertEquals(js.includes("const declared = ['title', 'flag'];"), true);
-	assertEquals(js.includes('must spread super.observedAttributes'), true);
+Deno.test("runtimeImportsFor: base and full import BackflipElement; render does not", () => {
+	const attr = attrBfidSite('bf0', dynAttr('title', 'foo'), ['foo']);
+	const print = printBfidSite({ kind: 'ref-element' }, 'name', ['name'], 'bf1', 'bf2');
+	assertEquals([...runtimeImportsFor(branch([attr]), 'render')], []);
+	for (const mode of ['base', 'full'] as const) {
+		assertEquals([...runtimeImportsFor(branch([attr]), mode)], [['patch.js', ['BackflipElement']]]);
+		assertEquals([...runtimeImportsFor(branch(), mode)], [['patch.js', ['BackflipElement']]]);
+		assertEquals([...runtimeImportsFor(branch([print]), mode)], [['patch.js', ['replaceBetween', 'BackflipElement']]]);
+	}
 });
