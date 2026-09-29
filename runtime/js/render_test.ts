@@ -1,7 +1,7 @@
 import { assertEquals, assertThrows, assertStringIncludes } from "jsr:@std/assert";
 
 import type { RootRNode, RawRNode, PrintRNode, ForRNode, IfRNode, SlotRNode, PartialRefRNode, PartialScript, RNode, rfn } from "./render.ts";
-import { render, renderRoot, streamRenderRoot, escapeHtml, activeBranchIndex } from "./render.ts";
+import { render, renderRoot, streamRenderRoot, escapeHtml, activeBranchIndex, execFn } from "./render.ts";
 
 function streamToString(n: RootRNode, ctx: any): string {
 	return Array.from(streamRenderRoot(n, ctx)).join('');
@@ -104,6 +104,19 @@ Deno.test("if/else-if/else picks first truthy branch", () => {
 	assertEquals(render(node, { a: false, b: true }), '2');
 	assertEquals(render(node, { a: true, b: true }), '1');
 	assertEquals(render(node, { a: false, b: false }), '3');
+});
+
+// execFn is how every compiled expression is evaluated, exposed for dom-patch.
+Deno.test("execFn: passes the named context values in vars order", () => {
+	assertEquals(execFn(makeFn('a + "-" + b', ['b', 'a']), { a: 'x', b: 'y' }), 'x-y');
+});
+
+Deno.test("execFn: a var missing from the context is undefined", () => {
+	assertEquals(execFn(makeFn('typeof a', ['a']), {}), 'undefined');
+});
+
+Deno.test("execFn: an expression with no vars ignores the context", () => {
+	assertEquals(execFn(makeFn('1 + 1', []), { a: 5 }), 2);
 });
 
 // activeBranchIndex is the branch choice render() makes, exposed for dom-patch.

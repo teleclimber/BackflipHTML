@@ -11,7 +11,7 @@ import { JSDOM } from "npm:jsdom";
 
 import type { ElementTNode, IfBranch, IfTNode, PrintTNode } from "../../types.ts";
 import { interpretBackcode } from "../../backcode.ts";
-import { render, activeBranchIndex } from "../../../runtime/js/render.ts";
+import { render, activeBranchIndex, execFn } from "../../../runtime/js/render.ts";
 import { BackflipElement, replaceBetween } from "../../../runtime/dom-patch/patch.ts";
 import type { BackcodeSite, IfSetSite } from "./collect.ts";
 import { generateClassForPartial, type BfidSite, type IfSetPatchSite, type PatchBranch, type PatchTarget } from "./codegen.ts";
@@ -89,7 +89,7 @@ function mount(js: string, partialName: string, className: string, hostAttrs: st
 	const prevDoc = (globalThis as any).document;
 	(globalThis as any).document = dom.window.document;
 	const host = dom.window.document.querySelector(partialName)!;
-	const Cls = new Function('render', 'activeBranchIndex', 'replaceBetween', js.replaceAll('export class', 'class') + `; return ${className};`)(render, activeBranchIndex, replaceBetween);
+	const Cls = new Function('render', 'activeBranchIndex', 'execFn', 'replaceBetween', js.replaceAll('export class', 'class') + `; return ${className};`)(render, activeBranchIndex, execFn, replaceBetween);
 	const instance = new Cls(host);
 	return { host, instance, restore: () => { (globalThis as any).document = prevDoc; } };
 }
@@ -460,9 +460,11 @@ function widgetModule(mode: 'render' | 'base' | 'full'): string {
 const SERVER_HTML = (name: string) =>
 	`<my-widget name="${name}"><p data-bfid="bf0">Hello <!--bfid:bf1-->${name}<!--bfid:bf2-->!</p></my-widget>`;
 
-// The runtime's patch.js as classic-script source for a jsdom window, standing in for
-// the module's import of it. Its element base resolves to the window's HTMLElement.
-const PATCH_RUNTIME_SCRIPT = [
+// The runtime functions these modules import, as classic-script source for a jsdom
+// window, standing in for the module's imports. The element base resolves to the
+// window's HTMLElement.
+const RUNTIME_SCRIPT = [
+	execFn.toString(),
 	'const ElementBase = HTMLElement;',
 	replaceBetween.toString(),
 	BackflipElement.toString(),
@@ -473,7 +475,7 @@ const PATCH_RUNTIME_SCRIPT = [
 function asScript(js: string): string {
 	const exported = [...js.matchAll(/export class (\w+)/g)].map(m => m[1]);
 	return [
-		PATCH_RUNTIME_SCRIPT,
+		RUNTIME_SCRIPT,
 		js.replaceAll('export class', 'class'),
 		...exported.map(n => `globalThis.${n} = ${n};`),
 	].join('\n');

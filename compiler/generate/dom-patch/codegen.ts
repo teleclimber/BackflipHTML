@@ -1,4 +1,4 @@
-import { generateStatement } from '../js/generatejs.js';
+import { backcodeToJS } from '../js/nodes2js.js';
 import { commentMarker } from './bfid.js';
 import type { BackcodeSite, IfSetSite } from './collect.js';
 import type { GenerateMode } from '../../types.js';
@@ -95,8 +95,11 @@ export function generateClassForPartial(
 	const patches = root.sites.length > 0 || root.sets.length > 0;
 	if (!patches && mode === 'render') return null;
 
-	const allSets = collectAllSets(root);
-	const consts = allSets.map(s => `const ${ifConstName(s.setId)} = ${s.snapshot};`);
+	const branches = allBranches(root);
+	const consts = [
+		...branches.flatMap(b => b.sets).map(s => `const ${ifConstName(s.setId)} = ${s.snapshot};`),
+		...genBcConsts(branches.flatMap(b => b.sites)),
+	];
 	const patchClasses = emitPatchBranch(root);
 	const shell = genElementShell(partialName, root.className, bAttrs);
 
@@ -122,20 +125,20 @@ export type RuntimeFile = 'render.js' | 'patch.js';
 export type RuntimeImports = Map<RuntimeFile, string[]>;
 
 export function runtimeImportsFor(root: PatchBranch, mode: GenerateMode): RuntimeImports {
-	let hasSet = false, hasPrint = false;
-	const visit = (b: PatchBranch) => {
-		if (b.sites.some(s => s.backcode.site.kind === 'print')) hasPrint = true;
-		for (const s of b.sets) {
-			hasSet = true;
-			for (const child of s.branches) if (child) visit(child);
-		}
-	};
-	visit(root);
+	const branches = allBranches(root);
+	const hasSet = branches.some(b => b.sets.length > 0);
+	const hasSite = branches.some(b => b.sites.length > 0);
+	const hasPrint = branches.some(b => b.sites.some(s => s.backcode.site.kind === 'print'));
+
+	const renderNames: string[] = [];
+	if (hasSet) renderNames.push('render', 'activeBranchIndex');
+	if (hasSite) renderNames.push('execFn');
 	const patchNames: string[] = [];
 	if (hasSet || hasPrint) patchNames.push('replaceBetween');
 	if (mode === 'base' || mode === 'full') patchNames.push('BackflipElement');
+
 	const imports: RuntimeImports = new Map();
-	if (hasSet) imports.set('render.js', ['render', 'activeBranchIndex']);
+	if (renderNames.length) imports.set('render.js', renderNames);
 	if (patchNames.length) imports.set('patch.js', patchNames);
 	return imports;
 }
@@ -150,14 +153,27 @@ export function generateFile(classes: (string | null)[], imports: RuntimeImports
 	return [header, '', ...importLines, ...kept.flatMap(c => [c, ''])].join('\n').trimEnd() + '\n';
 }
 
-// Every set in the tree, depth-first (parents before their children's sets).
-function collectAllSets(branch: PatchBranch): IfSetPatchSite[] {
-	const out: IfSetPatchSite[] = [];
+// Every patch-branch in the tree, depth-first (a branch before its children).
+function allBranches(branch: PatchBranch): PatchBranch[] {
+	const out = [branch];
 	for (const s of branch.sets) {
-		out.push(s);
 		for (const child of s.branches) {
-			if (child) out.push(...collectAllSets(child));
+			if (child) out.push(...allBranches(child));
 		}
+	}
+	return out;
+}
+
+// One module-level `bc_*` expression per unique name, in the same `rfn` shape the
+// snapshots use, evaluated with the runtime's `execFn`.
+function genBcConsts(sites: BfidSite[]): string[] {
+	const seen = new Set<string>();
+	const out: string[] = [];
+	for (const s of sites) {
+		const name = bcNameForSite(s);
+		if (seen.has(name)) continue;
+		seen.add(name);
+		out.push(`const ${name} = ${backcodeToJS(s.backcode.parsed)};`);
 	}
 	return out;
 }
@@ -189,16 +205,6 @@ function genPatchClass(branch: PatchBranch): string {
 	for (const s of sites) noteBfid(s.target);
 	for (const s of sets) noteBfid(s.target);
 
-	// bc_ per unique fn name.
-	const bcKeys = new Set<string>();
-	const bcMethods: string[] = [];
-	for (const s of sites) {
-		const fnName = bcFnNameForSite(s);
-		if (bcKeys.has(fnName)) continue;
-		bcKeys.add(fnName);
-		bcMethods.push(genBcMethod(fnName, s));
-	}
-
 	// Sites grouped per live var (a set contributes its condition + subtree vars).
 	const sitesByVar = new Map<string, BfidSite[]>();
 	for (const s of sites) {
@@ -226,8 +232,6 @@ function genPatchClass(branch: PatchBranch): string {
 		'',
 		...selMethods,
 		...(selMethods.length ? [''] : []),
-		...bcMethods,
-		...(bcMethods.length ? [''] : []),
 		...(getCreateMethods.length ? [...getCreateMethods, ''] : []),
 		...(renderIfMethods.length ? [...renderIfMethods, ''] : []),
 		...mutateMethods,
@@ -334,13 +338,6 @@ function genRenderIfMethod(s: IfSetPatchSite, className: string): string {
 	].join('\n');
 }
 
-function genBcMethod(fnName: string, s: BfidSite): string {
-	const expr = generateStatement(s.backcode.parsed.expr!);
-	const vars = s.backcode.parsed.vars;
-	const destructure = vars.length === 0 ? '' : `\t\tconst { ${vars.join(', ')} } = data;\n`;
-	return `\t${fnName}(data) {\n${destructure}\t\treturn ${expr};\n\t}`;
-}
-
 function genMutateMethod(
 	varName: string,
 	varSites: BfidSite[],
@@ -409,7 +406,7 @@ function genMissingElementError(target: PatchTarget, className: string): string 
 	return `console.error('BackflipHTML ${className}: element [data-bfid="${target.bfid}"] not found; skipping update', this.ref_elem);`;
 }
 
-function bcFnNameForSite(s: BfidSite): string {
+function bcNameForSite(s: BfidSite): string {
 	const inner = s.backcode.site;
 	switch (inner.kind) {
 		case 'attr':
@@ -427,7 +424,7 @@ function bcFnNameForSite(s: BfidSite): string {
 			// def-root attrs with the same name are already rejected by the compiler.
 			return `bc_ce_${sanitizeAttrName(inner.attr.name)}`;
 		case 'print': {
-			// Keyed off the (unique) leading marker id, so each print gets its own bc fn.
+			// Keyed off the (unique) leading marker id, so each print gets its own bc_.
 			if (!s.comments) {
 				throw new Error("dom-patch codegen: 'print' site is missing its comment markers");
 			}
@@ -444,21 +441,21 @@ function genSiteUpdate(s: BfidSite): string {
 		case 'attr':
 		case 'definition-root-attr':
 		case 'caller-attr-expr': {
-			const fn = bcFnNameForSite(s);
+			const fn = bcNameForSite(s);
 			const dom = inner.attr.name;
 			if (inner.attr.isBoolean) {
-				return `\t\t\tif (this.${fn}(data)) elem.setAttribute('${dom}', ''); else elem.removeAttribute('${dom}');`;
+				return `\t\t\tif (execFn(${fn}, data)) elem.setAttribute('${dom}', ''); else elem.removeAttribute('${dom}');`;
 			}
-			return `\t\t\telem.setAttribute('${dom}', String(this.${fn}(data)));`;
+			return `\t\t\telem.setAttribute('${dom}', String(execFn(${fn}, data)));`;
 		}
 		case 'print': {
 			if (!s.comments) {
 				throw new Error("dom-patch codegen: 'print' site is missing its comment markers");
 			}
-			const fn = bcFnNameForSite(s);
+			const fn = bcNameForSite(s);
 			const start = commentMarker(s.comments.startId);
 			const end = commentMarker(s.comments.endId);
-			return `\t\t\treplaceBetween(elem, '${start}', '${end}', document.createTextNode(String(this.${fn}(data))));`;
+			return `\t\t\treplaceBetween(elem, '${start}', '${end}', document.createTextNode(String(execFn(${fn}, data))));`;
 		}
 		default:
 			throw new Error(`dom-patch codegen: unsupported site kind '${inner.kind}' — add an emit branch when wiring this kind in.`);

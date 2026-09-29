@@ -361,7 +361,8 @@ function renderAttrBind(n: AttrBindRNode, ctx: any): string {
 	return out + (n.selfClosing ? ' />' : '>');
 }
 
-function execFn(fData :rfn, ctx: any) :any {
+// Evaluate a compiled expression: its vars, read from ctx, are the fn's arguments.
+export function execFn(fData :rfn, ctx: any) :any {
 	const ze_args = fData.vars.map( v => ctx[v] );
 	return fData.fn(...ze_args);
 }

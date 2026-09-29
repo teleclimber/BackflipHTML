@@ -46,7 +46,7 @@ Attr and print patching edits DOM that is already there. An if-set instead **ren
 
 Three consequences shape the design:
 
-- **`render.js` is a build input.** The generated module does `import { render, activeBranchIndex } from './render.js'`. See [Runtime files](#runtime-files) for how it reaches the output dir.
+- **`render.js` is a build input.** The generated module imports `render` and `activeBranchIndex` from `./render.js`. See [Runtime files](#runtime-files) for how it reaches the output dir.
 - **Snapshots are taken after all AST mutation, recursively.** `applyDomPatch` runs two passes per partial over the patch-branch tree (see [patch-branches](#patch-branches)): pass 1 mutates the AST at every depth (`data-bfid`s, print markers, and every set's marker pair), pass 2 snapshots each set's `IfTNode`. Taking a snapshot before every nested marker exists would produce a client-rendered branch missing markers the server-rendered HTML has, and every patch site inside it — including a nested set's anchors — would stop working.
 - **The HTML becomes DOM via `range.createContextualFragment()`**, with the range's contents set to the target element, so a branch is parsed in its real parent context (a `<tr>` under a `<tbody>` survives).
 
@@ -85,17 +85,15 @@ Within a single patch-branch, if-set handling runs **first** in a `mutate_<var>`
 The mutation logic lives in **patch-branches** (see [patch-branches](#patch-branches)); `BackflipMyElement` is a thin shell that owns the host, `collectData()`, and the root patch-branch. For a partial `my-element` with live vars `title` and `flag`:
 
 ```js
-import { render, activeBranchIndex } from './render.js';        // only when the module has at least one if-set
-import { replaceBetween, BackflipElement } from './patch.js';   // each as needed: a print or if-set; base/full
+import { render, activeBranchIndex, execFn } from './render.js';   // each as needed: an if-set; any site
+import { replaceBetween, BackflipElement } from './patch.js';      // each as needed: a print or if-set; base/full
 
 const bfif_<setId> = { type:'if', branches: [ ... ] };   // one per if-set, module level
+const bc_<bfid>_<attr> = { fn: function (title) { return title; }, vars: ['title'] };   // one per site, module level
 
 class BackflipPatch_MyElement {          // one patch-branch class per qualifying branch
     constructor(ref_elem, data) { this.ref_elem = ref_elem; /* + per-set seeding */ }
     sel_<bfid>() { return this.ref_elem.querySelector('[data-bfid="<bfid>"]'); }
-    bc_<bfid>_<attr>(data) { ... }       // attr expression body, destructured from data
-    bc_ce_<attr>(data) { ... }           // for definition-root attrs (no bfid; target is this.ref_elem)
-    bc_print_<startId>(data) { ... }     // print expression body (keyed off the leading marker id)
     getCreatePatchBranch_<setId>(i, data) { ... }   // lazily build + memoize the child for branch i
     renderIf_<setId>(data) { ... }       // swap + create child, returns true iff it re-rendered
     mutate_<varName>(data) { ... }       // set handling first, then sel + bc + setAttribute / replaceBetween
@@ -115,6 +113,8 @@ export class BackflipMyElement {
 Inside a `mutate_<varName>` body, **set handling runs first** (see [Ordering](#ordering-within-mutate_var)): for each owned set driven by the var, `mutate_` either calls `this.renderIf_<setId>(data)` (the var is in a branch condition), forwards the change to the active child — `const pb = this.if_pb_<setId>.get(this.if_<setId>); if (pb) pb.update('<var>', data);` — or does both under an `if (!this.renderIf_<setId>(data)) { …forward… }` guard (re-render *or* forward, never both). Then the branch's own sites run, grouped by element: `ref-element` sites (the patch-branch's own ref element — including the custom element for the root) use `elem = this.ref_elem;`; descendant sites use `elem = this.sel_<bfid>();`. Each group is guarded once; a null lookup logs `console.error(...)` and skips, since it means the rendered DOM diverged from the compiled template.
 
 Per-site updates within a found group:
+
+Each site's expression is a module-level `bc_*` constant in the same `rfn` shape the snapshots use, evaluated with the runtime's `execFn(bc_*, data)` — the renderer's own evaluator. It is named `bc_<bfid>_<attr>` for an attr or caller attr, `bc_ce_<attr>` for a definition-root attr (no bfid; the target is `this.ref_elem`), and `bc_print_<startId>` for a print (keyed off its leading marker id).
 
 - **attr** / **caller-attr-expr** → `elem.setAttribute(name, String(...))`, or `setAttribute(name, '')`+`removeAttribute(name)` for booleans. (Both resolve `elem` by `data-bfid`; a caller-attr's `elem` is the nested custom-element call's rendered tag.)
 - **print** → `replaceBetween(elem, '<startMarker>', '<endMarker>', document.createTextNode(String(...)))`.
@@ -139,7 +139,7 @@ A **patch-branch** owns patching for a DOM subtree that is either wholly present
 
 ## Identifier sanitization
 
-The bfid and attribute function name must be valid JS identifiers, but the runtime DOM call must use the original (stripped) attribute name. So `data-foo` becomes `bc_<bfid>_data_foo` in the function name but stays `'data-foo'` in `setAttribute`.
+The bfid and the `bc_*` constant name must be valid JS identifiers, but the runtime DOM call must use the original (stripped) attribute name. So `data-foo` becomes `bc_<bfid>_data_foo` in the constant's name but stays `'data-foo'` in `setAttribute`.
 
 ## The custom element class
 
@@ -180,7 +180,7 @@ Every var reaching codegen must be one of the partial's declared attributes; the
 
 Generated modules import shared code instead of carrying a copy of it:
 
-- `render.js` — the JS runtime (`runtime/js/render.ts`), for choosing and re-rendering an if-set branch.
+- `render.js` — the JS runtime (`runtime/js/render.ts`), for evaluating a site's expression and for choosing and re-rendering an if-set branch.
 - `patch.js` — browser-only code for patching (`runtime/dom-patch/patch.ts`): `replaceBetween`, and the `BackflipElement` base class every `base`/`full` element class extends.
 
 Each module imports only what it calls, and reports those files in `runtimeFiles`. The CLI copies each needed file from `dist` (see `RUNTIME_FILE_DIST_PATHS`) into the root of the dom-patch output dir. Every module sits at that root, so a specifier is always `./<file>`. If a needed `dist` file is missing the build **errors and stops**, since a silent skip would ship a page that 404s on import. The preview server maps `<domPatchOutputDir>/<file>` to the same `dist` file.

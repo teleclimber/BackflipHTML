@@ -126,23 +126,20 @@ Deno.test("sanitizeAttrName replaces non-id chars with underscore", () => {
 Deno.test("single attr, single live var: exact-string patch-branch + shell", () => {
 	const site = attrBfidSite('bf0', dynAttr('title', 'foo'), ['foo']);
 	const js = generateClassForPartial('my-element', [{ name: 'foo', isBool: false }], branch([site]), 'render');
-	const expected = `class BackflipPatch_MyElement {
+	const expected = `const bc_bf0_title = { fn: function ( foo ) { return foo; }, vars: ['foo'] };
+
+class BackflipPatch_MyElement {
 \tconstructor(ref_elem, data) {
 \t\tthis.ref_elem = ref_elem;
 \t}
 
 \tsel_bf0() { return this.ref_elem.querySelector('[data-bfid="bf0"]'); }
 
-\tbc_bf0_title(data) {
-\t\tconst { foo } = data;
-\t\treturn foo;
-\t}
-
 \tmutate_foo(data) {
 \t\tlet elem;
 \t\telem = this.sel_bf0();
 \t\tif (elem) {
-\t\t\telem.setAttribute('title', String(this.bc_bf0_title(data)));
+\t\t\telem.setAttribute('title', String(execFn(bc_bf0_title, data)));
 \t\t} else {
 \t\t\tconsole.error('BackflipHTML BackflipPatch_MyElement: element [data-bfid="bf0"] not found; skipping update', this.ref_elem);
 \t\t}
@@ -172,6 +169,27 @@ export class BackflipMyElement {
 	assertEquals(js, expected);
 });
 
+Deno.test("bc_ expressions are module-level rfn consts, nested branches included", () => {
+	const inner = branch([attrBfidSite('bf5', dynAttr('title', 'name'), ['name'])], [], 'BackflipPatch_bf0_0');
+	const set = ifPatchSite({
+		target: { kind: 'ref-element' }, conditions: ['flag'], liveVars: ['flag'], setId: 'bf0', endId: 'bf1',
+		subtreeVars: ['name'], branches: [inner],
+	});
+	const rootSite = defRootBfidSite(dynAttr('class', 'flag'), ['flag']);
+	const js = generateClassForPartial('my-widget',
+		[{ name: 'flag', isBool: true }, { name: 'name', isBool: false }], branch([rootSite], [set]), 'render')!;
+	const firstClass = js.indexOf('\nclass ');
+	for (const c of [
+		"const bc_ce_class = { fn: function ( flag ) { return flag; }, vars: ['flag'] };",
+		"const bc_bf5_title = { fn: function ( name ) { return name; }, vars: ['name'] };",
+	]) {
+		assertEquals(js.includes(c), true, c);
+		assertEquals(js.indexOf(c) < firstClass, true, `${c} precedes the classes`);
+	}
+	assertEquals(js.includes('execFn(bc_bf5_title, data)'), true);
+	assertEquals(/\tbc_\w+\(data\) \{/.test(js), false);
+});
+
 Deno.test("patch-branch classes are not exported; only the shell is", () => {
 	const site = attrBfidSite('bf0', dynAttr('title', 'foo'), ['foo']);
 	const js = generateClassForPartial('my-element', [{ name: 'foo', isBool: false }], branch([site]), 'render')!;
@@ -194,13 +212,13 @@ Deno.test("caller-attr site: sel by bfid + setAttribute, like an attr site", () 
 	const js = generateClassForPartial('parent-el', [{ name: 'show', isBool: false }], branch([site]), 'render')!;
 	assertEquals(js.includes(`sel_bf0() { return this.ref_elem.querySelector('[data-bfid="bf0"]'); }`), true);
 	assertEquals(js.includes('elem = this.sel_bf0();'), true);
-	assertEquals(js.includes("elem.setAttribute('show', String(this.bc_bf0_show(data)))"), true);
+	assertEquals(js.includes("elem.setAttribute('show', String(execFn(bc_bf0_show, data)))"), true);
 });
 
 Deno.test("bool caller-attr site: setAttribute('')/removeAttribute", () => {
 	const site = callerAttrBfidSite('bf0', dynAttr('open', 'open', true), ['open']);
 	const js = generateClassForPartial('parent-el', [{ name: 'open', isBool: false }], branch([site]), 'render')!;
-	assertEquals(js.includes("if (this.bc_bf0_open(data)) elem.setAttribute('open', ''); else elem.removeAttribute('open');"), true);
+	assertEquals(js.includes("if (execFn(bc_bf0_open, data)) elem.setAttribute('open', ''); else elem.removeAttribute('open');"), true);
 });
 
 Deno.test("ref-element site: no sel, targets this.ref_elem, ref-element error", () => {
@@ -209,7 +227,7 @@ Deno.test("ref-element site: no sel, targets this.ref_elem, ref-element error", 
 	assertEquals(js.includes('sel_'), false);
 	assertEquals(js.includes('querySelector'), false);
 	assertEquals(js.includes('elem = this.ref_elem;'), true);
-	assertEquals(js.includes("elem.setAttribute('class', String(this.bc_ce_class(data)))"), true);
+	assertEquals(js.includes("elem.setAttribute('class', String(execFn(bc_ce_class, data)))"), true);
 	assertEquals(
 		js.includes(`console.error('BackflipHTML BackflipPatch_MyElement: ref element not found; skipping update', this.ref_elem);`),
 		true,
@@ -221,8 +239,8 @@ Deno.test("two attrs on same element with same live var: one sel, two bc, one lo
 	const site2 = attrBfidSite('bf0', dynAttr('aria-label', 'foo'), ['foo']);
 	const js = generateClassForPartial('my-element', [{ name: 'foo', isBool: false }], branch([site1, site2]), 'render')!;
 	assertEquals(js.match(/sel_bf0\(\)/g)?.length, 2); // declaration + one call inside mutate_foo
-	assertEquals(js.includes('bc_bf0_title(data)'), true);
-	assertEquals(js.includes('bc_bf0_aria_label(data)'), true);
+	assertEquals(js.includes('execFn(bc_bf0_title, data)'), true);
+	assertEquals(js.includes('execFn(bc_bf0_aria_label, data)'), true);
 	assertEquals(js.match(/elem = this\.sel_bf0\(\);/g)?.length, 1);
 });
 
@@ -231,7 +249,7 @@ Deno.test("bool dynamic attr uses setAttribute/removeAttribute pattern", () => {
 	const js = generateClassForPartial('my-element', [{ name: 'flag', isBool: true }], branch([site]), 'render')!;
 	assertEquals(js.includes("flag: this.ce.hasAttribute('flag')"), true);
 	assertEquals(
-		js.includes(`if (this.bc_bf0_hidden(data)) elem.setAttribute('hidden', ''); else elem.removeAttribute('hidden');`),
+		js.includes(`if (execFn(bc_bf0_hidden, data)) elem.setAttribute('hidden', ''); else elem.removeAttribute('hidden');`),
 		true,
 	);
 });
@@ -278,18 +296,19 @@ Deno.test("generateFile emits one import per runtime file, before the classes", 
 
 // --- runtime imports -------------------------------------------------------
 
-Deno.test("runtimeImportsFor: attr sites alone import nothing", () => {
+Deno.test("runtimeImportsFor: attr sites alone import execFn only", () => {
 	const site = attrBfidSite('bf0', dynAttr('title', 'foo'), ['foo']);
-	assertEquals([...runtimeImportsFor(branch([site]), 'render')], []);
+	assertEquals([...runtimeImportsFor(branch([site]), 'render')], [['render.js', ['execFn']]]);
 });
 
 Deno.test("runtimeImportsFor: an empty branch imports nothing", () => {
 	assertEquals([...runtimeImportsFor(branch(), 'render')], []);
 });
 
-Deno.test("runtimeImportsFor: a print site imports replaceBetween only", () => {
+Deno.test("runtimeImportsFor: a print site imports execFn and replaceBetween", () => {
 	const site = printBfidSite({ kind: 'ref-element' }, 'name', ['name'], 'bf0', 'bf1');
-	assertEquals([...runtimeImportsFor(branch([site]), 'render')], [['patch.js', ['replaceBetween']]]);
+	assertEquals([...runtimeImportsFor(branch([site]), 'render')],
+		[['render.js', ['execFn']], ['patch.js', ['replaceBetween']]]);
 });
 
 Deno.test("runtimeImportsFor: an if-set imports render, activeBranchIndex and replaceBetween", () => {
@@ -298,6 +317,13 @@ Deno.test("runtimeImportsFor: an if-set imports render, activeBranchIndex and re
 	});
 	assertEquals([...runtimeImportsFor(branch([], [set]), 'render')],
 		[['render.js', ['render', 'activeBranchIndex']], ['patch.js', ['replaceBetween']]]);
+});
+
+Deno.test("runtimeImportsFor: an if-set with no sites anywhere does not import execFn", () => {
+	const set = ifPatchSite({
+		target: { kind: 'ref-element' }, conditions: ['flag'], liveVars: ['flag'], setId: 'bf0', endId: 'bf1',
+	});
+	assertEquals(runtimeImportsFor(branch([], [set]), 'render').get('render.js'), ['render', 'activeBranchIndex']);
 });
 
 Deno.test("runtimeImportsFor: a print that exists only in a nested branch is found", () => {
@@ -315,7 +341,7 @@ Deno.test("runtimeImportsFor: a print that exists only in a nested branch is fou
 	});
 	const imports = runtimeImportsFor(branch([], [outerSet]), 'render');
 	assertEquals(imports.get('patch.js'), ['replaceBetween']);
-	assertEquals(imports.get('render.js'), ['render', 'activeBranchIndex']);
+	assertEquals(imports.get('render.js'), ['render', 'activeBranchIndex', 'execFn']);
 });
 
 Deno.test("generated cluster is parseable JavaScript", () => {
@@ -350,8 +376,8 @@ Deno.test("print site on a body element: sel + bc_print + runtime replaceBetween
 	const site = printBfidSite({ kind: 'bfid-element', bfid: 'bf0' }, 'name', ['name'], 'bf1', 'bf2');
 	const js = generateClassForPartial('my-widget', [{ name: 'name', isBool: false }], branch([site]), 'render')!;
 	assertEquals(js.includes("sel_bf0() { return this.ref_elem.querySelector('[data-bfid=\"bf0\"]'); }"), true);
-	assertEquals(js.includes('bc_print_bf1(data)'), true);
-	assertEquals(js.includes("\treplaceBetween(elem, 'bfid:bf1', 'bfid:bf2', document.createTextNode(String(this.bc_print_bf1(data))));"), true);
+	assertEquals(js.includes("const bc_print_bf1 = { fn: function ( name ) { return name; }, vars: ['name'] };"), true);
+	assertEquals(js.includes("\treplaceBetween(elem, 'bfid:bf1', 'bfid:bf2', document.createTextNode(String(execFn(bc_print_bf1, data))));"), true);
 	assertEquals(js.includes('this.replaceBetween'), false);
 	assertEquals(js.includes('replaceBetween(parent'), false);
 });
@@ -361,7 +387,7 @@ Deno.test("print site anchored to ref_elem: targets this.ref_elem, no sel", () =
 	const js = generateClassForPartial('my-widget', [{ name: 'name', isBool: false }], branch([site]), 'render')!;
 	assertEquals(js.includes('querySelector'), false);
 	assertEquals(js.includes('elem = this.ref_elem;'), true);
-	assertEquals(js.includes("\treplaceBetween(elem, 'bfid:bf0', 'bfid:bf1', document.createTextNode(String(this.bc_print_bf0(data))));"), true);
+	assertEquals(js.includes("\treplaceBetween(elem, 'bfid:bf0', 'bfid:bf1', document.createTextNode(String(execFn(bc_print_bf0, data))));"), true);
 });
 
 Deno.test("no print sites and no if-sets: replaceBetween is not called", () => {
@@ -541,10 +567,10 @@ Deno.test("modes: base and full still emit a class when there is nothing to patc
 Deno.test("runtimeImportsFor: base and full import BackflipElement; render does not", () => {
 	const attr = attrBfidSite('bf0', dynAttr('title', 'foo'), ['foo']);
 	const print = printBfidSite({ kind: 'ref-element' }, 'name', ['name'], 'bf1', 'bf2');
-	assertEquals([...runtimeImportsFor(branch([attr]), 'render')], []);
+	assertEquals(runtimeImportsFor(branch([attr]), 'render').has('patch.js'), false);
 	for (const mode of ['base', 'full'] as const) {
-		assertEquals([...runtimeImportsFor(branch([attr]), mode)], [['patch.js', ['BackflipElement']]]);
+		assertEquals(runtimeImportsFor(branch([attr]), mode).get('patch.js'), ['BackflipElement']);
 		assertEquals([...runtimeImportsFor(branch(), mode)], [['patch.js', ['BackflipElement']]]);
-		assertEquals([...runtimeImportsFor(branch([print]), mode)], [['patch.js', ['replaceBetween', 'BackflipElement']]]);
+		assertEquals(runtimeImportsFor(branch([print]), mode).get('patch.js'), ['replaceBetween', 'BackflipElement']);
 	}
 });

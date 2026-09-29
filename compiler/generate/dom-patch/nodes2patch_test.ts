@@ -26,6 +26,12 @@ async function compileCustomElement(html: string): Promise<CompiledFile> {
 	return { partials: new Map([[def.name, compiled]]) };
 }
 
+// Evaluate a module's definitions and return one of its classes. Imports are stripped:
+// defining the classes calls nothing from the runtime.
+function moduleClass(js: string, className: string): unknown {
+	return new Function(js.replace(/^import .*$/gm, '').replaceAll('export class', 'class') + `; return ${className};`)();
+}
+
 // One partial per fixture is the norm here, so unwrap its module.
 function domPatch(file: CompiledFile, opts?: DomPatchOptions): { js: string | null, runtimeFiles: RuntimeFile[] } {
 	const { modules } = applyDomPatch(file, opts);
@@ -133,9 +139,7 @@ Deno.test("end-to-end: emits valid JavaScript", async () => {
 	);
 	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
 	if (!js) throw new Error('expected js');
-	const fn = new Function(js.replaceAll('export class', 'class') + '; return BackflipMyWidget;');
-	const Cls = fn();
-	assertEquals(typeof Cls, 'function');
+	assertEquals(typeof moduleClass(js, 'BackflipMyWidget'), 'function');
 });
 
 Deno.test("end-to-end: dynamic attr on the definition's wrapping tag targets this.ce", async () => {
@@ -150,7 +154,7 @@ Deno.test("end-to-end: dynamic attr on the definition's wrapping tag targets thi
 	assertEquals(js.includes('sel_'), false);
 	assertEquals(js.includes('querySelector'), false);
 	assertEquals(js.includes('elem = this.ref_elem;'), true);
-	assertEquals(js.includes("elem.setAttribute('class', String(this.bc_ce_class(data)))"), true);
+	assertEquals(js.includes("elem.setAttribute('class', String(execFn(bc_ce_class, data)))"), true);
 	// The def-root attr is a string class expression, not bool, so no removeAttribute.
 	assertEquals(js.includes("removeAttribute('class')"), false);
 	// b-attr:flag.bool is bool → collectData uses hasAttribute.
@@ -180,7 +184,7 @@ Deno.test("end-to-end: live var passed to a nested custom-element call is patcha
 	// `show` attribute is set from the live var.
 	assertEquals(js.includes('sel_bf0()'), true);
 	assertEquals(js.includes("querySelector('[data-bfid=\"bf0\"]')"), true);
-	assertEquals(js.includes("setAttribute('show', String(this.bc_bf0_show(data)))"), true);
+	assertEquals(js.includes("setAttribute('show', String(execFn(bc_bf0_show, data)))"), true);
 });
 
 Deno.test("end-to-end: bool caller attr on a nested custom-element call uses set/remove", async () => {
@@ -242,11 +246,11 @@ Deno.test("end-to-end: two custom elements with b-if sets in one file keep disti
 	const { modules } = applyDomPatch(file, { bfidGen: makeSequentialBfidGen() });
 	assertEquals(modules.length, 2);
 	for (const m of modules) assertEquals(m.runtimeFiles, ['render.js', 'patch.js']);
-	// Each module imports the runtime once for itself.
-	for (const m of modules) {
-		assertEquals(m.js.match(/^import \{ render, activeBranchIndex \} from/gm)?.length, 1);
-		assertEquals(m.js.match(/^import \{ replaceBetween \} from/gm)?.length, 1);
-	}
+	// Each module imports the runtime once for itself, and only what it uses: only
+	// first-el has a print site to evaluate.
+	assertEquals(modules[0].js.match(/^import \{ render, activeBranchIndex, execFn \} from/gm)?.length, 1);
+	assertEquals(modules[1].js.match(/^import \{ render, activeBranchIndex \} from/gm)?.length, 1);
+	for (const m of modules) assertEquals(m.js.match(/^import \{ replaceBetween \} from/gm)?.length, 1);
 	const js = modules.map(m => m.js).join('\n');
 	const setIds = [...js.matchAll(/^const bfif_(bf\d+) = /gm)].map(m => m[1]);
 	assertEquals(setIds.length, 2);
@@ -287,8 +291,8 @@ Deno.test("end-to-end: two live caller attrs on one nested call share a single b
 	if (!js) throw new Error('expected js');
 	// One data-bfid, one sel_ helper, but both attributes patched off it.
 	assertEquals(js.match(/sel_bf\d+\(\) \{/g)?.length, 1);
-	assertEquals(js.includes("setAttribute('data-a', String(this.bc_bf0_data_a(data)))"), true);
-	assertEquals(js.includes("setAttribute('data-b', String(this.bc_bf0_data_b(data)))"), true);
+	assertEquals(js.includes("setAttribute('data-a', String(execFn(bc_bf0_data_a, data)))"), true);
+	assertEquals(js.includes("setAttribute('data-b', String(execFn(bc_bf0_data_b, data)))"), true);
 });
 
 Deno.test("end-to-end: caller-attr patch emits valid JavaScript", async () => {
@@ -297,8 +301,7 @@ Deno.test("end-to-end: caller-attr patch emits valid JavaScript", async () => {
 	);
 	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
 	if (!js) throw new Error('expected js');
-	const fn = new Function(js.replaceAll('export class', 'class') + '; return BackflipParentEl;');
-	assertEquals(typeof fn(), 'function');
+	assertEquals(typeof moduleClass(js, 'BackflipParentEl'), 'function');
 });
 
 // Recursively collect every comment node's text from a tree.
@@ -326,9 +329,9 @@ Deno.test("end-to-end: print of a live var wraps it in marker comments and patch
 	// Class wires the parent lookup, value fn, and mutate; the range replace is imported.
 	assertEquals(js.includes('class BackflipMyWidget'), true);
 	assertEquals(js.includes('sel_bf0()'), true);
-	assertEquals(js.includes('bc_print_bf1(data)'), true);
+	assertEquals(js.includes('const bc_print_bf1 = '), true);
 	assertEquals(js.includes('mutate_name'), true);
-	assertEquals(js.includes("\treplaceBetween(elem, 'bfid:bf1', 'bfid:bf2', document.createTextNode(String(this.bc_print_bf1(data))));"), true);
+	assertEquals(js.includes("\treplaceBetween(elem, 'bfid:bf1', 'bfid:bf2', document.createTextNode(String(execFn(bc_print_bf1, data))));"), true);
 	assertEquals(js.includes("import { replaceBetween } from './patch.js';"), true);
 	assertEquals(js.includes('replaceBetween(parent'), false);
 });
@@ -346,7 +349,7 @@ Deno.test("end-to-end: print directly in the custom element targets this.ce", as
 	assertEquals(js.includes('sel_'), false);
 	assertEquals(js.includes('querySelector'), false);
 	assertEquals(js.includes('elem = this.ref_elem;'), true);
-	assertEquals(js.includes("\treplaceBetween(elem, 'bfid:bf0', 'bfid:bf1', document.createTextNode(String(this.bc_print_bf0(data))));"), true);
+	assertEquals(js.includes("\treplaceBetween(elem, 'bfid:bf0', 'bfid:bf1', document.createTextNode(String(execFn(bc_print_bf0, data))));"), true);
 });
 
 // Compile several custom-element partials into a single CompiledFile.
@@ -468,23 +471,24 @@ Deno.test("end-to-end: the if-set snapshot is taken after pass-1 markers are add
 	assertEquals(snapshot.includes(`{ type: 'comment', text: '${printMarkers[2]}' }`), true);
 });
 
-Deno.test("end-to-end: a partial with only attr sites imports nothing", async () => {
+Deno.test("end-to-end: a partial with only attr sites imports execFn only", async () => {
 	const file = await compileCustomElement(
 		`<my-widget b-attr:title><span :data-x="title">hi</span></my-widget>`
 	);
 	const { js, runtimeFiles } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
-	assertEquals(runtimeFiles, []);
-	assertEquals(js!.includes('import'), false);
+	assertEquals(runtimeFiles, ['render.js']);
+	assertEquals(js!.includes("import { execFn } from './render.js';"), true);
+	assertEquals(js!.includes('patch.js'), false);
 });
 
-Deno.test("end-to-end: a partial with prints but no if-set imports only patch.js", async () => {
+Deno.test("end-to-end: a partial with prints but no if-set imports execFn and replaceBetween", async () => {
 	const file = await compileCustomElement(
 		`<my-widget b-attr:title><span>{{ title }}</span></my-widget>`
 	);
 	const { js, runtimeFiles } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
-	assertEquals(runtimeFiles, ['patch.js']);
+	assertEquals(runtimeFiles, ['render.js', 'patch.js']);
+	assertEquals(js!.includes("import { execFn } from './render.js';"), true);
 	assertEquals(js!.includes("import { replaceBetween } from './patch.js';"), true);
-	assertEquals(js!.includes('render.js'), false);
 });
 
 Deno.test("end-to-end: disqualified if-sets get no markers and no class", async () => {

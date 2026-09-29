@@ -259,7 +259,8 @@ Deno.test("preview captures dom-patch JS whose bfid matches the rendered HTML", 
 // Each runtime file a generated module imports is served from dist at the URL a build
 // would copy it to; one the modules do not import is not mapped.
 for (const [label, body, expected] of [
-	['attr only', `<span :data-tone="tone">badge</span>`, ['patch.js']],
+	['attr only', `<span :data-tone="tone">badge</span>`, ['render.js', 'patch.js']],
+	['nothing to patch', `<span>badge</span>`, ['patch.js']],
 	['a b-if', `<span b-if="tone == 'info'">i</span><span b-else>o</span>`, ['render.js', 'patch.js']],
 ] as const) {
 	Deno.test(`preview maps the runtime files a module with ${label} imports`, async () => {
