@@ -363,10 +363,11 @@ const INNER_SNAPSHOT = `{ type:'if', branches: [
 	{ condition: undefined, nodes: [ { type:'raw', raw:'<em>no</em>' } ] }
 ] }`;
 
+// As generated: the nested set appears by the name of its own module-level const.
 const OUTER_SNAPSHOT = `{ type:'if', branches: [
 	{ condition: { fn: function (mode) { return mode == 'a'; }, vars: ['mode'] }, nodes: [
 		{ type:'comment', text:'bfid:m0' },
-		${INNER_SNAPSHOT},
+		bfif_m0,
 		{ type:'comment', text:'bfid:m1' }
 	] },
 	{ condition: undefined, nodes: [ { type:'raw', raw:'<span>B</span>' } ] }

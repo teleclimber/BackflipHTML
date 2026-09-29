@@ -1,6 +1,6 @@
 import { assertEquals, assertMatch } from "jsr:@std/assert";
 
-import type { RootTNode, RawTNode, CommentTNode, PrintTNode, ForTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, CompiledFile } from "../../types.ts";
+import type { RootTNode, RawTNode, CommentTNode, PrintTNode, ForTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, CompiledFile, ElementTNode } from "../../types.ts";
 import { interpretBackcode } from "../../backcode.ts";
 import { nodeToJS, nodeToJsExport, fileToJsModule, sanitizeName } from "./nodes2js.ts";
 
@@ -107,6 +107,46 @@ Deno.test("if node with else branch (no condition)", () => {
 	ifNode.branches.push({ condition: undefined, tnodes: [raw2] });
 	const js = nodeToJS(ifNode);
 	assertMatch(js, /condition: undefined/);
+});
+
+// --- ifRef: emit a name in place of an if node ---------------------------------
+
+function simpleIf(raw: string, cond = 'show'): IfTNode {
+	return { type: 'if', branches: [{ condition: makeParsed(cond), tnodes: [{ type: 'raw', raw } as RawTNode] }] };
+}
+
+Deno.test("ifRef: a named if node is emitted as that name, wherever it is nested", () => {
+	const inner = simpleIf('inner');
+	const inFor: ForTNode = { type: 'for', iterable: makeParsed('items'), valName: 'it', tnodes: [inner] };
+	const inElement: ElementTNode = { type: 'element', tagName: 'div', attrs: [], tnodes: [inFor] };
+	const outer: IfTNode = { type: 'if', branches: [{ condition: makeParsed('a'), tnodes: [inElement] }] };
+	const js = nodeToJS(outer, { ifRef: n => n === inner ? 'INNER' : undefined });
+	assertEquals(js.includes("'inner'"), false);
+	// The name stands where the literal would, so it binds to the referenced object.
+	const innerObj = { type: 'if', branches: [] };
+	const built = new Function('INNER', `return ${js};`)(innerObj);
+	const forNode = built.branches[0].nodes.find((n: any) => n.type === 'for');
+	assertEquals(forNode.nodes[0], innerObj);
+});
+
+Deno.test("ifRef: an if node the hook does not name is emitted inline", () => {
+	const named = simpleIf('named');
+	const other = simpleIf('other');
+	const outer: IfTNode = { type: 'if', branches: [{ condition: makeParsed('a'), tnodes: [named, other] }] };
+	const js = nodeToJS(outer, { ifRef: n => n === named ? 'NAMED' : undefined });
+	assertEquals(js.includes("'named'"), false);
+	assertEquals(js.includes("'other'"), true);
+});
+
+Deno.test("ifRef: applies to the node passed in too", () => {
+	assertEquals(nodeToJS(simpleIf('x'), { ifRef: () => 'SELF' }), 'SELF');
+});
+
+Deno.test("ifRef: no hook, or a hook that names nothing, emits the plain output", () => {
+	const inner = simpleIf('inner');
+	const outer: IfTNode = { type: 'if', branches: [{ condition: makeParsed('a'), tnodes: [inner] }] };
+	assertEquals(nodeToJS(outer, {}), nodeToJS(outer));
+	assertEquals(nodeToJS(outer, { ifRef: () => undefined }), nodeToJS(outer));
 });
 
 Deno.test("root node with children", () => {

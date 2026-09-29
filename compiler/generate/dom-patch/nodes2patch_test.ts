@@ -439,6 +439,74 @@ Deno.test("end-to-end: an if-set is bracketed by markers and its parent gets a b
 	assertEquals(js.includes('this.if_bf1 = activeBranchIndex(bfif_bf1, data);'), true);
 });
 
+// The module-level `bfif_*` consts, in emitted order, each with its literal text.
+function snapshotConsts(js: string): { name: string, text: string }[] {
+	return [...js.matchAll(/^const (bfif_\w+) = ([\s\S]*?);\n(?=const |\nclass |class )/gm)]
+		.map(m => ({ name: m[1], text: m[2] }));
+}
+
+// Evaluate the `bfif_*` consts, in order, and return them by name.
+function evalSnapshots(js: string): Record<string, any> {
+	const consts = snapshotConsts(js);
+	const src = consts.map(c => `const ${c.name} = ${c.text};`).join('\n');
+	return new Function(`${src}\nreturn { ${consts.map(c => c.name).join(', ')} };`)();
+}
+
+Deno.test("end-to-end: a nested set's snapshot is referenced by name, not copied", async () => {
+	const file = await compileCustomElement(
+		`<my-widget b-attr:mode b-attr:sub><div b-if="mode == 'a'"><p b-if="sub == 'x'">X</p><em b-else>Y</em></div><span b-else>B</span></my-widget>`
+	);
+	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
+	if (!js) throw new Error('expected js');
+	const consts = snapshotConsts(js);
+	assertEquals(consts.length, 2);
+	// Innermost first, so the name is defined before the outer literal uses it.
+	const [inner, outer] = consts;
+	assertEquals(inner.text.includes('<p'), true);
+	assertEquals(outer.text.includes('<span>'), true);
+	assertEquals(outer.text.includes(inner.name), true);
+	// The inner branch content is emitted once, in the inner const only.
+	assertEquals(outer.text.includes('<p'), false);
+	assertEquals(js.split("raw: 'X'").length - 1, 1);
+
+	// Evaluated, the outer branch holds the inner snapshot object itself.
+	const snaps = evalSnapshots(js);
+	const outerNodes = snaps[outer.name].branches[0].nodes;
+	assertEquals(outerNodes.includes(snaps[inner.name]), true);
+});
+
+Deno.test("end-to-end: three nested sets each reference only the set directly inside", async () => {
+	const file = await compileCustomElement(
+		`<my-widget b-attr:a b-attr:b b-attr:c>` +
+		`<div b-if="a"><section b-if="b"><p b-if="c">deep</p><em b-else>n</em></section><i b-else>n</i></div><span b-else>n</span>` +
+		`</my-widget>`
+	);
+	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
+	if (!js) throw new Error('expected js');
+	const consts = snapshotConsts(js);
+	assertEquals(consts.length, 3);
+	const [c, b, a] = consts;
+	assertEquals(c.text.includes('deep'), true);
+	assertEquals(b.text.includes(c.name) && !b.text.includes('deep'), true);
+	assertEquals(a.text.includes(b.name) && !a.text.includes(c.name) && !a.text.includes('deep'), true);
+	assertEquals(js.split("'deep'").length - 1, 1);
+
+	const snaps = evalSnapshots(js);
+	assertEquals(snaps[a.name].branches[0].nodes.includes(snaps[b.name]), true);
+	assertEquals(snaps[b.name].branches[0].nodes.includes(snaps[c.name]), true);
+});
+
+Deno.test("end-to-end: a var-free nested b-if has no const and stays inline", async () => {
+	const file = await compileCustomElement(
+		`<my-widget b-attr:mode><div b-if="mode == 'a'"><p b-if="1 == 1">always</p></div><span b-else>B</span></my-widget>`
+	);
+	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
+	if (!js) throw new Error('expected js');
+	const consts = snapshotConsts(js);
+	assertEquals(consts.length, 1);
+	assertEquals(consts[0].text.includes('always'), true);
+});
+
 Deno.test("end-to-end: an if-set directly in the custom element targets this.ce", async () => {
 	const file = await compileCustomElement(
 		`<my-widget b-attr:mode><p b-if="mode == 'a'">A</p><em b-else>B</em></my-widget>`

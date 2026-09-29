@@ -31,7 +31,8 @@ export interface BfidSite {
  * `getCreatePatchBranch_<setId>`, and the `this.if_<setId>` / `this.if_pb_<setId>`
  * fields. `snapshot` is the `nodeToJS` literal of the whole `IfTNode`, taken
  * *after* all AST mutation so it carries the same bfids and print markers as the
- * server-rendered HTML. It is also what the active branch is chosen from.
+ * server-rendered HTML. It is also what the active branch is chosen from. A
+ * qualifying set nested in it appears by name (`bfif_<setId>`), not as a copy.
  */
 export interface IfSetPatchSite {
 	/** Anchor for `renderIf_`'s swap — and the `ref_elem` handed to every child branch. */
@@ -97,7 +98,9 @@ export function generateClassForPartial(
 
 	const branches = allBranches(root);
 	const consts = [
-		...branches.flatMap(b => b.sets).map(s => `const ${ifConstName(s.setId)} = ${s.snapshot};`),
+		// A snapshot names the sets nested in it, so each must come after those. The
+		// depth-first set order, reversed, puts every set after its descendants.
+		...branches.flatMap(b => b.sets).reverse().map(s => `const ${ifConstName(s.setId)} = ${s.snapshot};`),
 		...genBcConsts(branches.flatMap(b => b.sites)),
 	];
 	const patchClasses = emitPatchBranch(root);
@@ -154,7 +157,7 @@ export function generateFile(classes: (string | null)[], imports: RuntimeImports
 }
 
 // Every patch-branch in the tree, depth-first (a branch before its children).
-function allBranches(branch: PatchBranch): PatchBranch[] {
+export function allBranches(branch: PatchBranch): PatchBranch[] {
 	const out = [branch];
 	for (const s of branch.sets) {
 		for (const child of s.branches) {
@@ -257,7 +260,7 @@ function genConstructor(sets: IfSetPatchSite[]): string {
 }
 
 // Symbols an if-set owns, all keyed off its leading marker's bfid.
-function ifConstName(setId: string): string { return `bfif_${setId}`; }
+export function ifConstName(setId: string): string { return `bfif_${setId}`; }
 function renderIfFnName(setId: string): string { return `renderIf_${setId}`; }
 function getCreateFnName(setId: string): string { return `getCreatePatchBranch_${setId}`; }
 function activeIndexField(setId: string): string { return `if_${setId}`; }

@@ -6,7 +6,7 @@ import { collectPatchTree, type BranchScope, type IfSetScope } from './collect.j
 import { qualifies } from './filter.js';
 import { ensureBfid, ensureCallBfid, elementForSite, ensureCommentsAround } from './mutate-ast.js';
 import {
-	generateClassForPartial, generateFile, patchClassNameFor, runtimeImportsFor,
+	allBranches, generateClassForPartial, generateFile, ifConstName, patchClassNameFor, runtimeImportsFor,
 	type BfidSite, type IfSetPatchSite, type PatchBranch, type PatchTarget, type RuntimeFile,
 } from './codegen.js';
 
@@ -169,13 +169,14 @@ function resolveTarget(
 	return { kind: 'bfid-element', bfid: ensureBfid(anchor!, gen) };
 }
 
-// Pass 2: fill in every set's snapshot depth-first, once all markers exist.
-function fillSnapshots(branch: PatchBranch): void {
-	for (const s of branch.sets) {
-		s.snapshot = nodeToJS(s.ifSet.node);
-		for (const child of s.branches) {
-			if (child) fillSnapshots(child);
-		}
+// Pass 2: snapshot every set in the tree. A set's literal names each qualifying set
+// nested in it (by its `bfif_` const) instead of repeating that set's content.
+function fillSnapshots(root: PatchBranch): void {
+	const sets = allBranches(root).flatMap(b => b.sets);
+	const names = new Map(sets.map(s => [s.ifSet.node, ifConstName(s.setId)]));
+	for (const s of sets) {
+		const own = s.ifSet.node;
+		s.snapshot = nodeToJS(own, { ifRef: n => n === own ? undefined : names.get(n) });
 	}
 }
 
