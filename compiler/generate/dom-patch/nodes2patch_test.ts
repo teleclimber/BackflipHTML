@@ -244,7 +244,7 @@ Deno.test("end-to-end: two custom elements with b-if sets in one file keep disti
 	for (const m of modules) assertEquals(m.runtimeFiles, ['render.js', 'patch.js']);
 	// Each module imports the runtime once for itself.
 	for (const m of modules) {
-		assertEquals(m.js.match(/^import \{ render \} from/gm)?.length, 1);
+		assertEquals(m.js.match(/^import \{ render, activeBranchIndex \} from/gm)?.length, 1);
 		assertEquals(m.js.match(/^import \{ replaceBetween \} from/gm)?.length, 1);
 	}
 	const js = modules.map(m => m.js).join('\n');
@@ -252,7 +252,7 @@ Deno.test("end-to-end: two custom elements with b-if sets in one file keep disti
 	assertEquals(setIds.length, 2);
 	assertEquals(new Set(setIds).size, 2);
 	for (const id of setIds) {
-		assertEquals(js.includes(`branch_${id}(data) {`), true);
+		assertEquals(js.includes(`activeBranchIndex(bfif_${id}, data)`), true);
 		assertEquals(js.includes(`renderIf_${id}(data) {`), true);
 	}
 	// Class names are unique across the two modules, nested branch classes included.
@@ -428,13 +428,12 @@ Deno.test("end-to-end: an if-set is bracketed by markers and its parent gets a b
 	const div = root.tnodes.find((n: any) => n.type === 'element') as ElementTNode;
 	assertEquals(div.attrs.some(a => a.type === 'static' && a.raw.includes('data-bfid="bf0"')), true);
 
-	assertEquals(js.includes("import { render } from './render.js';"), true);
+	assertEquals(js.includes("import { render, activeBranchIndex } from './render.js';"), true);
 	assertEquals(js.includes("import { replaceBetween } from './patch.js';"), true);
 	assertEquals(js.includes('const bfif_bf1 = '), true);
-	assertEquals(js.includes('branch_bf1(data)'), true);
 	assertEquals(js.includes('renderIf_bf1(data)'), true);
 	assertEquals(js.includes("\treplaceBetween(elem, 'bfid:bf1', 'bfid:bf2', frag);"), true);
-	assertEquals(js.includes('this.if_bf1 = this.branch_bf1(data);'), true);
+	assertEquals(js.includes('this.if_bf1 = activeBranchIndex(bfif_bf1, data);'), true);
 });
 
 Deno.test("end-to-end: an if-set directly in the custom element targets this.ce", async () => {

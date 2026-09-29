@@ -292,12 +292,12 @@ Deno.test("runtimeImportsFor: a print site imports replaceBetween only", () => {
 	assertEquals([...runtimeImportsFor(branch([site]), 'render')], [['patch.js', ['replaceBetween']]]);
 });
 
-Deno.test("runtimeImportsFor: an if-set imports render and replaceBetween", () => {
+Deno.test("runtimeImportsFor: an if-set imports render, activeBranchIndex and replaceBetween", () => {
 	const set = ifPatchSite({
 		target: { kind: 'ref-element' }, conditions: ['flag'], liveVars: ['flag'], setId: 'bf0', endId: 'bf1',
 	});
 	assertEquals([...runtimeImportsFor(branch([], [set]), 'render')],
-		[['render.js', ['render']], ['patch.js', ['replaceBetween']]]);
+		[['render.js', ['render', 'activeBranchIndex']], ['patch.js', ['replaceBetween']]]);
 });
 
 Deno.test("runtimeImportsFor: a print that exists only in a nested branch is found", () => {
@@ -315,7 +315,7 @@ Deno.test("runtimeImportsFor: a print that exists only in a nested branch is fou
 	});
 	const imports = runtimeImportsFor(branch([], [outerSet]), 'render');
 	assertEquals(imports.get('patch.js'), ['replaceBetween']);
-	assertEquals(imports.get('render.js'), ['render']);
+	assertEquals(imports.get('render.js'), ['render', 'activeBranchIndex']);
 });
 
 Deno.test("generated cluster is parseable JavaScript", () => {
@@ -372,7 +372,7 @@ Deno.test("no print sites and no if-sets: replaceBetween is not called", () => {
 
 // --- if-sets ---------------------------------------------------------------
 
-Deno.test("if-set: snapshot const, branch/renderIf/getCreate methods, constructor seeding", () => {
+Deno.test("if-set: snapshot const, renderIf/getCreate methods, constructor seeding", () => {
 	const site = ifPatchSite({
 		target: { kind: 'bfid-element', bfid: 'bf9' }, conditions: [`mode == 1`, null],
 		liveVars: ['mode'], setId: 'bf0', endId: 'bf1', snapshot: `{ type:'if', branches: [] }`,
@@ -380,22 +380,21 @@ Deno.test("if-set: snapshot const, branch/renderIf/getCreate methods, constructo
 	const js = generateClassForPartial('my-widget', [{ name: 'mode', isBool: false }], branch([], [site]), 'render')!;
 	// Module-level snapshot const precedes the classes.
 	assertEquals(js.startsWith("const bfif_bf0 = { type:'if', branches: [] };"), true);
-	assertEquals(js.includes('branch_bf0(data) {'), true);
-	assertEquals(js.includes('const { mode } = data;'), true);
-	assertEquals(js.includes('if ((mode == 1)) return 0;'), true);
-	assertEquals(js.includes('return 1;'), true);
-	assertEquals(js.includes('return -1;'), false);
+	// The active branch is chosen by the runtime, from the snapshot — no per-set method.
+	assertEquals(js.includes('branch_bf0'), false);
+	assertEquals(js.includes('mode == 1'), false);
 	// getCreatePatchBranch present but with no case (both branches have no content here).
 	assertEquals(js.includes('getCreatePatchBranch_bf0(branch_i, data) {'), true);
 	// renderIf returns a bool and creates the branch it rendered.
 	assertEquals(js.includes('renderIf_bf0(data) {'), true);
+	assertEquals(js.includes('const idx = activeBranchIndex(bfif_bf0, data);'), true);
 	assertEquals(js.includes('if (idx === this.if_bf0) return false;'), true);
 	assertEquals(js.includes('const frag = range.createContextualFragment(render(bfif_bf0, data));'), true);
 	assertEquals(js.includes("\treplaceBetween(elem, 'bfid:bf0', 'bfid:bf1', frag);"), true);
 	assertEquals(js.includes('this.getCreatePatchBranch_bf0(idx, data);'), true);
 	assertEquals(js.includes('return true;'), true);
 	// Constructor seeds the index + map + eagerly creates the active child, no render.
-	assertEquals(js.includes('this.if_bf0 = this.branch_bf0(data);'), true);
+	assertEquals(js.includes('this.if_bf0 = activeBranchIndex(bfif_bf0, data);'), true);
 	assertEquals(js.includes('this.if_pb_bf0 = new Map();'), true);
 	assertEquals(js.includes('this.getCreatePatchBranch_bf0(this.if_bf0, data);'), true);
 	// The condition var drives update() and mutate forwards a plain renderIf.
@@ -403,14 +402,11 @@ Deno.test("if-set: snapshot const, branch/renderIf/getCreate methods, constructo
 	assertEquals(js.includes('this.renderIf_bf0(data);'), true);
 });
 
-Deno.test("if-set with no b-else falls through to -1", () => {
+Deno.test("if-set on the ref element: no querySelector", () => {
 	const site = ifPatchSite({
 		target: { kind: 'ref-element' }, conditions: ['flag'], liveVars: ['flag'], setId: 'bf0', endId: 'bf1',
 	});
 	const js = generateClassForPartial('my-widget', [{ name: 'flag', isBool: true }], branch([], [site]), 'render')!;
-	assertEquals(js.includes('if (flag) return 0;'), true);
-	assertEquals(js.includes('return -1;'), true);
-	// ref-element target: no querySelector.
 	assertEquals(js.includes('const elem = this.ref_elem;'), true);
 	assertEquals(js.includes('querySelector'), false);
 });

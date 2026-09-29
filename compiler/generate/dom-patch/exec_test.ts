@@ -11,7 +11,7 @@ import { JSDOM } from "npm:jsdom";
 
 import type { ElementTNode, IfBranch, IfTNode, PrintTNode } from "../../types.ts";
 import { interpretBackcode } from "../../backcode.ts";
-import { render } from "../../../runtime/js/render.ts";
+import { render, activeBranchIndex } from "../../../runtime/js/render.ts";
 import { BackflipElement, replaceBetween } from "../../../runtime/dom-patch/patch.ts";
 import type { BackcodeSite, IfSetSite } from "./collect.ts";
 import { generateClassForPartial, type BfidSite, type IfSetPatchSite, type PatchBranch, type PatchTarget } from "./codegen.ts";
@@ -82,14 +82,14 @@ function ifSite(opts: {
 
 // Instantiate the generated cluster's shell class against a host built from
 // `innerHtml`, with globalThis.document pointed at the jsdom document for the
-// duration. `render` and `replaceBetween` are injected the way the generated
-// module's runtime imports would supply them.
+// duration. The runtime functions are injected the way the generated module's
+// runtime imports would supply them.
 function mount(js: string, partialName: string, className: string, hostAttrs: string, innerHtml: string) {
 	const dom = new JSDOM(`<!DOCTYPE html><body><${partialName} ${hostAttrs}>${innerHtml}</${partialName}></body>`);
 	const prevDoc = (globalThis as any).document;
 	(globalThis as any).document = dom.window.document;
 	const host = dom.window.document.querySelector(partialName)!;
-	const Cls = new Function('render', 'replaceBetween', js.replaceAll('export class', 'class') + `; return ${className};`)(render, replaceBetween);
+	const Cls = new Function('render', 'activeBranchIndex', 'replaceBetween', js.replaceAll('export class', 'class') + `; return ${className};`)(render, activeBranchIndex, replaceBetween);
 	const instance = new Cls(host);
 	return { host, instance, restore: () => { (globalThis as any).document = prevDoc; } };
 }

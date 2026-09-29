@@ -1,7 +1,7 @@
 import { assertEquals, assertThrows, assertStringIncludes } from "jsr:@std/assert";
 
 import type { RootRNode, RawRNode, PrintRNode, ForRNode, IfRNode, SlotRNode, PartialRefRNode, PartialScript, RNode, rfn } from "./render.ts";
-import { render, renderRoot, streamRenderRoot, escapeHtml } from "./render.ts";
+import { render, renderRoot, streamRenderRoot, escapeHtml, activeBranchIndex } from "./render.ts";
 
 function streamToString(n: RootRNode, ctx: any): string {
 	return Array.from(streamRenderRoot(n, ctx)).join('');
@@ -104,6 +104,58 @@ Deno.test("if/else-if/else picks first truthy branch", () => {
 	assertEquals(render(node, { a: false, b: true }), '2');
 	assertEquals(render(node, { a: true, b: true }), '1');
 	assertEquals(render(node, { a: false, b: false }), '3');
+});
+
+// activeBranchIndex is the branch choice render() makes, exposed for dom-patch.
+const IF_ELSEIF_ELSE: IfRNode = {
+	type: 'if',
+	branches: [
+		{ condition: makeFn('a', ['a']), nodes: [{ type: 'raw', raw: 'A' }] },
+		{ condition: makeFn('b > 1', ['b']), nodes: [{ type: 'raw', raw: 'B' }] },
+		{ nodes: [{ type: 'raw', raw: 'else' }] },
+	],
+};
+const IF_ELSEIF: IfRNode = { type: 'if', branches: IF_ELSEIF_ELSE.branches.slice(0, 2) };
+
+Deno.test("activeBranchIndex: the first holding condition wins", () => {
+	assertEquals(activeBranchIndex(IF_ELSEIF_ELSE, { a: true, b: 5 }), 0);
+	assertEquals(activeBranchIndex(IF_ELSEIF_ELSE, { a: false, b: 5 }), 1);
+	assertEquals(activeBranchIndex(IF_ELSEIF, { a: 1, b: 0 }), 0);
+});
+
+Deno.test("activeBranchIndex: b-else wins when nothing before it holds", () => {
+	assertEquals(activeBranchIndex(IF_ELSEIF_ELSE, { a: false, b: 0 }), 2);
+});
+
+Deno.test("activeBranchIndex: -1 when no condition holds and there is no b-else", () => {
+	assertEquals(activeBranchIndex(IF_ELSEIF, { a: '', b: 0 }), -1);
+});
+
+Deno.test("activeBranchIndex: conditions use JS truthiness", () => {
+	for (const falsy of [false, 0, '', null, undefined]) {
+		assertEquals(activeBranchIndex(IF_ELSEIF, { a: falsy, b: 0 }), -1);
+	}
+	for (const truthy of [true, 1, 'x', [], {}]) {
+		assertEquals(activeBranchIndex(IF_ELSEIF, { a: truthy, b: 0 }), 0);
+	}
+});
+
+Deno.test("activeBranchIndex: stops at the winning branch", () => {
+	const seen: string[] = [];
+	const n: IfRNode = { type: 'if', branches: [
+		{ condition: { fn: () => { seen.push('first'); return true; }, vars: [] }, nodes: [] },
+		{ condition: { fn: () => { seen.push('second'); return true; }, vars: [] }, nodes: [] },
+	] };
+	assertEquals(activeBranchIndex(n, {}), 0);
+	assertEquals(seen, ['first']);
+});
+
+Deno.test("render picks the branch activeBranchIndex picks", () => {
+	for (const ctx of [{ a: true, b: 0 }, { a: false, b: 5 }, { a: false, b: 0 }]) {
+		const i = activeBranchIndex(IF_ELSEIF_ELSE, ctx);
+		assertEquals(render(IF_ELSEIF_ELSE, ctx), (IF_ELSEIF_ELSE.branches[i].nodes[0] as RawRNode).raw);
+	}
+	assertEquals(render(IF_ELSEIF, { a: false, b: 0 }), '');
 });
 
 Deno.test("if branch can contain print nodes", () => {

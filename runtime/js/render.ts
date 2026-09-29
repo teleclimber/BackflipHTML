@@ -224,14 +224,17 @@ function isIterable(obj:any) {
 	return typeof obj[Symbol.iterator] === 'function';
 }
 
+// Index of the branch an if node renders: the first whose condition holds (a b-else
+// has none, so it always does), or -1 when none does.
+export function activeBranchIndex(if_node: IfRNode, ctx: any): number {
+	return if_node.branches.findIndex(branch => !branch.condition || execFn(branch.condition, ctx));
+}
+
 function* streamRenderIf(if_node: IfRNode, ctx:any, slots?: SlotMap, scripts?: ScriptCollector) :Generator<string> {
-	for( const branch of if_node.branches ) {
-		if( !branch.condition || execFn(branch.condition, ctx) ) {
-			for (const n of branch.nodes) {
-				yield* streamRender(n, ctx, slots, scripts);
-			}
-			return;
-		}
+	const i = activeBranchIndex(if_node, ctx);
+	if (i === -1) return;
+	for (const n of if_node.branches[i].nodes) {
+		yield* streamRender(n, ctx, slots, scripts);
 	}
 }
 

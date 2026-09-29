@@ -46,7 +46,7 @@ Attr and print patching edits DOM that is already there. An if-set instead **ren
 
 Three consequences shape the design:
 
-- **`render.js` is a build input.** The generated module does `import { render } from './render.js'`. See [Runtime files](#runtime-files) for how it reaches the output dir.
+- **`render.js` is a build input.** The generated module does `import { render, activeBranchIndex } from './render.js'`. See [Runtime files](#runtime-files) for how it reaches the output dir.
 - **Snapshots are taken after all AST mutation, recursively.** `applyDomPatch` runs two passes per partial over the patch-branch tree (see [patch-branches](#patch-branches)): pass 1 mutates the AST at every depth (`data-bfid`s, print markers, and every set's marker pair), pass 2 snapshots each set's `IfTNode`. Taking a snapshot before every nested marker exists would produce a client-rendered branch missing markers the server-rendered HTML has, and every patch site inside it — including a nested set's anchors — would stop working.
 - **The HTML becomes DOM via `range.createContextualFragment()`**, with the range's contents set to the target element, so a branch is parsed in its real parent context (a `<tr>` under a `<tbody>` survives).
 
@@ -62,7 +62,7 @@ An if-set is re-rendered (its branch swapped) **only by the live vars in its own
 
 ### Active-branch tracking
 
-Each patch-branch's constructor computes every owned set's active branch index from the data it's handed and stores it in `this.if_<setId>` — it **does not render**, since the server already emitted the right branch. It also seeds `this.if_pb_<setId>` (a branch-index → child-patch-branch map) and eagerly constructs the child for the active branch. The index is `0…n-1` for the winning branch, `-1` when nothing matches (a set with no `b-else` whose conditions are all falsy). The recomputed index is trusted to match the server render; if it doesn't, the DOM stays stale until the index changes.
+Each patch-branch's constructor computes every owned set's active branch index from the data it's handed — with the runtime's `activeBranchIndex(bfif_<setId>, data)`, the same choice `render()` makes, so the conditions are evaluated from the snapshot rather than generated a second time — and stores it in `this.if_<setId>` — it **does not render**, since the server already emitted the right branch. It also seeds `this.if_pb_<setId>` (a branch-index → child-patch-branch map) and eagerly constructs the child for the active branch. The index is `0…n-1` for the winning branch, `-1` when nothing matches (a set with no `b-else` whose conditions are all falsy). The recomputed index is trusted to match the server render; if it doesn't, the DOM stays stale until the index changes.
 
 ### Additional qualification rules
 
@@ -85,7 +85,7 @@ Within a single patch-branch, if-set handling runs **first** in a `mutate_<var>`
 The mutation logic lives in **patch-branches** (see [patch-branches](#patch-branches)); `BackflipMyElement` is a thin shell that owns the host, `collectData()`, and the root patch-branch. For a partial `my-element` with live vars `title` and `flag`:
 
 ```js
-import { render } from './render.js';            // only when the module has at least one if-set
+import { render, activeBranchIndex } from './render.js';        // only when the module has at least one if-set
 import { replaceBetween, BackflipElement } from './patch.js';   // each as needed: a print or if-set; base/full
 
 const bfif_<setId> = { type:'if', branches: [ ... ] };   // one per if-set, module level
@@ -96,7 +96,6 @@ class BackflipPatch_MyElement {          // one patch-branch class per qualifyin
     bc_<bfid>_<attr>(data) { ... }       // attr expression body, destructured from data
     bc_ce_<attr>(data) { ... }           // for definition-root attrs (no bfid; target is this.ref_elem)
     bc_print_<startId>(data) { ... }     // print expression body (keyed off the leading marker id)
-    branch_<setId>(data) { ... }         // → active branch index, or -1 when none matches
     getCreatePatchBranch_<setId>(i, data) { ... }   // lazily build + memoize the child for branch i
     renderIf_<setId>(data) { ... }       // swap + create child, returns true iff it re-rendered
     mutate_<varName>(data) { ... }       // set handling first, then sel + bc + setAttribute / replaceBetween
@@ -181,7 +180,7 @@ Every var reaching codegen must be one of the partial's declared attributes; the
 
 Generated modules import shared code instead of carrying a copy of it:
 
-- `render.js` — the JS runtime (`runtime/js/render.ts`), for re-rendering an if-set branch.
+- `render.js` — the JS runtime (`runtime/js/render.ts`), for choosing and re-rendering an if-set branch.
 - `patch.js` — browser-only code for patching (`runtime/dom-patch/patch.ts`): `replaceBetween`, and the `BackflipElement` base class every `base`/`full` element class extends.
 
 Each module imports only what it calls, and reports those files in `runtimeFiles`. The CLI copies each needed file from `dist` (see `RUNTIME_FILE_DIST_PATHS`) into the root of the dom-patch output dir. Every module sits at that root, so a specifier is always `./<file>`. If a needed `dist` file is missing the build **errors and stops**, since a silent skip would ship a page that 404s on import. The preview server maps `<domPatchOutputDir>/<file>` to the same `dist` file.

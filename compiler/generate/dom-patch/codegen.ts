@@ -27,11 +27,11 @@ export interface BfidSite {
  * A qualifying `b-if`/`b-else-if`/`b-else` set, ready for codegen.
  *
  * `setId` (the leading marker's bfid) names every symbol the set generates:
- * the module-level `bfif_<setId>` snapshot, `branch_<setId>`, `renderIf_<setId>`,
+ * the module-level `bfif_<setId>` snapshot, `renderIf_<setId>`,
  * `getCreatePatchBranch_<setId>`, and the `this.if_<setId>` / `this.if_pb_<setId>`
  * fields. `snapshot` is the `nodeToJS` literal of the whole `IfTNode`, taken
  * *after* all AST mutation so it carries the same bfids and print markers as the
- * server-rendered HTML.
+ * server-rendered HTML. It is also what the active branch is chosen from.
  */
 export interface IfSetPatchSite {
 	/** Anchor for `renderIf_`'s swap — and the `ref_elem` handed to every child branch. */
@@ -135,7 +135,7 @@ export function runtimeImportsFor(root: PatchBranch, mode: GenerateMode): Runtim
 	if (hasSet || hasPrint) patchNames.push('replaceBetween');
 	if (mode === 'base' || mode === 'full') patchNames.push('BackflipElement');
 	const imports: RuntimeImports = new Map();
-	if (hasSet) imports.set('render.js', ['render']);
+	if (hasSet) imports.set('render.js', ['render', 'activeBranchIndex']);
 	if (patchNames.length) imports.set('patch.js', patchNames);
 	return imports;
 }
@@ -216,7 +216,6 @@ function genPatchClass(branch: PatchBranch): string {
 	}
 
 	const selMethods = bfidOrder.map(genSelMethod);
-	const branchMethods = sets.map(genBranchMethod);
 	const getCreateMethods = sets.map(s => genGetCreateMethod(s));
 	const renderIfMethods = sets.map(s => genRenderIfMethod(s, className));
 	const mutateMethods = vars.map(v =>
@@ -229,7 +228,6 @@ function genPatchClass(branch: PatchBranch): string {
 		...(selMethods.length ? [''] : []),
 		...bcMethods,
 		...(bcMethods.length ? [''] : []),
-		...(branchMethods.length ? [...branchMethods, ''] : []),
 		...(getCreateMethods.length ? [...getCreateMethods, ''] : []),
 		...(renderIfMethods.length ? [...renderIfMethods, ''] : []),
 		...mutateMethods,
@@ -247,7 +245,7 @@ function genPatchClass(branch: PatchBranch): string {
 function genConstructor(sets: IfSetPatchSite[]): string {
 	const lines = ['\t\tthis.ref_elem = ref_elem;'];
 	for (const s of sets) {
-		lines.push(`\t\tthis.${activeIndexField(s.setId)} = this.${branchFnName(s.setId)}(data);`);
+		lines.push(`\t\tthis.${activeIndexField(s.setId)} = ${activeBranchExpr(s.setId)};`);
 		lines.push(`\t\tthis.${pbMapField(s.setId)} = new Map();`);
 		lines.push(`\t\tthis.${getCreateFnName(s.setId)}(this.${activeIndexField(s.setId)}, data);`);
 	}
@@ -256,7 +254,6 @@ function genConstructor(sets: IfSetPatchSite[]): string {
 
 // Symbols an if-set owns, all keyed off its leading marker's bfid.
 function ifConstName(setId: string): string { return `bfif_${setId}`; }
-function branchFnName(setId: string): string { return `branch_${setId}`; }
 function renderIfFnName(setId: string): string { return `renderIf_${setId}`; }
 function getCreateFnName(setId: string): string { return `getCreatePatchBranch_${setId}`; }
 function activeIndexField(setId: string): string { return `if_${setId}`; }
@@ -279,24 +276,10 @@ function targetKey(t: PatchTarget): string {
 	return t.kind === 'ref-element' ? 'ref' : `bf:${t.bfid}`;
 }
 
-// Returns the index of the winning branch, or -1 when none matches (a set with
-// no b-else whose conditions are all falsy renders nothing).
-function genBranchMethod(s: IfSetPatchSite): string {
-	const vars = s.ifSet.liveVars;
-	const destructure = vars.length === 0 ? '' : `\t\tconst { ${vars.join(', ')} } = data;\n`;
-	const lines: string[] = [];
-	let hasElse = false;
-	s.ifSet.node.branches.forEach((b, i) => {
-		if (hasElse) return;   // nothing can follow a b-else
-		if (b.condition) {
-			lines.push(`\t\tif (${generateStatement(b.condition.expr!)}) return ${i};`);
-		} else {
-			lines.push(`\t\treturn ${i};`);   // b-else — always wins if reached
-			hasElse = true;
-		}
-	});
-	if (!hasElse) lines.push('\t\treturn -1;');
-	return `\t${branchFnName(s.setId)}(data) {\n${destructure}${lines.join('\n')}\n\t}`;
+// The index of the set's winning branch, or -1 when none matches, chosen from its
+// snapshot exactly as the renderer chooses.
+function activeBranchExpr(setId: string): string {
+	return `activeBranchIndex(${ifConstName(setId)}, data)`;
 }
 
 // Lazily construct (and memoize) the child patch-branch for a given branch index.
@@ -332,7 +315,7 @@ function genRenderIfMethod(s: IfSetPatchSite, className: string): string {
 	const map = pbMapField(s.setId);
 	return [
 		`\t${renderIfFnName(s.setId)}(data) {`,
-		`\t\tconst idx = this.${branchFnName(s.setId)}(data);`,
+		`\t\tconst idx = ${activeBranchExpr(s.setId)};`,
 		`\t\tif (idx === this.${idxField}) return false;`,
 		`\t\tconst elem = ${targetExpr(s.target)};`,
 		'\t\tif (!elem) {',

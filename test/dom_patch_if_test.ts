@@ -106,7 +106,7 @@ Deno.test("integration CLI: render.js and patch.js are copied into the dom-patch
 		assertStringIncludes(await fs.readFile(patchPath, "utf-8"), "export function replaceBetween");
 
 		const generated = await fs.readFile(path.join(workDir, "bfdom", "mode-badge.js"), "utf-8");
-		assertStringIncludes(generated, "import { render } from './render.js';");
+		assertStringIncludes(generated, "import { render, activeBranchIndex } from './render.js';");
 		assertStringIncludes(generated, "import { replaceBetween, BackflipElement } from './patch.js';");
 		assertStringIncludes(generated, "createContextualFragment");
 	} finally {
@@ -147,7 +147,7 @@ Deno.test("integration CLI: a partial from a nested template still lands flat be
 
 		const modulePath = path.join(workDir, "bfdom", "mode-badge.js");
 		const generated = await fs.readFile(modulePath, "utf-8");
-		assertStringIncludes(generated, "import { render } from './render.js';");
+		assertStringIncludes(generated, "import { render, activeBranchIndex } from './render.js';");
 		assertEquals(await exists(path.join(workDir, "bfdom", "deep")), false);
 
 		// Resolve each specifier the way the browser would, and check it lands on a real file.
