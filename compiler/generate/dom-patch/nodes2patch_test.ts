@@ -3,7 +3,7 @@ import { assertEquals, assertThrows } from "jsr:@std/assert";
 import { compilePartial } from "../../compiler.ts";
 import type { CompiledFile, ElementTNode, PartialDef } from "../../types.ts";
 import { makeSequentialBfidGen } from "./bfid.ts";
-import { applyDomPatch, type DomPatchOptions } from "./nodes2patch.ts";
+import { applyDomPatch, type DomPatchOptions, type RuntimeFile } from "./nodes2patch.ts";
 
 async function compileCustomElement(html: string): Promise<CompiledFile> {
 	const m = html.match(/<([a-z][a-z0-9-]*-[a-z0-9-]*)/);
@@ -27,11 +27,11 @@ async function compileCustomElement(html: string): Promise<CompiledFile> {
 }
 
 // One partial per fixture is the norm here, so unwrap its module.
-function domPatch(file: CompiledFile, opts?: DomPatchOptions): { js: string | null, needsRender: boolean } {
+function domPatch(file: CompiledFile, opts?: DomPatchOptions): { js: string | null, runtimeFiles: RuntimeFile[] } {
 	const { modules } = applyDomPatch(file, opts);
-	if (modules.length === 0) return { js: null, needsRender: false };
+	if (modules.length === 0) return { js: null, runtimeFiles: [] };
 	if (modules.length > 1) throw new Error(`expected one module, got ${modules.length}; use applyDomPatch directly`);
-	return { js: modules[0].js, needsRender: modules[0].needsRender };
+	return { js: modules[0].js, runtimeFiles: modules[0].runtimeFiles };
 }
 
 // Assemble several single-partial sources into one CompiledFile, mirroring a
@@ -241,9 +241,12 @@ Deno.test("end-to-end: two custom elements with b-if sets in one file keep disti
 	);
 	const { modules } = applyDomPatch(file, { bfidGen: makeSequentialBfidGen() });
 	assertEquals(modules.length, 2);
-	assertEquals(modules.every(m => m.needsRender), true);
-	// Each module imports render.js once for itself.
-	for (const m of modules) assertEquals(m.js.match(/^import \{ render \} from/gm)?.length, 1);
+	for (const m of modules) assertEquals(m.runtimeFiles, ['render.js', 'patch.js']);
+	// Each module imports the runtime once for itself.
+	for (const m of modules) {
+		assertEquals(m.js.match(/^import \{ render \} from/gm)?.length, 1);
+		assertEquals(m.js.match(/^import \{ replaceBetween \} from/gm)?.length, 1);
+	}
 	const js = modules.map(m => m.js).join('\n');
 	const setIds = [...js.matchAll(/^const bfif_(bf\d+) = /gm)].map(m => m[1]);
 	assertEquals(setIds.length, 2);
@@ -320,13 +323,14 @@ Deno.test("end-to-end: print of a live var wraps it in marker comments and patch
 	const root = file.partials.get('my-widget')!;
 	assertEquals(collectComments(root.tnodes), ['bfid:bf1', 'bfid:bf2']);
 
-	// Class wires the parent lookup, value fn, mutate, and the child-range helper.
+	// Class wires the parent lookup, value fn, and mutate; the range replace is imported.
 	assertEquals(js.includes('class BackflipMyWidget'), true);
 	assertEquals(js.includes('sel_bf0()'), true);
 	assertEquals(js.includes('bc_print_bf1(data)'), true);
 	assertEquals(js.includes('mutate_name'), true);
-	assertEquals(js.includes("this.replaceBetween(elem, 'bfid:bf1', 'bfid:bf2', document.createTextNode(String(this.bc_print_bf1(data))));"), true);
-	assertEquals(js.includes('replaceBetween(parent, startMarker, endMarker, node)'), true);
+	assertEquals(js.includes("\treplaceBetween(elem, 'bfid:bf1', 'bfid:bf2', document.createTextNode(String(this.bc_print_bf1(data))));"), true);
+	assertEquals(js.includes("import { replaceBetween } from './patch.js';"), true);
+	assertEquals(js.includes('replaceBetween(parent'), false);
 });
 
 Deno.test("end-to-end: print directly in the custom element targets this.ce", async () => {
@@ -342,7 +346,7 @@ Deno.test("end-to-end: print directly in the custom element targets this.ce", as
 	assertEquals(js.includes('sel_'), false);
 	assertEquals(js.includes('querySelector'), false);
 	assertEquals(js.includes('elem = this.ref_elem;'), true);
-	assertEquals(js.includes("this.replaceBetween(elem, 'bfid:bf0', 'bfid:bf1', document.createTextNode(String(this.bc_print_bf0(data))));"), true);
+	assertEquals(js.includes("\treplaceBetween(elem, 'bfid:bf0', 'bfid:bf1', document.createTextNode(String(this.bc_print_bf0(data))));"), true);
 });
 
 // Compile several custom-element partials into a single CompiledFile.
@@ -413,9 +417,9 @@ Deno.test("end-to-end: an if-set is bracketed by markers and its parent gets a b
 	const file = await compileCustomElement(
 		`<my-widget b-attr:mode><div><p b-if="mode == 'a'">A</p><em b-else>B</em></div></my-widget>`
 	);
-	const { js, needsRender } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
+	const { js, runtimeFiles } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
 	if (!js) throw new Error('expected js');
-	assertEquals(needsRender, true);
+	assertEquals(runtimeFiles, ['render.js', 'patch.js']);
 
 	// Markers bracket the whole set (one pair, not one per branch), inside the <div>.
 	const root = file.partials.get('my-widget')!;
@@ -425,10 +429,11 @@ Deno.test("end-to-end: an if-set is bracketed by markers and its parent gets a b
 	assertEquals(div.attrs.some(a => a.type === 'static' && a.raw.includes('data-bfid="bf0"')), true);
 
 	assertEquals(js.includes("import { render } from './render.js';"), true);
+	assertEquals(js.includes("import { replaceBetween } from './patch.js';"), true);
 	assertEquals(js.includes('const bfif_bf1 = '), true);
 	assertEquals(js.includes('branch_bf1(data)'), true);
 	assertEquals(js.includes('renderIf_bf1(data)'), true);
-	assertEquals(js.includes("this.replaceBetween(elem, 'bfid:bf1', 'bfid:bf2', frag);"), true);
+	assertEquals(js.includes("\treplaceBetween(elem, 'bfid:bf1', 'bfid:bf2', frag);"), true);
 	assertEquals(js.includes('this.if_bf1 = this.branch_bf1(data);'), true);
 });
 
@@ -459,26 +464,28 @@ Deno.test("end-to-end: the if-set snapshot is taken after pass-1 markers are add
 	const bfidMatch = js.match(/sel_(bf\d+)\(\)/)!;
 	assertEquals(snapshot.includes(`data-bfid="${bfidMatch[1]}"`), true);
 	// ...as are the print's marker comments.
-	const printMarkers = js.match(/this\.replaceBetween\(elem, '(bfid:bf\d+)', '(bfid:bf\d+)', document\.createTextNode/)!;
+	const printMarkers = js.match(/\treplaceBetween\(elem, '(bfid:bf\d+)', '(bfid:bf\d+)', document\.createTextNode/)!;
 	assertEquals(snapshot.includes(`{ type: 'comment', text: '${printMarkers[1]}' }`), true);
 	assertEquals(snapshot.includes(`{ type: 'comment', text: '${printMarkers[2]}' }`), true);
 });
 
-Deno.test("end-to-end: renderImportPath option sets the import specifier", async () => {
-	const file = await compileCustomElement(
-		`<my-widget b-attr:mode><p b-if="mode == 'a'">A</p><em b-else>B</em></my-widget>`
-	);
-	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen(), renderImportPath: '../../render.js' });
-	assertEquals(js!.includes("import { render } from '../../render.js';"), true);
-});
-
-Deno.test("end-to-end: a partial with no if-set imports nothing and needsRender is false", async () => {
+Deno.test("end-to-end: a partial with only attr sites imports nothing", async () => {
 	const file = await compileCustomElement(
 		`<my-widget b-attr:title><span :data-x="title">hi</span></my-widget>`
 	);
-	const { js, needsRender } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
-	assertEquals(needsRender, false);
+	const { js, runtimeFiles } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
+	assertEquals(runtimeFiles, []);
 	assertEquals(js!.includes('import'), false);
+});
+
+Deno.test("end-to-end: a partial with prints but no if-set imports only patch.js", async () => {
+	const file = await compileCustomElement(
+		`<my-widget b-attr:title><span>{{ title }}</span></my-widget>`
+	);
+	const { js, runtimeFiles } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
+	assertEquals(runtimeFiles, ['patch.js']);
+	assertEquals(js!.includes("import { replaceBetween } from './patch.js';"), true);
+	assertEquals(js!.includes('render.js'), false);
 });
 
 Deno.test("end-to-end: disqualified if-sets get no markers and no class", async () => {

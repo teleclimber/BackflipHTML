@@ -1,10 +1,11 @@
 /**
- * End-to-end integration tests for reactive `b-if` in dom-patch.
+ * End-to-end integration tests for reactive `b-if` in dom-patch, and for the
+ * runtime files generated modules import.
  *
- * The generated module imports the JS runtime's `render.js` to build the new
- * branch client-side, so the CLI must copy that file into the dom-patch output
- * root and every module must reach it with a correct depth-relative specifier.
- * A build that needs it while `dist` is absent has to fail loudly rather than
+ * A module imports `render.js` to build a new branch client-side and `patch.js`
+ * for the DOM helpers, so the CLI must copy each file a module imports into the
+ * dom-patch output root and every module must reach it with a correct specifier.
+ * A build that needs one while `dist` is absent has to fail loudly rather than
  * emit a page that 404s on import.
  */
 
@@ -25,9 +26,14 @@ const APP_HTML = `<mode-badge b-attr:mode b-script="@scripts/mode-badge.js">
 	<body><mode-badge mode="a"></mode-badge></body>
 </b-unwrap>`;
 
-// Same shape but with no b-if, so nothing imports render.js.
+// Same shape but with no b-if and no print, so nothing imports any runtime file.
 const APP_NO_IF = `<mode-badge b-attr:mode b-script="@scripts/mode-badge.js">
 	<div :data-mode="mode">x</div>
+</mode-badge>`;
+
+// A print but no b-if: the module imports patch.js but not render.js.
+const APP_PRINT_ONLY = `<mode-badge b-attr:mode b-script="@scripts/mode-badge.js">
+	<div>{{ mode }}</div>
 </mode-badge>`;
 
 // A nested b-if: the outer set (mode) contains an inner set (level) whose branch
@@ -84,7 +90,7 @@ async function exists(p: string): Promise<boolean> {
 	try { await Deno.stat(p); return true; } catch { return false; }
 }
 
-Deno.test("integration CLI: render.js is copied into the dom-patch output root", async () => {
+Deno.test("integration CLI: render.js and patch.js are copied into the dom-patch output root", async () => {
 	const workDir = await makeProject("app.html", APP_HTML);
 	try {
 		const { code, stderr } = await runCli(workDir);
@@ -95,8 +101,13 @@ Deno.test("integration CLI: render.js is copied into the dom-patch output root",
 		// It is the real compiled runtime, not a stub.
 		assertStringIncludes(await fs.readFile(renderPath, "utf-8"), "export function render");
 
+		const patchPath = path.join(workDir, "bfdom", "patch.js");
+		assertEquals(await exists(patchPath), true, "patch.js should be copied to the output root");
+		assertStringIncludes(await fs.readFile(patchPath, "utf-8"), "export function replaceBetween");
+
 		const generated = await fs.readFile(path.join(workDir, "bfdom", "mode-badge.js"), "utf-8");
 		assertStringIncludes(generated, "import { render } from './render.js';");
+		assertStringIncludes(generated, "import { replaceBetween } from './patch.js';");
 		assertStringIncludes(generated, "createContextualFragment");
 	} finally {
 		await fs.rm(workDir, { recursive: true, force: true });
@@ -127,8 +138,8 @@ Deno.test("integration CLI: a nested b-if compiles to nested patch-branch classe
 });
 
 // A module is named after its partial and sits flat at the output root, however deep
-// the template that defines it — so its render.js import is always './render.js'.
-Deno.test("integration CLI: a partial from a nested template still lands flat beside render.js", async () => {
+// the template that defines it — so its runtime imports are always './<file>'.
+Deno.test("integration CLI: a partial from a nested template still lands flat beside its runtime files", async () => {
 	const workDir = await makeProject(path.join("deep", "nested", "app.html"), APP_HTML);
 	try {
 		const { code, stderr } = await runCli(workDir);
@@ -139,17 +150,20 @@ Deno.test("integration CLI: a partial from a nested template still lands flat be
 		assertStringIncludes(generated, "import { render } from './render.js';");
 		assertEquals(await exists(path.join(workDir, "bfdom", "deep")), false);
 
-		// Resolve the specifier the way the browser would, and check it lands on a real file.
-		const spec = generated.match(/import \{ render \} from '([^']+)';/)![1];
-		const resolved = path.resolve(path.dirname(modulePath), spec);
-		assertEquals(resolved, path.join(workDir, "bfdom", "render.js"));
-		assertEquals(await exists(resolved), true, "the import must resolve to a real file");
+		// Resolve each specifier the way the browser would, and check it lands on a real file.
+		const specs = [...generated.matchAll(/^import \{ \w+ \} from '([^']+)';/gm)].map(m => m[1]);
+		assertEquals(specs, ['./render.js', './patch.js']);
+		for (const spec of specs) {
+			const resolved = path.resolve(path.dirname(modulePath), spec);
+			assertEquals(path.dirname(resolved), path.join(workDir, "bfdom"));
+			assertEquals(await exists(resolved), true, `${spec} must resolve to a real file`);
+		}
 	} finally {
 		await fs.rm(workDir, { recursive: true, force: true });
 	}
 });
 
-Deno.test("integration CLI: no b-if means no import and no copied render.js", async () => {
+Deno.test("integration CLI: no b-if and no print means no import and no copied runtime", async () => {
 	const workDir = await makeProject("app.html", APP_NO_IF);
 	try {
 		const { code, stderr } = await runCli(workDir);
@@ -157,12 +171,31 @@ Deno.test("integration CLI: no b-if means no import and no copied render.js", as
 		const generated = await fs.readFile(path.join(workDir, "bfdom", "mode-badge.js"), "utf-8");
 		assertEquals(generated.includes("import"), false);
 		assertEquals(await exists(path.join(workDir, "bfdom", "render.js")), false);
+		assertEquals(await exists(path.join(workDir, "bfdom", "patch.js")), false);
 	} finally {
 		await fs.rm(workDir, { recursive: true, force: true });
 	}
 });
 
-Deno.test("integration CLI: a build that needs render.js fails when dist is absent", async () => {
+Deno.test("integration CLI: a print without b-if copies patch.js but not render.js", async () => {
+	const workDir = await makeProject("app.html", APP_PRINT_ONLY);
+	try {
+		const { code, stderr } = await runCli(workDir);
+		assertEquals(code, 0, `cli failed: ${stderr}`);
+		const generated = await fs.readFile(path.join(workDir, "bfdom", "mode-badge.js"), "utf-8");
+		assertStringIncludes(generated, "import { replaceBetween } from './patch.js';");
+		assertEquals(generated.includes("render.js"), false);
+		assertEquals(await exists(path.join(workDir, "bfdom", "patch.js")), true);
+		assertEquals(await exists(path.join(workDir, "bfdom", "render.js")), false);
+	} finally {
+		await fs.rm(workDir, { recursive: true, force: true });
+	}
+});
+
+for (const [file, html] of [
+	["render.js", APP_HTML],
+	["patch.js", APP_PRINT_ONLY],
+] as const) Deno.test(`integration CLI: a build that needs ${file} fails when dist is absent`, async () => {
 	// Stand up a repo root that mirrors the real one but has no dist/: every entry
 	// is symlinked except cli.ts, which is copied so its own relative imports (and
 	// the import.meta.url used to locate dist) resolve inside this fake root.
@@ -174,12 +207,12 @@ Deno.test("integration CLI: a build that needs render.js fails when dist is abse
 	}
 	await fs.copyFile(CLI_PATH, path.join(fakeRoot, "cli.ts"));
 
-	const workDir = await makeProject("app.html", APP_HTML);
+	const workDir = await makeProject("app.html", html);
 	try {
 		const { code, stderr } = await runCli(workDir, path.join(fakeRoot, "cli.ts"));
 		assertEquals(code, 1, `expected the build to fail; stderr: ${stderr}`);
 		assertStringIncludes(stderr, "Missing required runtime file");
-		assertStringIncludes(stderr, "render.js");
+		assertStringIncludes(stderr, file);
 	} finally {
 		await fs.rm(workDir, { recursive: true, force: true });
 		await fs.rm(fakeRoot, { recursive: true, force: true });

@@ -5,7 +5,7 @@ import type { CompiledFile } from '../compiler/types.js';
 import { resolveDomPatchScriptUrl, type BackflipConfig } from '../compiler/config.js';
 import { resolveAssetRefs } from '../compiler/helpers.js';
 import { flattenCompiledFile } from '../compiler/flatten.js';
-import { applyDomPatch, moduleFileName } from '../compiler/generate/dom-patch/nodes2patch.js';
+import { applyDomPatch, moduleFileName, RUNTIME_FILE_DIST_PATHS, type RuntimeFile } from '../compiler/generate/dom-patch/nodes2patch.js';
 import { fileToJsModule } from '../compiler/generate/js/nodes2js.js';
 import { renderRoot } from '../runtime/js/render.js';
 import type { RootRNode } from '../runtime/js/render.js';
@@ -128,11 +128,11 @@ async function writeDomPatchAssets(
 	scriptUrlFor?: (tagName: string) => string | undefined,
 ): Promise<Record<string, string>> {
 	const assets: Record<string, string> = {};
-	let needsRenderAny = false;
+	const runtimeFiles = new Set<RuntimeFile>();
 	for (const [, file] of files) {
 		const { modules } = applyDomPatch(file, { ...(scriptUrlFor ? { scriptUrlFor } : {}) });
 		for (const mod of modules) {
-			if (mod.needsRender) needsRenderAny = true;
+			for (const f of mod.runtimeFiles) runtimeFiles.add(f);
 			const jsRel = moduleFileName(mod.tagName);
 			const savedPath = path.join(outDir, jsRel);
 			await fs.mkdir(path.dirname(savedPath), { recursive: true });
@@ -142,19 +142,17 @@ async function writeDomPatchAssets(
 			}
 		}
 	}
-	// A build copies render.js into the dom-patch output root; the preview serves the
-	// compiled runtime straight from dist at that same URL.
-	if (needsRenderAny) {
+	// A build copies each imported runtime file into the dom-patch output root; the
+	// preview serves it straight from dist at that same URL.
+	for (const file of runtimeFiles) {
+		// Resolved relative to this module so it works wherever the preview is launched from.
+		const src = fileURLToPath(new URL(`../dist/${RUNTIME_FILE_DIST_PATHS[file]}`, import.meta.url));
 		for (const outputDir of outputDirs) {
-			assets[path.join(outputDir, 'render.js')] = RENDER_RUNTIME_PATH;
+			assets[path.join(outputDir, file)] = src;
 		}
 	}
 	return assets;
 }
-
-// The compiled JS runtime the generated modules import. Resolved relative to this
-// module so it works wherever the preview is launched from.
-const RENDER_RUNTIME_PATH = fileURLToPath(new URL('../dist/runtime/js/render.js', import.meta.url));
 
 /**
  * Evaluate compiled partials to get RootRNode objects.

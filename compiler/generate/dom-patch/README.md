@@ -46,7 +46,7 @@ Attr and print patching edits DOM that is already there. An if-set instead **ren
 
 Three consequences shape the design:
 
-- **`render.js` is a build input.** The generated module does `import { render } from './render.js'`, and the CLI copies `dist/runtime/js/render.js` into the root of the dom-patch output dir. Every module sits at that root, so the specifier is always `./render.js`. If the `dist` file is missing the build **errors and stops** — a silent skip would ship a page that 404s on import. `applyDomPatch` reports `needsRender` so the CLI knows whether the copy is required, and the preview server maps `<domPatchOutputDir>/render.js` to the same `dist` file.
+- **`render.js` is a build input.** The generated module does `import { render } from './render.js'`. See [Runtime files](#runtime-files) for how it reaches the output dir.
 - **Snapshots are taken after all AST mutation, recursively.** `applyDomPatch` runs two passes per partial over the patch-branch tree (see [patch-branches](#patch-branches)): pass 1 mutates the AST at every depth (`data-bfid`s, print markers, and every set's marker pair), pass 2 snapshots each set's `IfTNode`. Taking a snapshot before every nested marker exists would produce a client-rendered branch missing markers the server-rendered HTML has, and every patch site inside it — including a nested set's anchors — would stop working.
 - **The HTML becomes DOM via `range.createContextualFragment()`**, with the range's contents set to the target element, so a branch is parsed in its real parent context (a `<tr>` under a `<tbody>` survives).
 
@@ -85,7 +85,8 @@ Within a single patch-branch, if-set handling runs **first** in a `mutate_<var>`
 The mutation logic lives in **patch-branches** (see [patch-branches](#patch-branches)); `BackflipMyElement` is a thin shell that owns the host, `collectData()`, and the root patch-branch. For a partial `my-element` with live vars `title` and `flag`:
 
 ```js
-import { render } from './render.js';   // only when the module has at least one if-set
+import { render } from './render.js';            // only when the module has at least one if-set
+import { replaceBetween } from './patch.js';     // when it has a print site or an if-set
 
 const bfif_<setId> = { type:'if', branches: [ ... ] };   // one per if-set, module level
 
@@ -98,7 +99,6 @@ class BackflipPatch_MyElement {          // one patch-branch class per qualifyin
     branch_<setId>(data) { ... }         // → active branch index, or -1 when none matches
     getCreatePatchBranch_<setId>(i, data) { ... }   // lazily build + memoize the child for branch i
     renderIf_<setId>(data) { ... }       // swap + create child, returns true iff it re-rendered
-    replaceBetween(parent, startMarker, endMarker, node) { ... }   // emitted for print sites and if-sets
     mutate_<varName>(data) { ... }       // set handling first, then sel + bc + setAttribute / replaceBetween
     update(varName, data) { switch(varName) { case '<v>': this.mutate_<v>(data); ... } }
 }
@@ -118,9 +118,9 @@ Inside a `mutate_<varName>` body, **set handling runs first** (see [Ordering](#o
 Per-site updates within a found group:
 
 - **attr** / **caller-attr-expr** → `elem.setAttribute(name, String(...))`, or `setAttribute(name, '')`+`removeAttribute(name)` for booleans. (Both resolve `elem` by `data-bfid`; a caller-attr's `elem` is the nested custom-element call's rendered tag.)
-- **print** → `this.replaceBetween(elem, '<startMarker>', '<endMarker>', document.createTextNode(String(...)))`.
+- **print** → `replaceBetween(elem, '<startMarker>', '<endMarker>', document.createTextNode(String(...)))`.
 
-`renderIf_<setId>(data)` resolves the set's target element itself (same null-guard `console.error`), re-renders the winning branch into the marker range via `replaceBetween`, evicts the old branch's child instance, creates the new one, and returns whether it swapped. `replaceBetween(parent, startMarker, endMarker, node)` is the shared marker-range replace: it finds the two marker comments among `parent`'s direct children, removes every node strictly between them, and inserts `node` before the closing marker. Prints pass a text node (never `innerText`/`innerHTML`) so siblings are preserved and the value is never interpreted as markup; if-sets pass the `DocumentFragment` of the freshly rendered branch. Either way the markers survive, so the range stays patchable.
+`renderIf_<setId>(data)` resolves the set's target element itself (same null-guard `console.error`), re-renders the winning branch into the marker range via `replaceBetween`, evicts the old branch's child instance, creates the new one, and returns whether it swapped. `replaceBetween(parent, startMarker, endMarker, node)`, imported from the runtime's `patch.js`, is the shared marker-range replace: it finds the two marker comments among `parent`'s direct children, removes every node strictly between them, and inserts `node` before the closing marker. Prints pass a text node (never `innerText`/`innerHTML`) so siblings are preserved and the value is never interpreted as markup; if-sets pass the `DocumentFragment` of the freshly rendered branch. Either way the markers survive, so the range stays patchable.
 
 Other notes:
 
@@ -172,11 +172,19 @@ Patching targets server-rendered DOM, so an element created with `document.creat
 
 Every var reaching codegen must be one of the partial's declared attributes; the generator asserts this before emitting a module, since a name that slipped through would compile into a patch writing `undefined` into the page.
 
-`applyDomPatch(file, opts?)` mutates the CompiledFile in place and returns `{ modules }` — one `{ tagName, js, needsRender }` per partial in the file that generates client JS. `needsRender` is true when that module imports `render.js`, i.e. it contains at least one if-set. `moduleFileName(tagName)` names its file. `opts` is `{ bfidGen?, scriptUrlFor?, renderImportPath? }`:
+`applyDomPatch(file, opts?)` mutates the CompiledFile in place and returns `{ modules }` — one `{ tagName, js, runtimeFiles }` per partial in the file that generates client JS. `runtimeFiles` lists the [runtime files](#runtime-files) the module imports. `moduleFileName(tagName)` names its file. `opts` is `{ bfidGen?, scriptUrlFor? }`:
 
 - `bfidGen` — deterministic id generator (`makeSequentialBfidGen()`) in tests; production uses the default crypto-random generator. One generator is shared across a file's partials, so ids stay distinct across its modules.
-- `renderImportPath` — overrides the `render.js` specifier (`'./render.js'`); tests use it to assert the import line.
 - `scriptUrlFor(tagName)` — public URL of that partial's module. When it returns a URL, the partial's root is stamped with a script the renderer auto-includes: an `'entry'` for `b-generate="full"` (the module registers the element itself), a `'dependency'` otherwise. Partials that produce no module are left untouched. When the option is absent, generation is unchanged and nothing is stamped.
+
+## Runtime files
+
+Generated modules import shared code instead of carrying a copy of it:
+
+- `render.js` — the JS runtime (`runtime/js/render.ts`), for re-rendering an if-set branch.
+- `patch.js` — browser-only helpers for patching (`runtime/dom-patch/patch.ts`), such as `replaceBetween`.
+
+Each module imports only what it calls, and reports those files in `runtimeFiles`. The CLI copies each needed file from `dist` (see `RUNTIME_FILE_DIST_PATHS`) into the root of the dom-patch output dir. Every module sits at that root, so a specifier is always `./<file>`. If a needed `dist` file is missing the build **errors and stops**, since a silent skip would ship a page that 404s on import. The preview server maps `<domPatchOutputDir>/<file>` to the same `dist` file.
 
 ## Script auto-include
 

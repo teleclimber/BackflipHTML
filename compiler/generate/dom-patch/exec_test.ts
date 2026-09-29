@@ -12,6 +12,7 @@ import { JSDOM } from "npm:jsdom";
 import type { ElementTNode, IfBranch, IfTNode, PrintTNode } from "../../types.ts";
 import { interpretBackcode } from "../../backcode.ts";
 import { render } from "../../../runtime/js/render.ts";
+import { replaceBetween } from "../../../runtime/dom-patch/patch.ts";
 import type { BackcodeSite, IfSetSite } from "./collect.ts";
 import { generateClassForPartial, type BfidSite, type IfSetPatchSite, type PatchBranch, type PatchTarget } from "./codegen.ts";
 
@@ -81,14 +82,14 @@ function ifSite(opts: {
 
 // Instantiate the generated cluster's shell class against a host built from
 // `innerHtml`, with globalThis.document pointed at the jsdom document for the
-// duration. `render` is injected the way the generated module's
-// `import { render } from './render.js'` would supply it.
+// duration. `render` and `replaceBetween` are injected the way the generated
+// module's runtime imports would supply them.
 function mount(js: string, partialName: string, className: string, hostAttrs: string, innerHtml: string) {
 	const dom = new JSDOM(`<!DOCTYPE html><body><${partialName} ${hostAttrs}>${innerHtml}</${partialName}></body>`);
 	const prevDoc = (globalThis as any).document;
 	(globalThis as any).document = dom.window.document;
 	const host = dom.window.document.querySelector(partialName)!;
-	const Cls = new Function('render', js.replaceAll('export class', 'class') + `; return ${className};`)(render);
+	const Cls = new Function('render', 'replaceBetween', js.replaceAll('export class', 'class') + `; return ${className};`)(render, replaceBetween);
 	const instance = new Cls(host);
 	return { host, instance, restore: () => { (globalThis as any).document = prevDoc; } };
 }
@@ -186,7 +187,7 @@ Deno.test("exec: missing markers log an error and skip without throwing", () => 
 		host.setAttribute('name', 'Mars');
 		instance.update('name'); // must not throw
 		assertEquals(errors.length, 1);
-		assertEquals(String(errors[0][0]).includes('comment markers not found'), true);
+		assertEquals(String(errors[0][0]).includes('comment markers bfid:bf1 / bfid:bf2 not found'), true);
 	} finally {
 		console.error = prevErr;
 		restore();
@@ -460,10 +461,12 @@ const SERVER_HTML = (name: string) =>
 	`<my-widget name="${name}"><p data-bfid="bf0">Hello <!--bfid:bf1-->${name}<!--bfid:bf2-->!</p></my-widget>`;
 
 // Strip the ES-module syntax so the source can be evaluated as a classic script. The
-// exported names are hung off globalThis, standing in for what an importer would bind.
+// exported names are hung off globalThis, standing in for what an importer would bind,
+// and the runtime's replaceBetween is inlined in place of its import.
 function asScript(js: string): string {
 	const exported = [...js.matchAll(/export class (\w+)/g)].map(m => m[1]);
 	return [
+		replaceBetween.toString(),
 		js.replaceAll('export class', 'class'),
 		...exported.map(n => `globalThis.${n} = ${n};`),
 	].join('\n');

@@ -6,6 +6,7 @@ import type { BackcodeSite, IfSetSite } from "./collect.ts";
 import {
 	generateClassForPartial,
 	generateFile,
+	runtimeImportsFor,
 	classNameFor,
 	patchClassNameFor,
 	sanitizeAttrName,
@@ -267,11 +268,54 @@ Deno.test("generateFile concatenates classes with header", () => {
 	assertEquals(out.endsWith('\n'), true);
 });
 
-Deno.test("generateFile emits the render import only when asked, with the given path", () => {
+Deno.test("generateFile emits one import per runtime file, before the classes", () => {
 	assertEquals(generateFile(['class A {}']).includes('import'), false);
-	const nested = generateFile(['class A {}'], '../../render.js');
-	assertEquals(nested.includes("import { render } from '../../render.js';"), true);
-	assertEquals(nested.indexOf('import') < nested.indexOf('class A'), true);
+	const out = generateFile(['class A {}'], new Map([['render.js', ['render']], ['patch.js', ['replaceBetween']]]));
+	assertEquals(out.includes("import { render } from './render.js';"), true);
+	assertEquals(out.includes("import { replaceBetween } from './patch.js';"), true);
+	assertEquals(out.lastIndexOf('import') < out.indexOf('class A'), true);
+});
+
+// --- runtime imports -------------------------------------------------------
+
+Deno.test("runtimeImportsFor: attr sites alone import nothing", () => {
+	const site = attrBfidSite('bf0', dynAttr('title', 'foo'), ['foo']);
+	assertEquals([...runtimeImportsFor(branch([site]))], []);
+});
+
+Deno.test("runtimeImportsFor: an empty branch imports nothing", () => {
+	assertEquals([...runtimeImportsFor(branch())], []);
+});
+
+Deno.test("runtimeImportsFor: a print site imports replaceBetween only", () => {
+	const site = printBfidSite({ kind: 'ref-element' }, 'name', ['name'], 'bf0', 'bf1');
+	assertEquals([...runtimeImportsFor(branch([site]))], [['patch.js', ['replaceBetween']]]);
+});
+
+Deno.test("runtimeImportsFor: an if-set imports render and replaceBetween", () => {
+	const set = ifPatchSite({
+		target: { kind: 'ref-element' }, conditions: ['flag'], liveVars: ['flag'], setId: 'bf0', endId: 'bf1',
+	});
+	assertEquals([...runtimeImportsFor(branch([], [set]))],
+		[['render.js', ['render']], ['patch.js', ['replaceBetween']]]);
+});
+
+Deno.test("runtimeImportsFor: a print that exists only in a nested branch is found", () => {
+	// The root owns only a set; the print lives in a set nested inside its branch.
+	const print = printBfidSite({ kind: 'ref-element' }, 'name', ['name'], 'bf4', 'bf5');
+	const inner = branch([print], [], 'BackflipPatch_bf2_0');
+	const innerSet = ifPatchSite({
+		target: { kind: 'ref-element' }, conditions: ['b'], liveVars: ['b'], setId: 'bf2', endId: 'bf3',
+		branches: [inner],
+	});
+	const outerChild = branch([], [innerSet], 'BackflipPatch_bf0_0');
+	const outerSet = ifPatchSite({
+		target: { kind: 'ref-element' }, conditions: ['a'], liveVars: ['a'], setId: 'bf0', endId: 'bf1',
+		branches: [outerChild],
+	});
+	const imports = runtimeImportsFor(branch([], [outerSet]));
+	assertEquals(imports.get('patch.js'), ['replaceBetween']);
+	assertEquals(imports.get('render.js'), ['render']);
 });
 
 Deno.test("generated cluster is parseable JavaScript", () => {
@@ -302,13 +346,14 @@ Deno.test("unsupported site kind throws (must be filtered before reaching codege
 
 // --- print sites -----------------------------------------------------------
 
-Deno.test("print site on a body element: sel + bc_print + replaceBetween + helper", () => {
+Deno.test("print site on a body element: sel + bc_print + runtime replaceBetween, no helper method", () => {
 	const site = printBfidSite({ kind: 'bfid-element', bfid: 'bf0' }, 'name', ['name'], 'bf1', 'bf2');
 	const js = generateClassForPartial('my-widget', [{ name: 'name', isBool: false }], branch([site]), 'render')!;
 	assertEquals(js.includes("sel_bf0() { return this.ref_elem.querySelector('[data-bfid=\"bf0\"]'); }"), true);
 	assertEquals(js.includes('bc_print_bf1(data)'), true);
-	assertEquals(js.includes("this.replaceBetween(elem, 'bfid:bf1', 'bfid:bf2', document.createTextNode(String(this.bc_print_bf1(data))));"), true);
-	assertEquals(js.match(/replaceBetween\(parent, startMarker, endMarker, node\) \{/g)?.length, 1);
+	assertEquals(js.includes("\treplaceBetween(elem, 'bfid:bf1', 'bfid:bf2', document.createTextNode(String(this.bc_print_bf1(data))));"), true);
+	assertEquals(js.includes('this.replaceBetween'), false);
+	assertEquals(js.includes('replaceBetween(parent'), false);
 });
 
 Deno.test("print site anchored to ref_elem: targets this.ref_elem, no sel", () => {
@@ -316,10 +361,10 @@ Deno.test("print site anchored to ref_elem: targets this.ref_elem, no sel", () =
 	const js = generateClassForPartial('my-widget', [{ name: 'name', isBool: false }], branch([site]), 'render')!;
 	assertEquals(js.includes('querySelector'), false);
 	assertEquals(js.includes('elem = this.ref_elem;'), true);
-	assertEquals(js.includes("this.replaceBetween(elem, 'bfid:bf0', 'bfid:bf1', document.createTextNode(String(this.bc_print_bf0(data))));"), true);
+	assertEquals(js.includes("\treplaceBetween(elem, 'bfid:bf0', 'bfid:bf1', document.createTextNode(String(this.bc_print_bf0(data))));"), true);
 });
 
-Deno.test("no print sites and no if-sets: replaceBetween helper is not emitted", () => {
+Deno.test("no print sites and no if-sets: replaceBetween is not called", () => {
 	const site = attrBfidSite('bf0', dynAttr('title', 'foo'), ['foo']);
 	const js = generateClassForPartial('my-widget', [{ name: 'foo', isBool: false }], branch([site]), 'render')!;
 	assertEquals(js.includes('replaceBetween'), false);
@@ -346,7 +391,7 @@ Deno.test("if-set: snapshot const, branch/renderIf/getCreate methods, constructo
 	assertEquals(js.includes('renderIf_bf0(data) {'), true);
 	assertEquals(js.includes('if (idx === this.if_bf0) return false;'), true);
 	assertEquals(js.includes('const frag = range.createContextualFragment(render(bfif_bf0, data));'), true);
-	assertEquals(js.includes("this.replaceBetween(elem, 'bfid:bf0', 'bfid:bf1', frag);"), true);
+	assertEquals(js.includes("\treplaceBetween(elem, 'bfid:bf0', 'bfid:bf1', frag);"), true);
 	assertEquals(js.includes('this.getCreatePatchBranch_bf0(idx, data);'), true);
 	assertEquals(js.includes('return true;'), true);
 	// Constructor seeds the index + map + eagerly creates the active child, no render.
@@ -430,12 +475,13 @@ Deno.test("if-set re-render is emitted before the element-group mutations", () =
 	assertEquals(body.indexOf('this.renderIf_bf1(data);') < body.indexOf('elem = this.sel_bf0();'), true);
 });
 
-Deno.test("if-set alone emits the replaceBetween helper", () => {
+Deno.test("if-set alone calls the runtime replaceBetween, with no helper method", () => {
 	const site = ifPatchSite({
 		target: { kind: 'ref-element' }, conditions: ['flag'], liveVars: ['flag'], setId: 'bf0', endId: 'bf1',
 	});
 	const js = generateClassForPartial('my-widget', [{ name: 'flag', isBool: true }], branch([], [site]), 'render')!;
-	assertEquals(js.includes('replaceBetween(parent, startMarker, endMarker, node) {'), true);
+	assertEquals(js.includes("\treplaceBetween(elem, 'bfid:bf0', 'bfid:bf1', frag);"), true);
+	assertEquals(js.includes('replaceBetween(parent'), false);
 });
 
 // --- b-generate modes ------------------------------------------------------

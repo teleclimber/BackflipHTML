@@ -6,17 +6,21 @@ import { collectPatchTree, type BranchScope, type IfSetScope } from './collect.j
 import { qualifies } from './filter.js';
 import { ensureBfid, ensureCallBfid, elementForSite, ensureCommentsAround } from './mutate-ast.js';
 import {
-	generateClassForPartial, generateFile, patchClassNameFor,
-	type BfidSite, type IfSetPatchSite, type PatchBranch, type PatchTarget,
+	generateClassForPartial, generateFile, patchClassNameFor, runtimeImportsFor,
+	type BfidSite, type IfSetPatchSite, type PatchBranch, type PatchTarget, type RuntimeFile,
 } from './codegen.js';
 
 export type { BfidGen } from './bfid.js';
+export type { RuntimeFile } from './codegen.js';
 
 /**
- * Specifier for the JS runtime's render.js. Every generated module sits flat at the
- * dom-patch output root, where the CLI copies render.js, so the path is fixed.
+ * Where each runtime file a module can import is built, relative to the package's
+ * `dist/`. A build copies it to the dom-patch output root, beside the modules.
  */
-export const RENDER_IMPORT_PATH = './render.js';
+export const RUNTIME_FILE_DIST_PATHS: Record<RuntimeFile, string> = {
+	'render.js': 'runtime/js/render.js',
+	'patch.js': 'runtime/dom-patch/patch.js',
+};
 
 /** The file a partial's module is written to, relative to the dom-patch output root. */
 export function moduleFileName(tagName: string): string {
@@ -28,11 +32,8 @@ export interface DomPatchModule {
 	/** The partial's tag name, which also names the file — see moduleFileName. */
 	tagName: string;
 	js: string;
-	/**
-	 * True when the module imports `render.js` (i.e. it contains at least one if-set).
-	 * The CLI uses this to decide whether the runtime file must be copied alongside.
-	 */
-	needsRender: boolean;
+	/** The runtime files the module imports, which must be copied alongside it. */
+	runtimeFiles: RuntimeFile[];
 }
 
 export interface DomPatchResult {
@@ -50,8 +51,6 @@ export interface DomPatchOptions {
 	 * module are left untouched.
 	 */
 	scriptUrlFor?: (tagName: string) => string | undefined;
-	/** Overrides the render.js specifier; tests use it to assert the import line. */
-	renderImportPath?: string;
 }
 
 export function applyDomPatch(file: CompiledFile, opts?: DomPatchOptions): DomPatchResult {
@@ -89,9 +88,8 @@ export function applyDomPatch(file: CompiledFile, opts?: DomPatchOptions): DomPa
 		const cls = generateClassForPartial(partialName, bAttrs, rootBranch, mode);
 		if (!cls) continue;
 
-		const needsRender = hasAnySet(rootBranch);
-		const renderImport = needsRender ? (opts?.renderImportPath ?? RENDER_IMPORT_PATH) : undefined;
-		modules.push({ tagName: partialName, js: generateFile([cls], renderImport), needsRender });
+		const imports = runtimeImportsFor(rootBranch);
+		modules.push({ tagName: partialName, js: generateFile([cls], imports), runtimeFiles: [...imports.keys()] });
 
 		// Only partials that produce a module get a script. 'full' registers the element
 		// itself, so its module is an executed entry; otherwise an author module imports it.
@@ -179,11 +177,6 @@ function fillSnapshots(branch: PatchBranch): void {
 			if (child) fillSnapshots(child);
 		}
 	}
-}
-
-function hasAnySet(branch: PatchBranch): boolean {
-	return branch.sets.length > 0
-		|| branch.sets.some(s => s.branches.some(c => c !== null && hasAnySet(c)));
 }
 
 // Guard the invariant this module is built on: the compiler rejects a partial that
