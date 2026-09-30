@@ -8,13 +8,12 @@ import {
 	generateFile,
 	runtimeImportsFor,
 	classNameFor,
-	patchClassNameFor,
-	sanitizeAttrName,
 	type BfidSite,
 	type IfSetPatchSite,
 	type PatchBranch,
 	type PatchTarget,
 } from "./codegen.ts";
+import { evalModule as evalModuleFor, plain } from "./test-helpers.ts";
 
 // --- helpers ---------------------------------------------------------------
 
@@ -29,8 +28,8 @@ function computeVars(sites: BfidSite[], sets: IfSetPatchSite[]): string[] {
 	return out;
 }
 
-function branch(sites: BfidSite[] = [], sets: IfSetPatchSite[] = [], className = 'BackflipPatch_MyElement'): PatchBranch {
-	return { className, sites, sets, vars: computeVars(sites, sets) };
+function branch(sites: BfidSite[] = [], sets: IfSetPatchSite[] = []): PatchBranch {
+	return { sites, sets, vars: computeVars(sites, sets) };
 }
 
 function dynAttr(name: string, code: string, isBoolean = false): AttrPart {
@@ -78,7 +77,7 @@ function callerAttrBfidSite(bfid: string, attr: AttrPart, liveVars: string[]): B
 }
 
 // `conditions` are the branch expressions (null = b-else); `subtreeVars` and
-// `branches` drive the forwarding/child-class logic.
+// `branches` become the set descriptor's.
 function ifPatchSite(opts: {
 	target: PatchTarget;
 	conditions: (string | null)[];
@@ -104,255 +103,102 @@ function ifPatchSite(opts: {
 	};
 }
 
+const evalModule = (js: string, partialName = 'my-element') => evalModuleFor(js, partialName);
+
+const NAME_ATTR = [{ name: 'name', isBool: false }];
+
 // --- basics ----------------------------------------------------------------
 
 Deno.test("classNameFor capitalizes parts", () => {
 	assertEquals(classNameFor('my-element'), 'BackflipMyElement');
 	assertEquals(classNameFor('foo-bar-baz'), 'BackflipFooBarBaz');
-	assertEquals(classNameFor('x'), 'BackflipX');
 });
 
-Deno.test("patchClassNameFor mirrors classNameFor with the Patch_ infix", () => {
-	assertEquals(patchClassNameFor('my-element'), 'BackflipPatch_MyElement');
-	assertEquals(patchClassNameFor('foo-bar'), 'BackflipPatch_FooBar');
-});
-
-Deno.test("sanitizeAttrName replaces non-id chars with underscore", () => {
-	assertEquals(sanitizeAttrName('title'), 'title');
-	assertEquals(sanitizeAttrName('data-foo'), 'data_foo');
-	assertEquals(sanitizeAttrName('aria-label'), 'aria_label');
-});
-
-Deno.test("single attr, single live var: exact-string patch-branch + shell", () => {
+Deno.test("single attr site: exact module body", () => {
 	const site = attrBfidSite('bf0', dynAttr('title', 'foo'), ['foo']);
 	const js = generateClassForPartial('my-element', [{ name: 'foo', isBool: false }], branch([site]), 'render');
-	const expected = `const bc_bf0_title = { fn: function ( foo ) { return foo; }, vars: ['foo'] };
-
-class BackflipPatch_MyElement {
-\tconstructor(ref_elem, data) {
-\t\tthis.ref_elem = ref_elem;
-\t}
-
-\tsel_bf0() { return this.ref_elem.querySelector('[data-bfid="bf0"]'); }
-
-\tmutate_foo(data) {
-\t\tlet elem;
-\t\telem = this.sel_bf0();
-\t\tif (elem) {
-\t\t\telem.setAttribute('title', String(execFn(bc_bf0_title, data)));
-\t\t} else {
-\t\t\tconsole.error('BackflipHTML BackflipPatch_MyElement: element [data-bfid="bf0"] not found; skipping update', this.ref_elem);
-\t\t}
-\t}
-
-\tupdate(varname, data) {
-\t\tswitch (varname) {
-\t\t\tcase 'foo': this.mutate_foo(data); break;
-\t\t}
-\t}
-}
-
-export class BackflipMyElement {
-\tconstructor(ce) {
-\t\tthis.ce = ce;
-\t\tthis.pb = new BackflipPatch_MyElement(this.ce, this.collectData());
-\t}
-\tcollectData() {
-\t\treturn {
-\t\t\tfoo: this.ce.getAttribute('foo') ?? '',
-\t\t};
-\t}
-\tupdate(varname) {
-\t\tthis.pb.update(varname, this.collectData());
-\t}
-}`;
-	assertEquals(js, expected);
+	assertEquals(js, `export class BackflipMyElement extends BackflipShell {
+\tstatic bfAttrs = { foo: 'string' };
+\tstatic bfRoot = {
+\t\tsites: [
+\t\t\t{ bfid: 'bf0', attr: 'title', expr: { fn: function ( foo ) { return foo; }, vars: ['foo'] } },
+\t\t],
+\t\tsets: [],
+\t};
+}`);
 });
 
-Deno.test("bc_ expressions are module-level rfn consts, nested branches included", () => {
-	const inner = branch([attrBfidSite('bf5', dynAttr('title', 'name'), ['name'])], [], 'BackflipPatch_bf0_0');
-	const set = ifPatchSite({
-		target: { kind: 'ref-element' }, conditions: ['flag'], liveVars: ['flag'], setId: 'bf0', endId: 'bf1',
-		subtreeVars: ['name'], branches: [inner],
-	});
-	const rootSite = defRootBfidSite(dynAttr('class', 'flag'), ['flag']);
-	const js = generateClassForPartial('my-widget',
-		[{ name: 'flag', isBool: true }, { name: 'name', isBool: false }], branch([rootSite], [set]), 'render')!;
-	const firstClass = js.indexOf('\nclass ');
-	for (const c of [
-		"const bc_ce_class = { fn: function ( flag ) { return flag; }, vars: ['flag'] };",
-		"const bc_bf5_title = { fn: function ( name ) { return name; }, vars: ['name'] };",
-	]) {
-		assertEquals(js.includes(c), true, c);
-		assertEquals(js.indexOf(c) < firstClass, true, `${c} precedes the classes`);
-	}
-	assertEquals(js.includes('execFn(bc_bf5_title, data)'), true);
-	assertEquals(/\tbc_\w+\(data\) \{/.test(js), false);
+Deno.test("no qualifying sites or sets: returns null in render mode", () => {
+	assertEquals(generateClassForPartial('my-element', [{ name: 'x', isBool: false }], branch(), 'render'), null);
 });
 
-Deno.test("patch-branch classes are not exported; only the shell is", () => {
-	const site = attrBfidSite('bf0', dynAttr('title', 'foo'), ['foo']);
-	const js = generateClassForPartial('my-element', [{ name: 'foo', isBool: false }], branch([site]), 'render')!;
-	assertEquals(js.includes('class BackflipPatch_MyElement {'), true);
-	assertEquals(js.includes('export class BackflipPatch_MyElement'), false);
-	assertEquals(js.includes('export class BackflipMyElement {'), true);
-});
+// --- the shell ---------------------------------------------------------------
 
-Deno.test("null bfid element: mutate logs console.error against ref_elem", () => {
-	const site = attrBfidSite('bf0', dynAttr('title', 'foo'), ['foo']);
-	const js = generateClassForPartial('my-element', [{ name: 'foo', isBool: false }], branch([site]), 'render')!;
-	assertEquals(
-		js.includes(`} else {\n\t\t\tconsole.error('BackflipHTML BackflipPatch_MyElement: element [data-bfid="bf0"] not found; skipping update', this.ref_elem);\n\t\t}`),
-		true,
-	);
-});
-
-Deno.test("caller-attr site: sel by bfid + setAttribute, like an attr site", () => {
-	const site = callerAttrBfidSite('bf0', dynAttr('show', 'show'), ['show']);
-	const js = generateClassForPartial('parent-el', [{ name: 'show', isBool: false }], branch([site]), 'render')!;
-	assertEquals(js.includes(`sel_bf0() { return this.ref_elem.querySelector('[data-bfid="bf0"]'); }`), true);
-	assertEquals(js.includes('elem = this.sel_bf0();'), true);
-	assertEquals(js.includes("elem.setAttribute('show', String(execFn(bc_bf0_show, data)))"), true);
-});
-
-Deno.test("bool caller-attr site: setAttribute('')/removeAttribute", () => {
-	const site = callerAttrBfidSite('bf0', dynAttr('open', 'open', true), ['open']);
-	const js = generateClassForPartial('parent-el', [{ name: 'open', isBool: false }], branch([site]), 'render')!;
-	assertEquals(js.includes("if (execFn(bc_bf0_open, data)) elem.setAttribute('open', ''); else elem.removeAttribute('open');"), true);
-});
-
-Deno.test("ref-element site: no sel, targets this.ref_elem, ref-element error", () => {
-	const site = defRootBfidSite(dynAttr('class', 'flag'), ['flag']);
-	const js = generateClassForPartial('my-element', [{ name: 'flag', isBool: false }], branch([site]), 'render')!;
-	assertEquals(js.includes('sel_'), false);
-	assertEquals(js.includes('querySelector'), false);
-	assertEquals(js.includes('elem = this.ref_elem;'), true);
-	assertEquals(js.includes("elem.setAttribute('class', String(execFn(bc_ce_class, data)))"), true);
-	assertEquals(
-		js.includes(`console.error('BackflipHTML BackflipPatch_MyElement: ref element not found; skipping update', this.ref_elem);`),
-		true,
-	);
-});
-
-Deno.test("two attrs on same element with same live var: one sel, two bc, one lookup", () => {
-	const site1 = attrBfidSite('bf0', dynAttr('title', 'foo'), ['foo']);
-	const site2 = attrBfidSite('bf0', dynAttr('aria-label', 'foo'), ['foo']);
-	const js = generateClassForPartial('my-element', [{ name: 'foo', isBool: false }], branch([site1, site2]), 'render')!;
-	assertEquals(js.match(/sel_bf0\(\)/g)?.length, 2); // declaration + one call inside mutate_foo
-	assertEquals(js.includes('execFn(bc_bf0_title, data)'), true);
-	assertEquals(js.includes('execFn(bc_bf0_aria_label, data)'), true);
-	assertEquals(js.match(/elem = this\.sel_bf0\(\);/g)?.length, 1);
-});
-
-Deno.test("bool dynamic attr uses setAttribute/removeAttribute pattern", () => {
-	const site = attrBfidSite('bf0', dynAttr('hidden', 'flag', true), ['flag']);
-	const js = generateClassForPartial('my-element', [{ name: 'flag', isBool: true }], branch([site]), 'render')!;
-	assertEquals(js.includes("flag: this.ce.hasAttribute('flag')"), true);
-	assertEquals(
-		js.includes(`if (execFn(bc_bf0_hidden, data)) elem.setAttribute('hidden', ''); else elem.removeAttribute('hidden');`),
-		true,
-	);
-});
-
-Deno.test("b-attr present but never used: in collectData, NOT in update", () => {
+Deno.test("shell: bfAttrs types every b-attr, used or not; the shell extends BackflipShell", () => {
 	const site = attrBfidSite('bf0', dynAttr('title', 'used'), ['used']);
 	const js = generateClassForPartial('my-element',
-		[{ name: 'used', isBool: false }, { name: 'unused', isBool: false }], branch([site]), 'render')!;
-	assertEquals(js.includes("unused: this.ce.getAttribute('unused') ?? ''"), true);
-	assertEquals(js.includes("mutate_unused"), false);
-	assertEquals(js.includes("case 'unused'"), false);
+		[{ name: 'used', isBool: false }, { name: 'unused', isBool: false }, { name: 'flag', isBool: true }], branch([site]), 'render')!;
+	const { shell, bfAttrs, BackflipShell } = evalModule(js);
+	assertEquals(bfAttrs, { used: 'string', unused: 'string', flag: 'bool' });
+	assertEquals(Object.getPrototypeOf(shell), BackflipShell);
 });
 
-Deno.test("no qualifying sites or sets: returns null", () => {
-	assertEquals(generateClassForPartial('my-element', [{ name: 'x', isBool: false }], branch([], []), 'render'), null);
+Deno.test("shell: the only class exported is the shell (render mode)", () => {
+	const site = attrBfidSite('bf0', dynAttr('title', 'foo'), ['foo']);
+	const js = generateClassForPartial('my-element', [{ name: 'foo', isBool: false }], branch([site]), 'render')!;
+	assertEquals([...js.matchAll(/^export class (\w+)/gm)].map(m => m[1]), ['BackflipMyElement']);
+	assertEquals(js.match(/^class /gm), null);
 });
 
-Deno.test("attr name data-foo sanitizes in fn but keeps data-foo in DOM call", () => {
+// --- site descriptors ----------------------------------------------------------
+
+Deno.test("sites: an attr site names its element, attribute and expression", () => {
+	const site = attrBfidSite('bf0', dynAttr('title', 'a + "-" + b'), ['a', 'b']);
+	const js = generateClassForPartial('my-element', [{ name: 'a', isBool: false }, { name: 'b', isBool: false }], branch([site]), 'render')!;
+	assertEquals(plain(evalModule(js).bfRoot, { a: 1, b: 2 }), {
+		sites: [{ bfid: 'bf0', attr: 'title', expr: { vars: ['a', 'b'], value: '1-2' } }],
+		sets: [],
+	});
+});
+
+Deno.test("sites: a bool attr is marked bool", () => {
+	const site = attrBfidSite('bf0', dynAttr('hidden', 'flag', true), ['flag']);
+	const js = generateClassForPartial('my-element', [{ name: 'flag', isBool: true }], branch([site]), 'render')!;
+	assertEquals(plain(evalModule(js).bfRoot.sites[0], { flag: true }),
+		{ bfid: 'bf0', attr: 'hidden', bool: true, expr: { vars: ['flag'], value: true } });
+});
+
+Deno.test("sites: a caller attr is an attr site on the call's element", () => {
+	const site = callerAttrBfidSite('bf0', dynAttr('show', 'show'), ['show']);
+	const js = generateClassForPartial('parent-el', [{ name: 'show', isBool: false }], branch([site]), 'render')!;
+	assertEquals(plain(evalModule(js, 'parent-el').bfRoot.sites[0], { show: 'x' }),
+		{ bfid: 'bf0', attr: 'show', expr: { vars: ['show'], value: 'x' } });
+});
+
+Deno.test("sites: a definition-root attr targets the ref element (bfid null)", () => {
+	const site = defRootBfidSite(dynAttr('class', 'flag'), ['flag']);
+	const js = generateClassForPartial('my-element', [{ name: 'flag', isBool: false }], branch([site]), 'render')!;
+	assertEquals(plain(evalModule(js).bfRoot.sites[0], { flag: 'on' }),
+		{ bfid: null, attr: 'class', expr: { vars: ['flag'], value: 'on' } });
+});
+
+Deno.test("sites: an attribute name is kept as written", () => {
 	const site = attrBfidSite('bf0', dynAttr('data-foo', 'foo'), ['foo']);
 	const js = generateClassForPartial('my-element', [{ name: 'foo', isBool: false }], branch([site]), 'render')!;
-	assertEquals(js.includes("bc_bf0_data_foo"), true);
-	assertEquals(js.includes("setAttribute('data-foo'"), true);
+	assertEquals(evalModule(js).bfRoot.sites[0].attr, 'data-foo');
 });
 
-Deno.test("generateFile returns '' when no classes", () => {
-	assertEquals(generateFile([null, null]), '');
+Deno.test("sites: a print names its parent element and its marker comments", () => {
+	const onElem = printBfidSite({ kind: 'bfid-element', bfid: 'bf0' }, 'name', ['name'], 'bf1', 'bf2');
+	const onRef = printBfidSite({ kind: 'ref-element' }, 'name', ['name'], 'bf3', 'bf4');
+	const js = generateClassForPartial('my-element', NAME_ATTR, branch([onElem, onRef]), 'render')!;
+	assertEquals(plain(evalModule(js).bfRoot.sites, { name: 'N' }), [
+		{ bfid: 'bf0', markers: ['bfid:bf1', 'bfid:bf2'], expr: { vars: ['name'], value: 'N' } },
+		{ bfid: null, markers: ['bfid:bf3', 'bfid:bf4'], expr: { vars: ['name'], value: 'N' } },
+	]);
 });
 
-Deno.test("generateFile concatenates classes with header", () => {
-	const out = generateFile(['class A {}', 'class B {}']);
-	assertEquals(out.startsWith('// Generated by BackflipHTML dom-patch'), true);
-	assertEquals(out.includes('class A {}'), true);
-	assertEquals(out.includes('class B {}'), true);
-	assertEquals(out.endsWith('\n'), true);
-});
-
-Deno.test("generateFile emits one import per runtime file, before the classes", () => {
-	assertEquals(generateFile(['class A {}']).includes('import'), false);
-	const out = generateFile(['class A {}'], new Map([['render.js', ['render']], ['patch.js', ['replaceBetween']]]));
-	assertEquals(out.includes("import { render } from './render.js';"), true);
-	assertEquals(out.includes("import { replaceBetween } from './patch.js';"), true);
-	assertEquals(out.lastIndexOf('import') < out.indexOf('class A'), true);
-});
-
-// --- runtime imports -------------------------------------------------------
-
-Deno.test("runtimeImportsFor: attr sites alone import execFn only", () => {
-	const site = attrBfidSite('bf0', dynAttr('title', 'foo'), ['foo']);
-	assertEquals([...runtimeImportsFor(branch([site]), 'render')], [['render.js', ['execFn']]]);
-});
-
-Deno.test("runtimeImportsFor: an empty branch imports nothing", () => {
-	assertEquals([...runtimeImportsFor(branch(), 'render')], []);
-});
-
-Deno.test("runtimeImportsFor: a print site imports execFn and replaceBetween", () => {
-	const site = printBfidSite({ kind: 'ref-element' }, 'name', ['name'], 'bf0', 'bf1');
-	assertEquals([...runtimeImportsFor(branch([site]), 'render')],
-		[['render.js', ['execFn']], ['patch.js', ['replaceBetween']]]);
-});
-
-Deno.test("runtimeImportsFor: an if-set imports render, activeBranchIndex and replaceBetween", () => {
-	const set = ifPatchSite({
-		target: { kind: 'ref-element' }, conditions: ['flag'], liveVars: ['flag'], setId: 'bf0', endId: 'bf1',
-	});
-	assertEquals([...runtimeImportsFor(branch([], [set]), 'render')],
-		[['render.js', ['render', 'activeBranchIndex']], ['patch.js', ['replaceBetween']]]);
-});
-
-Deno.test("runtimeImportsFor: an if-set with no sites anywhere does not import execFn", () => {
-	const set = ifPatchSite({
-		target: { kind: 'ref-element' }, conditions: ['flag'], liveVars: ['flag'], setId: 'bf0', endId: 'bf1',
-	});
-	assertEquals(runtimeImportsFor(branch([], [set]), 'render').get('render.js'), ['render', 'activeBranchIndex']);
-});
-
-Deno.test("runtimeImportsFor: a print that exists only in a nested branch is found", () => {
-	// The root owns only a set; the print lives in a set nested inside its branch.
-	const print = printBfidSite({ kind: 'ref-element' }, 'name', ['name'], 'bf4', 'bf5');
-	const inner = branch([print], [], 'BackflipPatch_bf2_0');
-	const innerSet = ifPatchSite({
-		target: { kind: 'ref-element' }, conditions: ['b'], liveVars: ['b'], setId: 'bf2', endId: 'bf3',
-		branches: [inner],
-	});
-	const outerChild = branch([], [innerSet], 'BackflipPatch_bf0_0');
-	const outerSet = ifPatchSite({
-		target: { kind: 'ref-element' }, conditions: ['a'], liveVars: ['a'], setId: 'bf0', endId: 'bf1',
-		branches: [outerChild],
-	});
-	const imports = runtimeImportsFor(branch([], [outerSet]), 'render');
-	assertEquals(imports.get('patch.js'), ['replaceBetween']);
-	assertEquals(imports.get('render.js'), ['render', 'activeBranchIndex', 'execFn']);
-});
-
-Deno.test("generated cluster is parseable JavaScript", () => {
-	const site = attrBfidSite('bf0', dynAttr('title', 'foo + bar'), ['foo', 'bar']);
-	const js = generateClassForPartial('my-element',
-		[{ name: 'foo', isBool: false }, { name: 'bar', isBool: false }], branch([site]), 'render')!;
-	const Cls = new Function(js.replaceAll('export class', 'class') + '; return BackflipMyElement;')();
-	assertEquals(typeof Cls, 'function');
-});
-
-Deno.test("unsupported site kind throws (must be filtered before reaching codegen)", () => {
+Deno.test("sites: an unsupported site kind throws (must be filtered before codegen)", () => {
 	const bindingSite: BfidSite = {
 		target: { kind: 'bfid-element', bfid: 'bf0' },
 		backcode: {
@@ -370,140 +216,89 @@ Deno.test("unsupported site kind throws (must be filtered before reaching codege
 	assertEquals(threw, true);
 });
 
-// --- print sites -----------------------------------------------------------
+// --- set descriptors -----------------------------------------------------------
 
-Deno.test("print site on a body element: sel + bc_print + runtime replaceBetween, no helper method", () => {
-	const site = printBfidSite({ kind: 'bfid-element', bfid: 'bf0' }, 'name', ['name'], 'bf1', 'bf2');
-	const js = generateClassForPartial('my-widget', [{ name: 'name', isBool: false }], branch([site]), 'render')!;
-	assertEquals(js.includes("sel_bf0() { return this.ref_elem.querySelector('[data-bfid=\"bf0\"]'); }"), true);
-	assertEquals(js.includes("const bc_print_bf1 = { fn: function ( name ) { return name; }, vars: ['name'] };"), true);
-	assertEquals(js.includes("\treplaceBetween(elem, 'bfid:bf1', 'bfid:bf2', document.createTextNode(String(execFn(bc_print_bf1, data))));"), true);
-	assertEquals(js.includes('this.replaceBetween'), false);
-	assertEquals(js.includes('replaceBetween(parent'), false);
-});
-
-Deno.test("print site anchored to ref_elem: targets this.ref_elem, no sel", () => {
-	const site = printBfidSite({ kind: 'ref-element' }, 'name', ['name'], 'bf0', 'bf1');
-	const js = generateClassForPartial('my-widget', [{ name: 'name', isBool: false }], branch([site]), 'render')!;
-	assertEquals(js.includes('querySelector'), false);
-	assertEquals(js.includes('elem = this.ref_elem;'), true);
-	assertEquals(js.includes("\treplaceBetween(elem, 'bfid:bf0', 'bfid:bf1', document.createTextNode(String(execFn(bc_print_bf0, data))));"), true);
-});
-
-Deno.test("no print sites and no if-sets: replaceBetween is not called", () => {
-	const site = attrBfidSite('bf0', dynAttr('title', 'foo'), ['foo']);
-	const js = generateClassForPartial('my-widget', [{ name: 'foo', isBool: false }], branch([site]), 'render')!;
-	assertEquals(js.includes('replaceBetween'), false);
-});
-
-// --- if-sets ---------------------------------------------------------------
-
-Deno.test("if-set: snapshot const, renderIf/getCreate methods, constructor seeding", () => {
-	const site = ifPatchSite({
-		target: { kind: 'bfid-element', bfid: 'bf9' }, conditions: [`mode == 1`, null],
-		liveVars: ['mode'], setId: 'bf0', endId: 'bf1', snapshot: `{ type:'if', branches: [] }`,
+Deno.test("sets: a set names its anchor, markers, snapshot const and subtree vars", () => {
+	const set = ifPatchSite({
+		target: { kind: 'bfid-element', bfid: 'bf9' }, conditions: ['mode == 1', null], liveVars: ['mode'],
+		setId: 'bf0', endId: 'bf1', subtreeVars: ['name'], snapshot: `{ type:'if', branches: [] }`,
 	});
-	const js = generateClassForPartial('my-widget', [{ name: 'mode', isBool: false }], branch([], [site]), 'render')!;
-	// Module-level snapshot const precedes the classes.
+	const js = generateClassForPartial('my-element', [{ name: 'mode', isBool: false }, { name: 'name', isBool: false }], branch([], [set]), 'render')!;
+	// The snapshot is a module-level const, before the shell.
 	assertEquals(js.startsWith("const bfif_bf0 = { type:'if', branches: [] };"), true);
-	// The active branch is chosen by the runtime, from the snapshot — no per-set method.
-	assertEquals(js.includes('branch_bf0'), false);
-	assertEquals(js.includes('mode == 1'), false);
-	// getCreatePatchBranch present but with no case (both branches have no content here).
-	assertEquals(js.includes('getCreatePatchBranch_bf0(branch_i, data) {'), true);
-	// renderIf returns a bool and creates the branch it rendered.
-	assertEquals(js.includes('renderIf_bf0(data) {'), true);
-	assertEquals(js.includes('const idx = activeBranchIndex(bfif_bf0, data);'), true);
-	assertEquals(js.includes('if (idx === this.if_bf0) return false;'), true);
-	assertEquals(js.includes('const frag = range.createContextualFragment(render(bfif_bf0, data));'), true);
-	assertEquals(js.includes("\treplaceBetween(elem, 'bfid:bf0', 'bfid:bf1', frag);"), true);
-	assertEquals(js.includes('this.getCreatePatchBranch_bf0(idx, data);'), true);
-	assertEquals(js.includes('return true;'), true);
-	// Constructor seeds the index + map + eagerly creates the active child, no render.
-	assertEquals(js.includes('this.if_bf0 = activeBranchIndex(bfif_bf0, data);'), true);
-	assertEquals(js.includes('this.if_pb_bf0 = new Map();'), true);
-	assertEquals(js.includes('this.getCreatePatchBranch_bf0(this.if_bf0, data);'), true);
-	// The condition var drives update() and mutate forwards a plain renderIf.
-	assertEquals(js.includes("case 'mode': this.mutate_mode(data); break;"), true);
-	assertEquals(js.includes('this.renderIf_bf0(data);'), true);
+	const { bfRoot, defined } = evalModule(js);
+	const d = bfRoot.sets[0];
+	assertEquals(d.snapshot, defined.bfif_bf0);
+	assertEquals({ ...d, snapshot: undefined }, {
+		bfid: 'bf9', markers: ['bfid:bf0', 'bfid:bf1'], snapshot: undefined, subtreeVars: ['name'], branches: [null, null],
+	});
 });
 
-Deno.test("if-set on the ref element: no querySelector", () => {
-	const site = ifPatchSite({
-		target: { kind: 'ref-element' }, conditions: ['flag'], liveVars: ['flag'], setId: 'bf0', endId: 'bf1',
-	});
-	const js = generateClassForPartial('my-widget', [{ name: 'flag', isBool: true }], branch([], [site]), 'render')!;
-	assertEquals(js.includes('const elem = this.ref_elem;'), true);
-	assertEquals(js.includes('querySelector'), false);
+Deno.test("sets: a set on the ref element has bfid null", () => {
+	const set = ifPatchSite({ target: { kind: 'ref-element' }, conditions: ['flag'], liveVars: ['flag'], setId: 'bf0', endId: 'bf1' });
+	const js = generateClassForPartial('my-element', [{ name: 'flag', isBool: true }], branch([], [set]), 'render')!;
+	assertEquals(evalModule(js).bfRoot.sets[0].bfid, null);
 });
 
-Deno.test("getCreatePatchBranch emits a case only for branches with a child class", () => {
-	const child = branch(
-		[attrBfidSite('bf5', dynAttr('title', 'name'), ['name'])], [], 'BackflipPatch_bf0_0');
-	const site = ifPatchSite({
-		target: { kind: 'ref-element' }, conditions: ['mode', null], liveVars: ['mode'],
-		setId: 'bf0', endId: 'bf1', subtreeVars: ['name'],
-		branches: [child, null],   // branch 0 has content, b-else is empty
+Deno.test("sets: a branch with patchable content gets a nested descriptor; others null", () => {
+	const child = branch([attrBfidSite('bf5', dynAttr('title', 'name'), ['name'])]);
+	const set = ifPatchSite({
+		target: { kind: 'ref-element' }, conditions: ['a', 'b', null], liveVars: ['a', 'b'], setId: 'bf0', endId: 'bf1',
+		subtreeVars: ['name'], branches: [null, child, null],
 	});
-	const js = generateClassForPartial('my-widget',
-		[{ name: 'mode', isBool: false }, { name: 'name', isBool: false }], branch([], [site]), 'render')!;
-	// Exactly one case: branch 0. The child class receives this.ref_elem.
-	assertEquals(js.includes('case 0: pb = new BackflipPatch_bf0_0(this.ref_elem, data); break;'), true);
-	assertEquals(js.includes('case 1:'), false);
-	// The child class is emitted (not exported).
-	assertEquals(js.includes('class BackflipPatch_bf0_0 {'), true);
-	assertEquals(js.includes('export class BackflipPatch_bf0_0'), false);
+	const js = generateClassForPartial('my-element',
+		[{ name: 'a', isBool: false }, { name: 'b', isBool: false }, { name: 'name', isBool: false }], branch([], [set]), 'render')!;
+	assertEquals(plain(evalModule(js).bfRoot.sets[0].branches, { name: 'N' }), [
+		null,
+		{ sites: [{ bfid: 'bf5', attr: 'title', expr: { vars: ['name'], value: 'N' } }], sets: [] },
+		null,
+	]);
 });
 
-Deno.test("mutate for a var in both condition and subtree: re-render OR forward", () => {
-	// `level` is both the set's condition var and referenced inside the branch.
-	const site = ifPatchSite({
-		target: { kind: 'ref-element' }, conditions: ['level', null], liveVars: ['level'],
-		setId: 'bf0', endId: 'bf1', subtreeVars: ['level'],
-		branches: [branch([], [], 'BackflipPatch_bf0_0'), null],
+Deno.test("sets: nested sets nest their descriptors; snapshot consts come innermost-first", () => {
+	const inner = ifPatchSite({
+		target: { kind: 'bfid-element', bfid: 'bf5' }, conditions: ['b'], liveVars: ['b'], setId: 'bf2', endId: 'bf3',
+		snapshot: `{ type:'if', branches: [], inner: true }`,
 	});
-	const js = generateClassForPartial('my-widget', [{ name: 'level', isBool: false }], branch([], [site]), 'render')!;
-	const mut = js.slice(js.indexOf('mutate_level(data) {'), js.indexOf('update(varname'));
-	assertEquals(mut.includes('if (!this.renderIf_bf0(data)) {'), true);
-	assertEquals(mut.includes("if (pb) pb.update('level', data);"), true);
+	const outer = ifPatchSite({
+		target: { kind: 'ref-element' }, conditions: ['a'], liveVars: ['a'], setId: 'bf0', endId: 'bf1',
+		subtreeVars: ['b'], branches: [branch([], [inner])], snapshot: `{ type:'if', branches: [], outer: true }`,
+	});
+	const js = generateClassForPartial('my-element', [{ name: 'a', isBool: false }, { name: 'b', isBool: false }], branch([], [outer]), 'render')!;
+	assertEquals(js.indexOf('const bfif_bf2 ') < js.indexOf('const bfif_bf0 '), true);
+	const { bfRoot, defined } = evalModule(js);
+	const nested = bfRoot.sets[0].branches[0].sets[0];
+	assertEquals(nested.snapshot, defined.bfif_bf2);
+	assertEquals(nested.markers, ['bfid:bf2', 'bfid:bf3']);
+	assertEquals(nested.bfid, 'bf5');
 });
 
-Deno.test("mutate for a subtree-only var forwards without re-rendering", () => {
-	// `level` appears only inside the branch, never in the condition.
-	const site = ifPatchSite({
-		target: { kind: 'ref-element' }, conditions: ['mode', null], liveVars: ['mode'],
-		setId: 'bf0', endId: 'bf1', subtreeVars: ['level'],
-		branches: [branch([], [], 'BackflipPatch_bf0_0'), null],
-	});
-	const js = generateClassForPartial('my-widget',
-		[{ name: 'mode', isBool: false }, { name: 'level', isBool: false }], branch([], [site]), 'render')!;
-	const mut = js.slice(js.indexOf('mutate_level(data) {'), js.indexOf('\tupdate(varname'));
-	assertEquals(mut.includes('renderIf'), false);        // no re-render for a subtree-only var
-	assertEquals(mut.includes("if (pb) pb.update('level', data);"), true);
-	// The subtree-only var still gets an update case.
-	assertEquals(js.includes("case 'level': this.mutate_level(data); break;"), true);
+// --- the module ---------------------------------------------------------------
+
+Deno.test("generateFile returns '' when no classes", () => {
+	assertEquals(generateFile([null, null]), '');
 });
 
-Deno.test("if-set re-render is emitted before the element-group mutations", () => {
-	// Both driven by `name`: the branch swap must run first, since the attr site
-	// may live inside the branch that is about to be replaced.
-	const attr = attrBfidSite('bf0', dynAttr('title', 'name'), ['name']);
-	const ifSite = ifPatchSite({
-		target: { kind: 'bfid-element', bfid: 'bf0' }, conditions: ['name'], liveVars: ['name'],
-		setId: 'bf1', endId: 'bf2',
-	});
-	const js = generateClassForPartial('my-widget', [{ name: 'name', isBool: false }], branch([attr], [ifSite]), 'render')!;
-	const body = js.slice(js.indexOf('mutate_name(data) {'));
-	assertEquals(body.indexOf('this.renderIf_bf1(data);') < body.indexOf('elem = this.sel_bf0();'), true);
+Deno.test("generateFile concatenates classes with header", () => {
+	const out = generateFile(['class A {}', 'class B {}']);
+	assertEquals(out.startsWith('// Generated by BackflipHTML dom-patch'), true);
+	assertEquals(out.includes('class A {}'), true);
+	assertEquals(out.includes('class B {}'), true);
+	assertEquals(out.endsWith('\n'), true);
 });
 
-Deno.test("if-set alone calls the runtime replaceBetween, with no helper method", () => {
-	const site = ifPatchSite({
-		target: { kind: 'ref-element' }, conditions: ['flag'], liveVars: ['flag'], setId: 'bf0', endId: 'bf1',
-	});
-	const js = generateClassForPartial('my-widget', [{ name: 'flag', isBool: true }], branch([], [site]), 'render')!;
-	assertEquals(js.includes("\treplaceBetween(elem, 'bfid:bf0', 'bfid:bf1', frag);"), true);
-	assertEquals(js.includes('replaceBetween(parent'), false);
+Deno.test("generateFile imports each runtime file by its path from the output root, before the classes", () => {
+	assertEquals(generateFile(['class A {}']).includes('import'), false);
+	const out = generateFile(['class A {}'], new Map([['runtime/dom-patch/patch.js', ['BackflipShell', 'BackflipElement']]]));
+	assertEquals(out.includes("import { BackflipShell, BackflipElement } from './runtime/dom-patch/patch.js';"), true);
+	assertEquals(out.lastIndexOf('import') < out.indexOf('class A'), true);
+});
+
+Deno.test("runtimeImportsFor: every mode imports BackflipShell; base and full add BackflipElement", () => {
+	assertEquals([...runtimeImportsFor('render')], [['runtime/dom-patch/patch.js', ['BackflipShell']]]);
+	for (const mode of ['base', 'full'] as const) {
+		assertEquals([...runtimeImportsFor(mode)], [['runtime/dom-patch/patch.js', ['BackflipShell', 'BackflipElement']]]);
+	}
 });
 
 // --- b-generate modes ------------------------------------------------------
@@ -517,14 +312,13 @@ function forMode(mode: 'render' | 'base' | 'full'): string {
 
 Deno.test("modes: render emits the shell only — no element class, no define", () => {
 	const js = forMode('render');
-	assertEquals(js.includes('export class BackflipMyWidget {'), true);
+	assertEquals(js.includes('export class BackflipMyWidget extends BackflipShell {'), true);
 	assertEquals(js.includes('BackflipElement'), false);
 	assertEquals(js.includes('customElements.define'), false);
 });
 
 Deno.test("modes: base adds the element class but does not define it", () => {
 	const js = forMode('base');
-	assertEquals(js.includes('export class BackflipMyWidget {'), true);
 	assertEquals(js.includes('export class BackflipMyWidgetElement extends BackflipElement {'), true);
 	assertEquals(js.includes('customElements.define'), false);
 });
@@ -538,39 +332,29 @@ Deno.test("modes: full adds the define, guarded against a duplicate registration
 	);
 });
 
-Deno.test("modes: the element class names its shell and every b-attr, bools included", () => {
+Deno.test("modes: the element class only names its shell", () => {
 	const js = forMode('base');
-	const elementClass = js.slice(js.indexOf('export class BackflipMyWidgetElement'));
-	assertEquals(elementClass, [
+	assertEquals(js.slice(js.indexOf('export class BackflipMyWidgetElement')), [
 		'export class BackflipMyWidgetElement extends BackflipElement {',
 		'\tstatic bfShell = BackflipMyWidget;',
-		"\tstatic bfDeclared = ['title', 'flag'];",
 		'}',
 	].join('\n'));
+	const { defined } = evalModule(js, 'my-widget');
+	assertEquals(defined.BackflipMyWidgetElement.bfShell, defined.BackflipMyWidget);
 });
 
-Deno.test("modes: base and full still emit a class when there is nothing to patch", () => {
-	const empty = branch([], []);
-	assertEquals(generateClassForPartial('my-widget', [], empty, 'render'), null);
+Deno.test("modes: base and full still emit when there is nothing to patch", () => {
+	const empty = branch();
 	for (const mode of ['base', 'full'] as const) {
 		const js = generateClassForPartial('my-widget', [], empty, mode)!;
 		assertEquals(js.includes('export class BackflipMyWidgetElement extends BackflipElement {'), true);
-		assertEquals(js.includes('static bfShell = BackflipMyWidget;'), true);
-		// No b-attrs: the base class's empty bfDeclared stands.
-		assertEquals(js.includes('bfDeclared'), false);
-		// An empty patch class means an empty `switch` and an empty `collectData`, so
-		// check the module still parses.
-		new Function(js.replaceAll('export class', 'class'));
+		// No attrs and no root: the shell keeps the base class's empty defaults.
+		const { bfAttrs, bfRoot } = evalModule(js, 'my-widget');
+		assertEquals(bfAttrs, undefined);
+		assertEquals(bfRoot, undefined);
 	}
-});
-
-Deno.test("runtimeImportsFor: base and full import BackflipElement; render does not", () => {
-	const attr = attrBfidSite('bf0', dynAttr('title', 'foo'), ['foo']);
-	const print = printBfidSite({ kind: 'ref-element' }, 'name', ['name'], 'bf1', 'bf2');
-	assertEquals(runtimeImportsFor(branch([attr]), 'render').has('patch.js'), false);
-	for (const mode of ['base', 'full'] as const) {
-		assertEquals(runtimeImportsFor(branch([attr]), mode).get('patch.js'), ['BackflipElement']);
-		assertEquals([...runtimeImportsFor(branch(), mode)], [['patch.js', ['BackflipElement']]]);
-		assertEquals(runtimeImportsFor(branch([print]), mode).get('patch.js'), ['replaceBetween', 'BackflipElement']);
-	}
+	// Declared attrs with nothing to patch are still observed.
+	const { bfAttrs, bfRoot } = evalModule(generateClassForPartial('my-widget', bAttrs, empty, 'base')!, 'my-widget');
+	assertEquals(bfAttrs, { title: 'string', flag: 'bool' });
+	assertEquals(bfRoot, undefined);
 });

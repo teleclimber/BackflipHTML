@@ -3,7 +3,8 @@ import { assertEquals, assertThrows } from "jsr:@std/assert";
 import { compilePartial } from "../../compiler.ts";
 import type { CompiledFile, ElementTNode, PartialDef } from "../../types.ts";
 import { makeSequentialBfidGen } from "./bfid.ts";
-import { applyDomPatch, type DomPatchOptions, type RuntimeFile } from "./nodes2patch.ts";
+import { applyDomPatch, type DomPatchOptions } from "./nodes2patch.ts";
+import { evalModule, plain } from "./test-helpers.ts";
 
 async function compileCustomElement(html: string): Promise<CompiledFile> {
 	const m = html.match(/<([a-z][a-z0-9-]*-[a-z0-9-]*)/);
@@ -26,18 +27,17 @@ async function compileCustomElement(html: string): Promise<CompiledFile> {
 	return { partials: new Map([[def.name, compiled]]) };
 }
 
-// Evaluate a module's definitions and return one of its classes. Imports are stripped:
-// defining the classes calls nothing from the runtime.
-function moduleClass(js: string, className: string): unknown {
-	return new Function(js.replace(/^import .*$/gm, '').replaceAll('export class', 'class') + `; return ${className};`)();
+// One partial per fixture is the norm here, so unwrap its module.
+function domPatch(file: CompiledFile, opts?: DomPatchOptions): { js: string | null } {
+	const { modules } = applyDomPatch(file, opts);
+	if (modules.length === 0) return { js: null };
+	if (modules.length > 1) throw new Error(`expected one module, got ${modules.length}; use applyDomPatch directly`);
+	return { js: modules[0].js };
 }
 
-// One partial per fixture is the norm here, so unwrap its module.
-function domPatch(file: CompiledFile, opts?: DomPatchOptions): { js: string | null, runtimeFiles: RuntimeFile[] } {
-	const { modules } = applyDomPatch(file, opts);
-	if (modules.length === 0) return { js: null, runtimeFiles: [] };
-	if (modules.length > 1) throw new Error(`expected one module, got ${modules.length}; use applyDomPatch directly`);
-	return { js: modules[0].js, runtimeFiles: modules[0].runtimeFiles };
+// The root descriptor's sites and sets with expressions made comparable (see `plain`).
+function rootOf(js: string, partialName: string, sample: Record<string, unknown> = {}) {
+	return plain(evalModule(js, partialName).bfRoot, sample);
 }
 
 // Assemble several single-partial sources into one CompiledFile, mirroring a
@@ -57,18 +57,14 @@ Deno.test("end-to-end: simple custom element with one live attr", async () => {
 	const file = await compileCustomElement(
 		`<my-widget b-attr:title><span :data-x="title">hi</span></my-widget>`
 	);
-	const gen = makeSequentialBfidGen();
-	const { js } = domPatch(file, { bfidGen: gen });
+	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
 	if (!js) throw new Error('expected js');
-
-	// Class is present.
-	assertEquals(js.includes('class BackflipMyWidget'), true);
-	// bc, sel, mutate, collectData all wired.
-	assertEquals(js.includes('sel_bf0()'), true);
-	assertEquals(js.includes('bc_bf0_data_x'), true);
-	assertEquals(js.includes('mutate_title'), true);
-	assertEquals(js.includes("getAttribute('title')"), true);
-	assertEquals(js.includes("setAttribute('data-x'"), true);
+	assertEquals(js.includes("import { BackflipShell } from './runtime/dom-patch/patch.js';"), true);
+	assertEquals(evalModule(js, 'my-widget').bfAttrs, { title: 'string' });
+	assertEquals(rootOf(js, 'my-widget', { title: 'T' }), {
+		sites: [{ bfid: 'bf0', attr: 'data-x', expr: { vars: ['title'], value: 'T' } }],
+		sets: [],
+	});
 });
 
 Deno.test("end-to-end: data-bfid attr appended to mutated element", async () => {
@@ -122,15 +118,14 @@ Deno.test("end-to-end: attr inside b-for is skipped (v1 limitation)", async () =
 	assertEquals(js, null);
 });
 
-Deno.test("end-to-end: bool b-attr produces hasAttribute in collectData", async () => {
+Deno.test("end-to-end: a bool b-attr is declared bool, and a bool attr site is marked bool", async () => {
 	const file = await compileCustomElement(
 		`<my-widget b-attr:open.bool><div :hidden="open">x</div></my-widget>`
 	);
 	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
 	if (!js) throw new Error('expected js');
-	assertEquals(js.includes("open: this.ce.hasAttribute('open')"), true);
-	// Bool dynamic attr uses set/remove
-	assertEquals(js.includes("removeAttribute('hidden')"), true);
+	assertEquals(evalModule(js, 'my-widget').bfAttrs, { open: 'bool' });
+	assertEquals(rootOf(js, 'my-widget').sites[0].bool, true);
 });
 
 Deno.test("end-to-end: emits valid JavaScript", async () => {
@@ -139,37 +134,30 @@ Deno.test("end-to-end: emits valid JavaScript", async () => {
 	);
 	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
 	if (!js) throw new Error('expected js');
-	assertEquals(typeof moduleClass(js, 'BackflipMyWidget'), 'function');
+	assertEquals(typeof evalModule(js, 'my-widget').shell, 'function');
 });
 
-Deno.test("end-to-end: dynamic attr on the definition's wrapping tag targets this.ce", async () => {
+Deno.test("end-to-end: dynamic attr on the definition's wrapping tag targets the element itself", async () => {
 	const file = await compileCustomElement(
 		`<my-element b-attr:flag.bool :class="flag ? 'yes' : 'no'">x</my-element>`
 	);
 	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
 	if (!js) throw new Error('expected js (dynamic attr on definition root should be patchable)');
-	assertEquals(js.includes('class BackflipMyElement'), true);
-	assertEquals(js.includes('mutate_flag'), true);
-	// No bfid lookup is needed — the patch target is the custom element itself.
-	assertEquals(js.includes('sel_'), false);
-	assertEquals(js.includes('querySelector'), false);
-	assertEquals(js.includes('elem = this.ref_elem;'), true);
-	assertEquals(js.includes("elem.setAttribute('class', String(execFn(bc_ce_class, data)))"), true);
-	// The def-root attr is a string class expression, not bool, so no removeAttribute.
-	assertEquals(js.includes("removeAttribute('class')"), false);
-	// b-attr:flag.bool is bool → collectData uses hasAttribute.
-	assertEquals(js.includes("flag: this.ce.hasAttribute('flag')"), true);
+	// bfid null: the target is the custom element, found with no lookup. A string
+	// class expression, not a bool attr.
+	assertEquals(rootOf(js, 'my-element', { flag: true }).sites,
+		[{ bfid: null, attr: 'class', expr: { vars: ['flag'], value: 'yes' } }]);
+	assertEquals(evalModule(js, 'my-element').bfAttrs, { flag: 'bool' });
 });
 
-Deno.test("end-to-end: bool dynamic attr on definition root uses set/remove on elem", async () => {
+Deno.test("end-to-end: bool dynamic attr on definition root is a bool site on the element", async () => {
 	const file = await compileCustomElement(
 		`<my-thing b-attr:on.bool :hidden="!on">x</my-thing>`
 	);
 	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
 	if (!js) throw new Error('expected js');
-	assertEquals(js.includes('elem = this.ref_elem;'), true);
-	assertEquals(js.includes("elem.setAttribute('hidden', '')"), true);
-	assertEquals(js.includes("elem.removeAttribute('hidden')"), true);
+	assertEquals(rootOf(js, 'my-thing', { on: true }).sites,
+		[{ bfid: null, attr: 'hidden', bool: true, expr: { vars: ['on'], value: false } }]);
 });
 
 Deno.test("end-to-end: live var passed to a nested custom-element call is patchable", async () => {
@@ -178,24 +166,21 @@ Deno.test("end-to-end: live var passed to a nested custom-element call is patcha
 	);
 	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
 	if (!js) throw new Error('expected js (caller attr driven by a live var should be patchable)');
-	assertEquals(js.includes('export class BackflipParentEl'), true);
-	assertEquals(js.includes('mutate_show'), true);
-	// The nested custom element is located via a stamped data-bfid, and its
-	// `show` attribute is set from the live var.
-	assertEquals(js.includes('sel_bf0()'), true);
-	assertEquals(js.includes("querySelector('[data-bfid=\"bf0\"]')"), true);
-	assertEquals(js.includes("setAttribute('show', String(execFn(bc_bf0_show, data)))"), true);
+	// The nested custom element is located via a stamped data-bfid, and its `show`
+	// attribute is set from the live var.
+	assertEquals(rootOf(js, 'parent-el', { show: 'x' }).sites,
+		[{ bfid: 'bf0', attr: 'show', expr: { vars: ['show'], value: 'x' } }]);
 });
 
-Deno.test("end-to-end: bool caller attr on a nested custom-element call uses set/remove", async () => {
+Deno.test("end-to-end: bool caller attr on a nested custom-element call is a bool site", async () => {
 	// `open` is a known boolean HTML attribute, so `:open="open"` is a boolean bind.
 	const file = await compileCustomElement(
 		`<parent-el b-attr:open.bool><child-el :open="open"></child-el></parent-el>`
 	);
 	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
 	if (!js) throw new Error('expected js');
-	assertEquals(js.includes("setAttribute('open', '')"), true);
-	assertEquals(js.includes("removeAttribute('open')"), true);
+	assertEquals(rootOf(js, 'parent-el').sites[0].bool, true);
+	assertEquals(rootOf(js, 'parent-el').sites[0].attr, 'open');
 });
 
 // The user-reported bug: two dom-patchable custom-element partials in the same
@@ -223,15 +208,17 @@ Deno.test("end-to-end: two independent custom elements in one file keep distinct
 	);
 	const { modules } = applyDomPatch(file, { bfidGen: makeSequentialBfidGen() });
 	assertEquals(modules.length, 2);
-	const js = modules.map(m => m.js).join('\n');
-	assertEquals(modules[0].js.includes('export class BackflipFirstEl'), true);
-	assertEquals(modules[1].js.includes('export class BackflipSecondEl'), true);
-	// Each partial keeps its own element lookup, print markers and expression fns.
-	assertEquals(js.match(/sel_bf\d+\(\) \{/g)?.length, 2);
-	assertEquals(js.match(/replaceBetween\(elem, '(bfid:bf\d+)'/g)?.length, 2);
-	assertEquals(modules[0].js.includes('bc_bf0_data_x'), true);
-	assertEquals(modules[1].js.includes('bc_bf3_data_y'), true);
+	// Each partial keeps its own element lookup, print markers and expressions.
+	assertEquals(rootOf(modules[0].js, 'first-el', { title: 'T' }).sites, [
+		{ bfid: 'bf0', attr: 'data-x', expr: { vars: ['title'], value: 'T' } },
+		{ bfid: 'bf0', markers: ['bfid:bf1', 'bfid:bf2'], expr: { vars: ['title'], value: 'T' } },
+	]);
+	assertEquals(rootOf(modules[1].js, 'second-el', { label: 'L' }).sites, [
+		{ bfid: 'bf3', attr: 'data-y', expr: { vars: ['label'], value: 'L' } },
+		{ bfid: 'bf3', markers: ['bfid:bf4', 'bfid:bf5'], expr: { vars: ['label'], value: 'L' } },
+	]);
 	// The two partials share one bfid generator, so no id is reused across the modules.
+	const js = modules.map(m => m.js).join('\n');
 	const ids = [...js.matchAll(/bf\d+/g)].map(m => m[0]);
 	assertEquals(new Set(ids).size, 6);
 });
@@ -245,23 +232,15 @@ Deno.test("end-to-end: two custom elements with b-if sets in one file keep disti
 	);
 	const { modules } = applyDomPatch(file, { bfidGen: makeSequentialBfidGen() });
 	assertEquals(modules.length, 2);
-	for (const m of modules) assertEquals(m.runtimeFiles, ['render.js', 'patch.js']);
-	// Each module imports the runtime once for itself, and only what it uses: only
-	// first-el has a print site to evaluate.
-	assertEquals(modules[0].js.match(/^import \{ render, activeBranchIndex, execFn \} from/gm)?.length, 1);
-	assertEquals(modules[1].js.match(/^import \{ render, activeBranchIndex \} from/gm)?.length, 1);
-	for (const m of modules) assertEquals(m.js.match(/^import \{ replaceBetween \} from/gm)?.length, 1);
-	const js = modules.map(m => m.js).join('\n');
-	const setIds = [...js.matchAll(/^const bfif_(bf\d+) = /gm)].map(m => m[1]);
-	assertEquals(setIds.length, 2);
-	assertEquals(new Set(setIds).size, 2);
-	for (const id of setIds) {
-		assertEquals(js.includes(`activeBranchIndex(bfif_${id}, data)`), true);
-		assertEquals(js.includes(`renderIf_${id}(data) {`), true);
+	const setIds: string[] = [];
+	for (const [m, name] of [[modules[0], 'first-el'], [modules[1], 'second-el']] as const) {
+		const { bfRoot, defined } = evalModule(m.js, name);
+		const id = bfRoot.sets[0].markers[0].replace('bfid:', '');
+		setIds.push(id);
+		// Each set's descriptor points at its own module-level snapshot.
+		assertEquals(bfRoot.sets[0].snapshot, defined[`bfif_${id}`]);
 	}
-	// Class names are unique across the two modules, nested branch classes included.
-	const classNames = [...js.matchAll(/^(?:export )?class (\w+) \{/gm)].map(m => m[1]);
-	assertEquals(new Set(classNames).size, classNames.length);
+	assertEquals(new Set(setIds).size, 2);
 });
 
 Deno.test("end-to-end: nested custom-element call gets a data-bfid stamped into its callerAttrs", async () => {
@@ -289,10 +268,10 @@ Deno.test("end-to-end: two live caller attrs on one nested call share a single b
 	);
 	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
 	if (!js) throw new Error('expected js');
-	// One data-bfid, one sel_ helper, but both attributes patched off it.
-	assertEquals(js.match(/sel_bf\d+\(\) \{/g)?.length, 1);
-	assertEquals(js.includes("setAttribute('data-a', String(execFn(bc_bf0_data_a, data)))"), true);
-	assertEquals(js.includes("setAttribute('data-b', String(execFn(bc_bf0_data_b, data)))"), true);
+	assertEquals(rootOf(js, 'parent-el', { a: 1, b: 2 }).sites, [
+		{ bfid: 'bf0', attr: 'data-a', expr: { vars: ['a'], value: 1 } },
+		{ bfid: 'bf0', attr: 'data-b', expr: { vars: ['b'], value: 2 } },
+	]);
 });
 
 Deno.test("end-to-end: caller-attr patch emits valid JavaScript", async () => {
@@ -301,7 +280,7 @@ Deno.test("end-to-end: caller-attr patch emits valid JavaScript", async () => {
 	);
 	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
 	if (!js) throw new Error('expected js');
-	assertEquals(typeof moduleClass(js, 'BackflipParentEl'), 'function');
+	assertEquals(typeof evalModule(js, 'parent-el').shell, 'function');
 });
 
 // Recursively collect every comment node's text from a tree.
@@ -325,18 +304,12 @@ Deno.test("end-to-end: print of a live var wraps it in marker comments and patch
 	// AST: the print is bracketed by two marker comments inside the <p>.
 	const root = file.partials.get('my-widget')!;
 	assertEquals(collectComments(root.tnodes), ['bfid:bf1', 'bfid:bf2']);
-
-	// Class wires the parent lookup, value fn, and mutate; the range replace is imported.
-	assertEquals(js.includes('class BackflipMyWidget'), true);
-	assertEquals(js.includes('sel_bf0()'), true);
-	assertEquals(js.includes('const bc_print_bf1 = '), true);
-	assertEquals(js.includes('mutate_name'), true);
-	assertEquals(js.includes("\treplaceBetween(elem, 'bfid:bf1', 'bfid:bf2', document.createTextNode(String(execFn(bc_print_bf1, data))));"), true);
-	assertEquals(js.includes("import { replaceBetween } from './patch.js';"), true);
-	assertEquals(js.includes('replaceBetween(parent'), false);
+	// The descriptor names the <p> and the same two markers.
+	assertEquals(rootOf(js, 'my-widget', { name: 'N' }).sites,
+		[{ bfid: 'bf0', markers: ['bfid:bf1', 'bfid:bf2'], expr: { vars: ['name'], value: 'N' } }]);
 });
 
-Deno.test("end-to-end: print directly in the custom element targets this.ce", async () => {
+Deno.test("end-to-end: print directly in the custom element targets the element itself", async () => {
 	const file = await compileCustomElement(
 		`<my-widget b-attr:name>{{ name }}</my-widget>`
 	);
@@ -346,10 +319,8 @@ Deno.test("end-to-end: print directly in the custom element targets this.ce", as
 	// Markers sit directly in the root; no parent bfid is allocated.
 	const root = file.partials.get('my-widget')!;
 	assertEquals(collectComments(root.tnodes), ['bfid:bf0', 'bfid:bf1']);
-	assertEquals(js.includes('sel_'), false);
-	assertEquals(js.includes('querySelector'), false);
-	assertEquals(js.includes('elem = this.ref_elem;'), true);
-	assertEquals(js.includes("\treplaceBetween(elem, 'bfid:bf0', 'bfid:bf1', document.createTextNode(String(execFn(bc_print_bf0, data))));"), true);
+	assertEquals(rootOf(js, 'my-widget').sites[0].bfid, null);
+	assertEquals(rootOf(js, 'my-widget').sites[0].markers, ['bfid:bf0', 'bfid:bf1']);
 });
 
 // Compile several custom-element partials into a single CompiledFile.
@@ -420,9 +391,8 @@ Deno.test("end-to-end: an if-set is bracketed by markers and its parent gets a b
 	const file = await compileCustomElement(
 		`<my-widget b-attr:mode><div><p b-if="mode == 'a'">A</p><em b-else>B</em></div></my-widget>`
 	);
-	const { js, runtimeFiles } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
+	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
 	if (!js) throw new Error('expected js');
-	assertEquals(runtimeFiles, ['render.js', 'patch.js']);
 
 	// Markers bracket the whole set (one pair, not one per branch), inside the <div>.
 	const root = file.partials.get('my-widget')!;
@@ -431,25 +401,23 @@ Deno.test("end-to-end: an if-set is bracketed by markers and its parent gets a b
 	const div = root.tnodes.find((n: any) => n.type === 'element') as ElementTNode;
 	assertEquals(div.attrs.some(a => a.type === 'static' && a.raw.includes('data-bfid="bf0"')), true);
 
-	assertEquals(js.includes("import { render, activeBranchIndex } from './render.js';"), true);
-	assertEquals(js.includes("import { replaceBetween } from './patch.js';"), true);
-	assertEquals(js.includes('const bfif_bf1 = '), true);
-	assertEquals(js.includes('renderIf_bf1(data)'), true);
-	assertEquals(js.includes("\treplaceBetween(elem, 'bfid:bf1', 'bfid:bf2', frag);"), true);
-	assertEquals(js.includes('this.if_bf1 = activeBranchIndex(bfif_bf1, data);'), true);
+	const { bfRoot, defined } = evalModule(js, 'my-widget');
+	assertEquals(bfRoot.sets.length, 1);
+	const set = bfRoot.sets[0];
+	assertEquals([set.bfid, set.markers, set.subtreeVars, set.branches], ['bf0', ['bfid:bf1', 'bfid:bf2'], [], [null, null]]);
+	assertEquals(set.snapshot, defined.bfif_bf1);
 });
 
 // The module-level `bfif_*` consts, in emitted order, each with its literal text.
+// Each runs from its `const` line to the blank line or next `const` that follows it.
 function snapshotConsts(js: string): { name: string, text: string }[] {
-	return [...js.matchAll(/^const (bfif_\w+) = ([\s\S]*?);\n(?=const |\nclass |class )/gm)]
+	return [...js.matchAll(/^const (bfif_\w+) = ([\s\S]*?);\n(?=const |\n)/gm)]
 		.map(m => ({ name: m[1], text: m[2] }));
 }
 
-// Evaluate the `bfif_*` consts, in order, and return them by name.
-function evalSnapshots(js: string): Record<string, any> {
-	const consts = snapshotConsts(js);
-	const src = consts.map(c => `const ${c.name} = ${c.text};`).join('\n');
-	return new Function(`${src}\nreturn { ${consts.map(c => c.name).join(', ')} };`)();
+// Evaluate the module and return its `bfif_*` consts by name.
+function evalSnapshots(js: string, partialName = 'my-widget'): Record<string, any> {
+	return evalModule(js, partialName).defined;
 }
 
 Deno.test("end-to-end: a nested set's snapshot is referenced by name, not copied", async () => {
@@ -507,7 +475,7 @@ Deno.test("end-to-end: a var-free nested b-if has no const and stays inline", as
 	assertEquals(consts[0].text.includes('always'), true);
 });
 
-Deno.test("end-to-end: an if-set directly in the custom element targets this.ce", async () => {
+Deno.test("end-to-end: an if-set directly in the custom element targets the element itself", async () => {
 	const file = await compileCustomElement(
 		`<my-widget b-attr:mode><p b-if="mode == 'a'">A</p><em b-else>B</em></my-widget>`
 	);
@@ -515,8 +483,7 @@ Deno.test("end-to-end: an if-set directly in the custom element targets this.ce"
 	if (!js) throw new Error('expected js');
 	const root = file.partials.get('my-widget')!;
 	assertEquals(collectComments(root.tnodes), ['bfid:bf0', 'bfid:bf1']);
-	assertEquals(js.includes('const elem = this.ref_elem;'), true);
-	assertEquals(js.includes('querySelector'), false);
+	assertEquals(evalModule(js, 'my-widget').bfRoot.sets[0].bfid, null);
 });
 
 Deno.test("end-to-end: the if-set snapshot is taken after pass-1 markers are added", async () => {
@@ -529,34 +496,34 @@ Deno.test("end-to-end: the if-set snapshot is taken after pass-1 markers are add
 	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
 	if (!js) throw new Error('expected js');
 
-	const snapshot = js.slice(js.indexOf('const bfif_'), js.indexOf('export class'));
-	// The <p>'s bfid (used by mutate_name's setAttribute) is inside the snapshot...
-	const bfidMatch = js.match(/sel_(bf\d+)\(\)/)!;
-	assertEquals(snapshot.includes(`data-bfid="${bfidMatch[1]}"`), true);
+	const snapshot = snapshotConsts(js)[0].text;
+	const [attrSite, printSite] = evalModule(js, 'my-widget').bfRoot.sets[0].branches[0].sites;
+	// The <p>'s bfid (what the attr site patches) is inside the snapshot...
+	assertEquals(snapshot.includes(`data-bfid="${attrSite.bfid}"`), true);
 	// ...as are the print's marker comments.
-	const printMarkers = js.match(/\treplaceBetween\(elem, '(bfid:bf\d+)', '(bfid:bf\d+)', document\.createTextNode/)!;
-	assertEquals(snapshot.includes(`{ type: 'comment', text: '${printMarkers[1]}' }`), true);
-	assertEquals(snapshot.includes(`{ type: 'comment', text: '${printMarkers[2]}' }`), true);
+	for (const marker of printSite.markers) {
+		assertEquals(snapshot.includes(`{ type: 'comment', text: '${marker}' }`), true);
+	}
 });
 
-Deno.test("end-to-end: a partial with only attr sites imports execFn only", async () => {
+Deno.test("end-to-end: a render-mode module imports only BackflipShell", async () => {
 	const file = await compileCustomElement(
-		`<my-widget b-attr:title><span :data-x="title">hi</span></my-widget>`
+		`<my-widget b-attr:title><span :data-x="title">hi {{ title }}</span><p b-if="title">t</p></my-widget>`
 	);
-	const { js, runtimeFiles } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
-	assertEquals(runtimeFiles, ['render.js']);
-	assertEquals(js!.includes("import { execFn } from './render.js';"), true);
-	assertEquals(js!.includes('patch.js'), false);
+	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
+	assertEquals([...js!.matchAll(/^import .*$/gm)].map(m => m[0]),
+		["import { BackflipShell } from './runtime/dom-patch/patch.js';"]);
 });
 
-Deno.test("end-to-end: a partial with prints but no if-set imports execFn and replaceBetween", async () => {
-	const file = await compileCustomElement(
-		`<my-widget b-attr:title><span>{{ title }}</span></my-widget>`
-	);
-	const { js, runtimeFiles } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
-	assertEquals(runtimeFiles, ['render.js', 'patch.js']);
-	assertEquals(js!.includes("import { execFn } from './render.js';"), true);
-	assertEquals(js!.includes("import { replaceBetween } from './patch.js';"), true);
+Deno.test("end-to-end: base and full modules also import BackflipElement", async () => {
+	for (const mode of ['base', 'full']) {
+		const file = await compileCustomElement(
+			`<my-widget b-attr:title b-generate="${mode}"><span :data-x="title">hi</span></my-widget>`
+		);
+		const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
+		assertEquals([...js!.matchAll(/^import .*$/gm)].map(m => m[0]),
+			["import { BackflipShell, BackflipElement } from './runtime/dom-patch/patch.js';"]);
+	}
 });
 
 Deno.test("end-to-end: disqualified if-sets get no markers and no class", async () => {
@@ -589,14 +556,13 @@ Deno.test("end-to-end: a nested if-set is its own patch-branch (nesting supporte
 
 	// Two module-level snapshots, one per set.
 	assertEquals((js.match(/const bfif_/g) ?? []).length, 2);
-	// A child patch-branch class is emitted for the branch that owns the inner set.
-	assertEquals(/class BackflipPatch_bf\d+_0 \{/.test(js), true);
-
-	// The outer set is driven by `a`; the inner set (owned by the child branch) by `b`.
-	// `b` reaches the inner set by forwarding from the root's subtree var down to the
-	// active child, so both vars appear in an update switch somewhere.
-	assertEquals(js.includes("case 'a': this.mutate_a(data); break;"), true);
-	assertEquals(js.includes("case 'b': this.mutate_b(data); break;"), true);
+	// The outer set's first branch owns the inner set, whose first branch owns the print.
+	// `b` reaches the inner set because the outer set forwards its subtree vars.
+	const outer = evalModule(js, 'my-widget').bfRoot.sets[0];
+	assertEquals(outer.subtreeVars, ['b']);
+	const inner = outer.branches[0].sets[0];
+	assertEquals(outer.branches[1], null);
+	assertEquals(plain(inner.branches[0].sites, { b: 'B' }).map((s: any) => s.expr), [{ vars: ['b'], value: 'B' }]);
 });
 
 Deno.test("end-to-end: applyDomPatch is idempotent — a second run reuses markers and yields identical JS", async () => {

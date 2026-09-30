@@ -251,43 +251,46 @@ Deno.test("preview captures dom-patch JS whose bfid matches the rendered HTML", 
 	// bfid in the rendered HTML must equal the bfid the generated JS queries on.
 	const htmlBfid = result.html.match(/data-bfid="([^"]+)"/)?.[1];
 	const js = await Deno.readTextFile(savedPath!);
-	const jsBfid = js.match(/data-bfid="([^"]+)"/)?.[1];
+	const jsBfid = js.match(/bfid: '([^']+)'/)?.[1];
 	assertEquals(typeof htmlBfid, 'string');
 	assertEquals(htmlBfid, jsBfid);
 });
 
-// Each runtime file a generated module imports is served from dist at the URL a build
-// would copy it to; one the modules do not import is not mapped.
-for (const [label, body, expected] of [
-	['attr only', `<span :data-tone="tone">badge</span>`, ['render.js', 'patch.js']],
-	['nothing to patch', `<span>badge</span>`, ['patch.js']],
-	['a b-if', `<span b-if="tone == 'info'">i</span><span b-else>o</span>`, ['render.js', 'patch.js']],
+// The runtime is served from dist at the URLs a build would copy it to — its
+// dist-relative paths under the output dir — once any module is generated.
+async function previewAssets(source: string) {
+	const compiledFile = await compileCustomElement(source);
+	const outDir = await Deno.makeTempDir({ prefix: 'bfdom-' });
+	const result = await previewPartial({
+		partialName: 'my-badge',
+		compiledFile,
+		fileName: 'badge.html',
+		dataOverrides: { tone: 'info' },
+		domPatchOutputDirs: ['/proj/server/static/bfdom'],
+		domPatchOutDir: outDir,
+	});
+	assertEquals(result.errors.length, 0);
+	return result.domPatchAssets ?? {};
+}
+
+for (const [label, body] of [
+	['nothing to patch', `<span>badge</span>`],
+	['a b-if', `<span b-if="tone == 'info'">i</span><span b-else>o</span>`],
 ] as const) {
-	Deno.test(`preview maps the runtime files a module with ${label} imports`, async () => {
-		const compiledFile = await compileCustomElement(`<my-badge b-attr:tone b-generate="full">${body}</my-badge>`);
-		const outDir = await Deno.makeTempDir({ prefix: 'bfdom-' });
-		const buildDir = '/proj/server/static/bfdom';
-		const result = await previewPartial({
-			partialName: 'my-badge',
-			compiledFile,
-			fileName: 'badge.html',
-			dataOverrides: { tone: 'info' },
-			domPatchOutputDirs: [buildDir],
-			domPatchOutDir: outDir,
-		});
-		assertEquals(result.errors.length, 0);
-		const assets = result.domPatchAssets ?? {};
-		for (const file of ['render.js', 'patch.js']) {
-			const src = assets[`${buildDir}/${file}`];
-			if (!(expected as readonly string[]).includes(file)) {
-				assertEquals(src, undefined, `${file} should not be mapped`);
-				continue;
-			}
-			assertEquals(src.endsWith(file), true, `${file} should map to the dist runtime`);
+	Deno.test(`preview maps the whole runtime for a module with ${label}`, async () => {
+		const assets = await previewAssets(`<my-badge b-attr:tone b-generate="full">${body}</my-badge>`);
+		for (const file of ['runtime/js/render.js', 'runtime/dom-patch/patch.js']) {
+			const src = assets[`/proj/server/static/bfdom/${file}`];
+			assertEquals(src?.endsWith(file), true, `${file} should map to the dist runtime`);
 			assertEquals((await Deno.stat(src)).isFile, true, `${src} should exist (run npm run build)`);
 		}
 	});
 }
+
+Deno.test("preview maps no runtime when no module is generated", async () => {
+	const assets = await previewAssets(`<my-badge><span>badge</span></my-badge>`);
+	assertEquals(Object.keys(assets), []);
+});
 
 // --- Error handling ---
 

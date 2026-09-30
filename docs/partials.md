@@ -471,7 +471,7 @@ customElements.define('my-widget', MyWidget);
 Two rules the browser enforces silently, so the generated class is written around them:
 
 - `observedAttributes` and the lifecycle callbacks are read **once**, when `customElements.define()` runs, off the class you register. A subclass that declares `static observedAttributes` without spreading `super.observedAttributes`, or defines `connectedCallback` / `attributeChangedCallback` without calling `super`, stops the patching with no error. The generated class reports a missing attribute to the console when it initializes.
-- The generated class puts only `bf`-prefixed members on the element (`bfPatch`, `bfInit`, `bfPending`, …) and on the class (`bfShell`, `bfDeclared`), so the rest of the namespace is yours. `bfPatch` is the patch class instance, available once the element is connected and the document has parsed.
+- The generated class puts only `bf`-prefixed members on the element (`bfPatch`, `bfInit`, `bfPending`, …) and on the class (`bfShell`), so the rest of the namespace is yours. `bfPatch` is the patch class instance, available once the element is connected and the document has parsed.
 
 Subclassing is not a way to extend a `full` partial: `customElements.define()` refuses a constructor that is already registered, and a subclass could only be registered under a different tag name — one the server never renders. Use `base` when you need your own behavior.
 

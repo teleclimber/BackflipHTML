@@ -6,7 +6,7 @@ import { collectPatchTree, type BranchScope, type IfSetScope } from './collect.j
 import { qualifies } from './filter.js';
 import { ensureBfid, ensureCallBfid, elementForSite, ensureCommentsAround } from './mutate-ast.js';
 import {
-	allBranches, generateClassForPartial, generateFile, ifConstName, patchClassNameFor, runtimeImportsFor,
+	allBranches, generateClassForPartial, generateFile, ifConstName, runtimeImportsFor,
 	type BfidSite, type IfSetPatchSite, type PatchBranch, type PatchTarget, type RuntimeFile,
 } from './codegen.js';
 
@@ -14,13 +14,11 @@ export type { BfidGen } from './bfid.js';
 export type { RuntimeFile } from './codegen.js';
 
 /**
- * Where each runtime file a module can import is built, relative to the package's
- * `dist/`. A build copies it to the dom-patch output root, beside the modules.
+ * The runtime every generated module runs on: a module imports patch.js, which
+ * imports render.js. A build copies each from the package's `dist/` into the
+ * dom-patch output dir at the same relative path.
  */
-export const RUNTIME_FILE_DIST_PATHS: Record<RuntimeFile, string> = {
-	'render.js': 'runtime/js/render.js',
-	'patch.js': 'runtime/dom-patch/patch.js',
-};
+export const RUNTIME_FILES: RuntimeFile[] = ['runtime/js/render.js', 'runtime/dom-patch/patch.js'];
 
 /** The file a partial's module is written to, relative to the dom-patch output root. */
 export function moduleFileName(tagName: string): string {
@@ -32,8 +30,6 @@ export interface DomPatchModule {
 	/** The partial's tag name, which also names the file — see moduleFileName. */
 	tagName: string;
 	js: string;
-	/** The runtime files the module imports, which must be copied alongside it. */
-	runtimeFiles: RuntimeFile[];
 }
 
 export interface DomPatchResult {
@@ -68,7 +64,7 @@ export function applyDomPatch(file: CompiledFile, opts?: DomPatchOptions): DomPa
 
 		// With no declared attributes there is nothing to patch, but 'base' and 'full'
 		// still owe the author a class — an empty patch-branch gives them one.
-		let rootBranch: PatchBranch = { className: patchClassNameFor(partialName), sites: [], sets: [], vars: [] };
+		let rootBranch: PatchBranch = { sites: [], sets: [], vars: [] };
 		if (bAttrs.length > 0) {
 			// Walk into a scope tree (qualification folded in — the tree's shape depends
 			// on which sets qualify).
@@ -77,7 +73,7 @@ export function applyDomPatch(file: CompiledFile, opts?: DomPatchOptions): DomPa
 			// Pass 1 — all AST mutation, every scope at every depth: allocate bfids and
 			// splice in every marker pair (attr/print/if-set), building the PatchBranch tree
 			// with ids and targets filled in. No snapshots yet.
-			rootBranch = buildPatchBranch(scope, patchClassNameFor(partialName), gen);
+			rootBranch = buildPatchBranch(scope, gen);
 
 			// Pass 2 — snapshots, now that every marker at every depth is in the tree.
 			fillSnapshots(rootBranch);
@@ -88,8 +84,7 @@ export function applyDomPatch(file: CompiledFile, opts?: DomPatchOptions): DomPa
 		const cls = generateClassForPartial(partialName, bAttrs, rootBranch, mode);
 		if (!cls) continue;
 
-		const imports = runtimeImportsFor(rootBranch, mode);
-		modules.push({ tagName: partialName, js: generateFile([cls], imports), runtimeFiles: [...imports.keys()] });
+		modules.push({ tagName: partialName, js: generateFile([cls], runtimeImportsFor(mode)) });
 
 		// Only partials that produce a module get a script. 'full' registers the element
 		// itself, so its module is an executed entry; otherwise an author module imports it.
@@ -109,14 +104,10 @@ export function applyDomPatch(file: CompiledFile, opts?: DomPatchOptions): DomPa
 // Pass 1: turn a scope into a PatchBranch, allocating bfids/markers for its own
 // sites and sets and, recursively, for every descendant branch — before any
 // snapshot is taken.
-function buildPatchBranch(
-	scope: BranchScope,
-	className: string,
-	gen: BfidGen,
-): PatchBranch {
+function buildPatchBranch(scope: BranchScope, gen: BfidGen): PatchBranch {
 	const sites = scope.sites.map(s => toBfidSite(s, scope.refElement, gen));
 	const sets = scope.sets.map(ss => toIfSetPatchSite(ss, scope.refElement, gen));
-	return { className, sites, sets, vars: computeVars(sites, sets) };
+	return { sites, sets, vars: computeVars(sites, sets) };
 }
 
 function toBfidSite(
@@ -146,11 +137,9 @@ function toIfSetPatchSite(
 	const set = scope.set;
 	const target = resolveTarget(elementForSite(set), refElement, gen);
 	const { startId: setId, endId } = ensureCommentsAround(set.container, set.node, gen);
-	// A branch with nothing patchable gets no child class.
-	const branches = scope.branches.map((child, i) =>
-		child.sites.length === 0 && child.sets.length === 0
-			? null
-			: buildPatchBranch(child, `BackflipPatch_${setId}_${i}`, gen));
+	// A branch with nothing patchable gets no descriptor.
+	const branches = scope.branches.map(child =>
+		child.sites.length === 0 && child.sets.length === 0 ? null : buildPatchBranch(child, gen));
 	return {
 		target, ifSet: set, setId, endId, snapshot: '',
 		subtreeVars: computeSubtreeVars(set.node),
@@ -182,7 +171,7 @@ function fillSnapshots(root: PatchBranch): void {
 
 // Guard the invariant this module is built on: the compiler rejects a partial that
 // generates client JS and reads anything it does not declare, so every var reaching
-// codegen resolves through collectData(). Nothing downstream re-checks it — a name
+// codegen is one the shell reads off the element. Nothing downstream re-checks it — a name
 // that slipped through would compile into a patch writing `undefined` into the page,
 // so it fails here instead.
 function assertDeclared(branch: PatchBranch, declared: Set<string>, partialName: string): void {

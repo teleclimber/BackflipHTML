@@ -5,7 +5,7 @@ import { compileDirectory } from './compiler/partials.ts';
 import { loadConfig, resolveConfigRoot, resolveAssetDirs, resolveDomPatchOutputDirs, resolveDomPatchScriptUrl, type OutputConfig } from './compiler/config.ts';
 import { fileToJsModule } from './compiler/generate/js/nodes2js.ts';
 import { fileToPhpFile } from './compiler/generate/php/nodes2php.ts';
-import { applyDomPatch, moduleFileName, RUNTIME_FILE_DIST_PATHS, type RuntimeFile } from './compiler/generate/dom-patch/nodes2patch.ts';
+import { applyDomPatch, moduleFileName, RUNTIME_FILES } from './compiler/generate/dom-patch/nodes2patch.ts';
 import { resolveAssetRefs } from './compiler/helpers.ts';
 import { flattenCompiledFile } from './compiler/flatten.ts';
 import { discoverAssetFileInfos, collectAllAssetReferences, validateAssetFiles, buildAssetUsageReport, filterReport } from './assets/src/index.ts';
@@ -212,8 +212,6 @@ if (args.check) {
     // the server-rendered HTML carries the ids the runtime class queries on.
     // One module per custom-element partial, keyed by its file name at the output root.
     const domPatchJs = new Map<string, string>();
-    // Runtime files the generated modules import from the root of the dom-patch output dir.
-    const domPatchRuntimeFiles = new Set<RuntimeFile>();
     if (outputs.some(o => o.lang === 'dom-patch')) {
         // Each partial that generates a module is stamped with its script's public URL
         // (derived from the asset prefix covering the dom-patch output dir) so the
@@ -228,7 +226,6 @@ if (args.check) {
             const { modules } = applyDomPatch(compiledFile, { scriptUrlFor });
             for (const mod of modules) {
                 domPatchJs.set(moduleFileName(mod.tagName), mod.js);
-                for (const f of mod.runtimeFiles) domPatchRuntimeFiles.add(f);
                 if (scriptUrlFor(mod.tagName) === undefined && domPatchDirs.length > 0 && !warnedUnservable) {
                     console.warn(`warning: dom-patch output "${domPatchDirs.join('", "')}" is not covered by an asset prefix; generated scripts will not be auto-included. Add an asset entry whose directory contains this output dir.`);
                     warnedUnservable = true;
@@ -237,19 +234,21 @@ if (args.check) {
         }
     }
 
-    // A runtime file a generated module imports is a required build input. A silent
-    // skip would ship a page that 404s, so a missing dist build stops here.
-    const runtimeSources = new Map<RuntimeFile, string>();
-    for (const file of domPatchRuntimeFiles) {
-        const src = fileURLToPath(new URL(`./dist/${RUNTIME_FILE_DIST_PATHS[file]}`, import.meta.url));
-        try {
-            Deno.statSync(src);
-        } catch {
-            console.error(`Missing required runtime file: ${src}`);
-            console.error(`Generated dom-patch modules import ${file}. Build the dist output first.`);
-            Deno.exit(1);
+    // Generated modules run on the runtime, so it is a required build input once there
+    // are any. A silent skip would ship a page that 404s, so a missing dist build stops here.
+    const runtimeSources = new Map<string, string>();
+    if (domPatchJs.size > 0) {
+        for (const file of RUNTIME_FILES) {
+            const src = fileURLToPath(new URL(`./dist/${file}`, import.meta.url));
+            try {
+                Deno.statSync(src);
+            } catch {
+                console.error(`Missing required runtime file: ${src}`);
+                console.error(`Generated dom-patch modules run on ${file}. Build the dist output first.`);
+                Deno.exit(1);
+            }
+            runtimeSources.set(file, src);
         }
-        runtimeSources.set(file, src);
     }
 
     for (const out of outputs) {
@@ -277,11 +276,13 @@ if (args.check) {
             Deno.writeTextFileSync(outPath, generated);
             count++;
         }
-        // The generated modules sit at the output root and import each as './<file>'.
+        // Each runtime file keeps its dist-relative path, so the modules at the output
+        // root and the runtime files' imports of each other all resolve.
         if (out.lang === 'dom-patch') {
             for (const [file, src] of runtimeSources) {
-                Deno.mkdirSync(out.path, { recursive: true });
-                Deno.copyFileSync(src, join(out.path, file));
+                const dest = join(out.path, file);
+                Deno.mkdirSync(dirname(dest), { recursive: true });
+                Deno.copyFileSync(src, dest);
             }
         }
         console.log(`Generated ${count} ${out.lang} file${count !== 1 ? 's' : ''} to ${out.path}`);

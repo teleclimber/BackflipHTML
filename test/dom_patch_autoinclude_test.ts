@@ -401,7 +401,7 @@ Deno.test("integration CLI: each partial gets its own module, named after its ta
 		const baseJs = await fs.readFile(path.join(workDir, "bfdom", "base-el.js"), "utf-8");
 		assertEquals(await exists(path.join(workDir, "bfdom", "app.js")), false);
 		// The element class's lifecycle comes from the runtime, copied beside the modules.
-		assertEquals(await exists(path.join(workDir, "bfdom", "patch.js")), true);
+		assertEquals(await exists(path.join(workDir, "bfdom", "runtime/dom-patch/patch.js")), true);
 
 		assertStringIncludes(fullJs, "export class BackflipFullElElement extends BackflipElement");
 		assertStringIncludes(fullJs, "customElements.define('full-el', BackflipFullElElement)");

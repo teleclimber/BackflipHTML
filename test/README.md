@@ -26,7 +26,7 @@ This runs `deno test --allow-read --allow-write --allow-run=php,deno` and covers
 | `integration_error_test.ts` | Compilation error detection: structural errors, invalid directives, missing partials. |
 | `cli_test.ts` | CLI argument parsing, config-based compilation, output directory handling. |
 | `dom_patch_autoinclude_test.ts` | Script auto-include: the module each `b-generate` mode contributes, its URL, and where the renderer injects it (JS and PHP). |
-| `dom_patch_if_test.ts` | Reactive `b-if` and nested patch-branch classes, plus the runtime files (`render.js`, `patch.js`) a generated module imports and the CLI copies. |
+| `dom_patch_if_test.ts` | Reactive `b-if` and nested set descriptors, plus the runtime (`runtime/js/render.js`, `runtime/dom-patch/patch.js`) the CLI copies beside generated modules. |
 | `dom_patch_generate_test.ts` | `b-generate="full"` end to end: CLI build → server render → the generated module patching that HTML in jsdom. |
 
 ## Template fixtures

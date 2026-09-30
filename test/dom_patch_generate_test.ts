@@ -54,24 +54,38 @@ async function buildProject(): Promise<string> {
 }
 
 /**
- * Put the server-rendered HTML in a window and run the generated module in it. Each
- * runtime import is bound by running the file the build copied beside the module in
- * that window, so the element base class extends the window's HTMLElement. The
- * document is fully parsed first, as it is for the deferred module script the
- * renderer injects.
+ * Link `entry` and every file it reaches through relative imports into one classic
+ * script: each file becomes a block returning its exports, after the files it imports.
+ */
+async function linkAsScript(entry: string): Promise<string> {
+	const order: string[] = [];
+	const sources = new Map<string, string>();
+	const importRe = /^import \{([^}]*)\} from '(\.[^']+)';$/gm;
+	async function visit(file: string): Promise<void> {
+		if (sources.has(file)) return;
+		const src = await fs.readFile(file, "utf-8");
+		sources.set(file, src);
+		for (const [, , spec] of src.matchAll(importRe)) await visit(path.resolve(path.dirname(file), spec));
+		order.push(file);
+	}
+	await visit(entry);
+	const moduleVar = (file: string) => `__module${order.indexOf(file)}`;
+	return order.map(file => {
+		const src = sources.get(file)!.replace(importRe, (_, names, spec) =>
+			`const {${names}} = ${moduleVar(path.resolve(path.dirname(file), spec))};`);
+		const exported = [...src.matchAll(/^export (?:function\*?|class|const|let) (\w+)/gm)].map(m => m[1]);
+		return `const ${moduleVar(file)} = (() => {\n${src.replace(/^export /gm, "")}\nreturn { ${exported.join(", ")} };\n})();`;
+	}).join("\n");
+}
+
+/**
+ * Put the server-rendered HTML in a window and run the generated module in it, linked
+ * with the runtime files the build copied beside it — so the element base class
+ * extends the window's HTMLElement. The document is fully parsed first, as it is for
+ * the deferred module script the renderer injects.
  */
 async function browserFor(workDir: string, html: string) {
-	const outDir = path.join(workDir, "bfdom");
-	const mod = await fs.readFile(path.join(outDir, "count-badge.js"), "utf-8");
-	const imports = [...mod.matchAll(/^import \{([^}]*)\} from '\.\/([^']+)';$/gm)];
-	const bindings = await Promise.all(imports.map(async ([, names, file]) => {
-		const runtime = (await fs.readFile(path.join(outDir, file), "utf-8")).replace(/^export /gm, "");
-		return `const {${names}} = (() => {\n${runtime}\nreturn {${names}};\n})();`;
-	}));
-	const src = [
-		...bindings,
-		mod.replace(/^import .*$/gm, "").replaceAll("export class", "class"),
-	].join("\n");
+	const src = await linkAsScript(path.join(workDir, "bfdom", "count-badge.js"));
 	const dom = new JSDOM(`<!DOCTYPE html>${html}`, { runScripts: "outside-only" });
 	await new Promise(resolve => dom.window.addEventListener("load", resolve, { once: true }));
 	dom.window.eval(src);

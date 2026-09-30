@@ -5,7 +5,7 @@ import type { CompiledFile } from '../compiler/types.js';
 import { resolveDomPatchScriptUrl, type BackflipConfig } from '../compiler/config.js';
 import { resolveAssetRefs } from '../compiler/helpers.js';
 import { flattenCompiledFile } from '../compiler/flatten.js';
-import { applyDomPatch, moduleFileName, RUNTIME_FILE_DIST_PATHS, type RuntimeFile } from '../compiler/generate/dom-patch/nodes2patch.js';
+import { applyDomPatch, moduleFileName, RUNTIME_FILES } from '../compiler/generate/dom-patch/nodes2patch.js';
 import { fileToJsModule } from '../compiler/generate/js/nodes2js.js';
 import { renderRoot } from '../runtime/js/render.js';
 import type { RootRNode } from '../runtime/js/render.js';
@@ -128,11 +128,11 @@ async function writeDomPatchAssets(
 	scriptUrlFor?: (tagName: string) => string | undefined,
 ): Promise<Record<string, string>> {
 	const assets: Record<string, string> = {};
-	const runtimeFiles = new Set<RuntimeFile>();
+	let anyModule = false;
 	for (const [, file] of files) {
 		const { modules } = applyDomPatch(file, { ...(scriptUrlFor ? { scriptUrlFor } : {}) });
 		for (const mod of modules) {
-			for (const f of mod.runtimeFiles) runtimeFiles.add(f);
+			anyModule = true;
 			const jsRel = moduleFileName(mod.tagName);
 			const savedPath = path.join(outDir, jsRel);
 			await fs.mkdir(path.dirname(savedPath), { recursive: true });
@@ -142,11 +142,11 @@ async function writeDomPatchAssets(
 			}
 		}
 	}
-	// A build copies each imported runtime file into the dom-patch output root; the
-	// preview serves it straight from dist at that same URL.
-	for (const file of runtimeFiles) {
+	// A build copies the runtime into the dom-patch output dir at its dist-relative
+	// paths; the preview serves each file straight from dist at that same URL.
+	for (const file of anyModule ? RUNTIME_FILES : []) {
 		// Resolved relative to this module so it works wherever the preview is launched from.
-		const src = fileURLToPath(new URL(`../dist/${RUNTIME_FILE_DIST_PATHS[file]}`, import.meta.url));
+		const src = fileURLToPath(new URL(`../dist/${file}`, import.meta.url));
 		for (const outputDir of outputDirs) {
 			assets[path.join(outputDir, file)] = src;
 		}

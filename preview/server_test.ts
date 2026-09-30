@@ -312,7 +312,7 @@ Deno.test("server serves generated dom-patch JS for a dom-patch dir nested insid
 	await handleRequest(mockReq('/__assets/static/bfdom/my-badge.js'), jsRes, dpCtx);
 	assertEquals(jsRes._status, 200);
 	assertStringIncludes(jsRes._headers['Content-Type'], 'javascript');
-	const jsBfid = String(jsRes._body).match(/data-bfid="([^"]+)"/)?.[1];
+	const jsBfid = String(jsRes._body).match(/bfid: '([^']+)'/)?.[1];
 	assertEquals(htmlBfid, jsBfid);
 });
 

@@ -1,18 +1,17 @@
-// Behavioral tests for the generated dom-patch classes: run them against a real
-// DOM (jsdom) and assert the child-range patch actually mutates the document.
+// Behavioral tests for generated dom-patch modules: run them, on the real runtime,
+// against a real DOM (jsdom) and assert the patching actually mutates the document.
 //
 // This test deliberately does NOT import the compiler. jsdom requires parse5 as
 // CommonJS, and the compiler pulls parse5 (via parse5-html-rewriting-stream) as
 // an ES module; loading both in one Deno test triggers a require()-cycle error.
 // The compiler → AST → marker-comment path is covered in nodes2patch_test.ts;
-// here we hand-build the generated classes and the server HTML they expect.
+// here we hand-build the codegen input and the server HTML it expects.
 import { assertEquals } from "jsr:@std/assert";
 import { JSDOM } from "npm:jsdom";
 
 import type { ElementTNode, IfBranch, IfTNode, PrintTNode } from "../../types.ts";
 import { interpretBackcode } from "../../backcode.ts";
-import { render, activeBranchIndex, execFn } from "../../../runtime/js/render.ts";
-import { BackflipElement, replaceBetween } from "../../../runtime/dom-patch/patch.ts";
+import { BackflipElement, BackflipShell } from "../../../runtime/dom-patch/patch.ts";
 import type { BackcodeSite, IfSetSite } from "./collect.ts";
 import { generateClassForPartial, type BfidSite, type IfSetPatchSite, type PatchBranch, type PatchTarget } from "./codegen.ts";
 
@@ -27,8 +26,8 @@ function computeVars(sites: BfidSite[], sets: IfSetPatchSite[]): string[] {
 	return out;
 }
 
-function patchBranch(className: string, sites: BfidSite[] = [], sets: IfSetPatchSite[] = []): PatchBranch {
-	return { className, sites, sets, vars: computeVars(sites, sets) };
+function patchBranch(sites: BfidSite[] = [], sets: IfSetPatchSite[] = []): PatchBranch {
+	return { sites, sets, vars: computeVars(sites, sets) };
 }
 
 function printSite(target: PatchTarget, code: string, startId: string, endId: string): BfidSite {
@@ -80,106 +79,82 @@ function ifSite(opts: {
 	};
 }
 
-// Instantiate the generated cluster's shell class against a host built from
-// `innerHtml`, with globalThis.document pointed at the jsdom document for the
-// duration. The runtime functions are injected the way the generated module's
-// runtime imports would supply them.
+// Instantiate the generated shell class against a host built from `innerHtml`.
+// `BackflipShell` is injected the way the module's runtime import would supply it.
 function mount(js: string, partialName: string, className: string, hostAttrs: string, innerHtml: string) {
 	const dom = new JSDOM(`<!DOCTYPE html><body><${partialName} ${hostAttrs}>${innerHtml}</${partialName}></body>`);
-	const prevDoc = (globalThis as any).document;
-	(globalThis as any).document = dom.window.document;
 	const host = dom.window.document.querySelector(partialName)!;
-	const Cls = new Function('render', 'activeBranchIndex', 'execFn', 'replaceBetween', js.replaceAll('export class', 'class') + `; return ${className};`)(render, activeBranchIndex, execFn, replaceBetween);
+	const Cls = new Function('BackflipShell', js.replaceAll('export class', 'class') + `; return ${className};`)(BackflipShell);
 	const instance = new Cls(host);
-	return { host, instance, restore: () => { (globalThis as any).document = prevDoc; } };
+	return { host, instance };
 }
 
 // --- attr / print (single patch-branch) ------------------------------------
 
 Deno.test("exec: updating a b-attr re-renders the print text, preserving siblings", () => {
-	const root = patchBranch('BackflipPatch_MyWidget',
-		[printSite({ kind: 'bfid-element', bfid: 'bf0' }, 'name', 'bf1', 'bf2')]);
+	const root = patchBranch([printSite({ kind: 'bfid-element', bfid: 'bf0' }, 'name', 'bf1', 'bf2')]);
 	const js = generateClassForPartial('my-widget', [{ name: 'name', isBool: false }], root, 'render')!;
 	const innerHtml = `<p data-bfid="bf0">Hello <!--bfid:bf1-->World<!--bfid:bf2-->!</p>`;
-	const { host, instance, restore } = mount(js, 'my-widget', 'BackflipMyWidget', 'name="World"', innerHtml);
-	try {
-		const p = host.querySelector('p')!;
-		assertEquals(p.textContent, 'Hello World!');
+	const { host, instance } = mount(js, 'my-widget', 'BackflipMyWidget', 'name="World"', innerHtml);
+	const p = host.querySelector('p')!;
+	assertEquals(p.textContent, 'Hello World!');
 
-		host.setAttribute('name', 'Mars');
-		instance.update('name');
-		assertEquals(p.textContent, 'Hello Mars!');
+	host.setAttribute('name', 'Mars');
+	instance.update('name');
+	assertEquals(p.textContent, 'Hello Mars!');
 
-		// Markers survive, so repeated updates keep working.
-		const comments = [...p.childNodes].filter((n: any) => n.nodeType === 8).map((n: any) => n.nodeValue);
-		assertEquals(comments, ['bfid:bf1', 'bfid:bf2']);
+	// Markers survive, so repeated updates keep working.
+	const comments = [...p.childNodes].filter((n: any) => n.nodeType === 8).map((n: any) => n.nodeValue);
+	assertEquals(comments, ['bfid:bf1', 'bfid:bf2']);
 
-		host.setAttribute('name', '');
-		instance.update('name');
-		assertEquals(p.textContent, 'Hello !');
-	} finally {
-		restore();
-	}
+	host.setAttribute('name', '');
+	instance.update('name');
+	assertEquals(p.textContent, 'Hello !');
 });
 
 Deno.test("exec: print anchored to the ref element patches host children", () => {
-	const root = patchBranch('BackflipPatch_MyThing',
-		[printSite({ kind: 'ref-element' }, 'label', 'bf0', 'bf1')]);
+	const root = patchBranch([printSite({ kind: 'ref-element' }, 'label', 'bf0', 'bf1')]);
 	const js = generateClassForPartial('my-thing', [{ name: 'label', isBool: false }], root, 'render')!;
 	const innerHtml = `<!--bfid:bf0-->one<!--bfid:bf1-->`;
-	const { host, instance, restore } = mount(js, 'my-thing', 'BackflipMyThing', 'label="one"', innerHtml);
-	try {
-		assertEquals(host.textContent, 'one');
-		host.setAttribute('label', 'two');
-		instance.update('label');
-		assertEquals(host.textContent, 'two');
-	} finally {
-		restore();
-	}
+	const { host, instance } = mount(js, 'my-thing', 'BackflipMyThing', 'label="one"', innerHtml);
+	assertEquals(host.textContent, 'one');
+	host.setAttribute('label', 'two');
+	instance.update('label');
+	assertEquals(host.textContent, 'two');
 });
 
 Deno.test("exec: inserted value is text, never interpreted as HTML", () => {
-	const root = patchBranch('BackflipPatch_MyWidget',
-		[printSite({ kind: 'bfid-element', bfid: 'bf0' }, 'name', 'bf1', 'bf2')]);
+	const root = patchBranch([printSite({ kind: 'bfid-element', bfid: 'bf0' }, 'name', 'bf1', 'bf2')]);
 	const js = generateClassForPartial('my-widget', [{ name: 'name', isBool: false }], root, 'render')!;
 	const innerHtml = `<p data-bfid="bf0"><!--bfid:bf1-->plain<!--bfid:bf2--></p>`;
-	const { host, instance, restore } = mount(js, 'my-widget', 'BackflipMyWidget', 'name="plain"', innerHtml);
-	try {
-		const p = host.querySelector('p')!;
-		host.setAttribute('name', '<b>x</b>');
-		instance.update('name');
-		assertEquals(p.querySelector('b'), null);          // not parsed as markup
-		assertEquals(p.textContent, '<b>x</b>');           // literal text
-	} finally {
-		restore();
-	}
+	const { host, instance } = mount(js, 'my-widget', 'BackflipMyWidget', 'name="plain"', innerHtml);
+	const p = host.querySelector('p')!;
+	host.setAttribute('name', '<b>x</b>');
+	instance.update('name');
+	assertEquals(p.querySelector('b'), null);          // not parsed as markup
+	assertEquals(p.textContent, '<b>x</b>');           // literal text
 });
 
 Deno.test("exec: a print and an attr on the same element update together", () => {
-	const root = patchBranch('BackflipPatch_MyWidget', [
+	const root = patchBranch([
 		attrSite('bf0', 'title', 'name'),
 		printSite({ kind: 'bfid-element', bfid: 'bf0' }, 'name', 'bf1', 'bf2'),
 	]);
 	const js = generateClassForPartial('my-widget', [{ name: 'name', isBool: false }], root, 'render')!;
 	const innerHtml = `<p data-bfid="bf0" title="World">Hi <!--bfid:bf1-->World<!--bfid:bf2--></p>`;
-	const { host, instance, restore } = mount(js, 'my-widget', 'BackflipMyWidget', 'name="World"', innerHtml);
-	try {
-		const p = host.querySelector('p')!;
-		host.setAttribute('name', 'Mars');
-		instance.update('name');
-		assertEquals(p.getAttribute('title'), 'Mars');
-		assertEquals(p.textContent, 'Hi Mars');
-	} finally {
-		restore();
-	}
+	const { host, instance } = mount(js, 'my-widget', 'BackflipMyWidget', 'name="World"', innerHtml);
+	const p = host.querySelector('p')!;
+	host.setAttribute('name', 'Mars');
+	instance.update('name');
+	assertEquals(p.getAttribute('title'), 'Mars');
+	assertEquals(p.textContent, 'Hi Mars');
 });
 
 Deno.test("exec: missing markers log an error and skip without throwing", () => {
-	const root = patchBranch('BackflipPatch_MyWidget',
-		[printSite({ kind: 'bfid-element', bfid: 'bf0' }, 'name', 'bf1', 'bf2')]);
+	const root = patchBranch([printSite({ kind: 'bfid-element', bfid: 'bf0' }, 'name', 'bf1', 'bf2')]);
 	const js = generateClassForPartial('my-widget', [{ name: 'name', isBool: false }], root, 'render')!;
 	// <p> has the bfid but no marker comments (rendered DOM diverged from template).
-	const { host, instance, restore } = mount(js, 'my-widget', 'BackflipMyWidget', 'name="World"', `<p data-bfid="bf0">Hello !</p>`);
+	const { host, instance } = mount(js, 'my-widget', 'BackflipMyWidget', 'name="World"', `<p data-bfid="bf0">Hello !</p>`);
 	const errors: unknown[][] = [];
 	const prevErr = console.error;
 	console.error = (...args: unknown[]) => { errors.push(args); };
@@ -190,7 +165,6 @@ Deno.test("exec: missing markers log an error and skip without throwing", () => 
 		assertEquals(String(errors[0][0]).includes('comment markers bfid:bf1 / bfid:bf2 not found'), true);
 	} finally {
 		console.error = prevErr;
-		restore();
 	}
 });
 
@@ -217,58 +191,46 @@ const SERVER_HTML_A = `<!--bfid:s0--><p data-bfid="p0">Hi <!--bfid:m0-->World<!-
 // stays patchable after a swap.
 function mountSet(snapshot: string, hostAttrs: string, innerHtml: string, childSites: BfidSite[] = []) {
 	const child = childSites.length
-		? patchBranch('BackflipPatch_s0_0', childSites)
+		? patchBranch(childSites)
 		: null;
 	const set = ifSite({
 		target: { kind: 'ref-element' }, conditions: [`mode == 'a'`, null], liveVars: ['mode'],
 		setId: 's0', endId: 's1', snapshot, subtreeVars: child ? child.vars : [], branches: [child, null],
 	});
-	const root = patchBranch('BackflipPatch_MyWidget', [], [set]);
+	const root = patchBranch([], [set]);
 	const js = generateClassForPartial('my-widget',
 		[{ name: 'mode', isBool: false }, { name: 'name', isBool: false }], root, 'render')!;
 	return mount(js, 'my-widget', 'BackflipMyWidget', hostAttrs, innerHtml);
 }
 
 Deno.test("exec: constructing the class does not touch the DOM (server already rendered)", () => {
-	const { host, restore } = mountSet(SET_SNAPSHOT, 'mode="a" name="World"', SERVER_HTML_A);
-	try {
-		assertEquals(host.innerHTML, SERVER_HTML_A);
-	} finally {
-		restore();
-	}
+	const { host } = mountSet(SET_SNAPSHOT, 'mode="a" name="World"', SERVER_HTML_A);
+	assertEquals(host.innerHTML, SERVER_HTML_A);
 });
 
 Deno.test("exec: changing the condition var swaps the branch, and back again", () => {
-	const { host, instance, restore } = mountSet(SET_SNAPSHOT, 'mode="a" name="World"', SERVER_HTML_A);
-	try {
-		host.setAttribute('mode', 'b');
-		instance.update('mode');
-		assertEquals(host.querySelector('p'), null);
-		assertEquals(host.querySelector('em')!.textContent, 'none');
+	const { host, instance } = mountSet(SET_SNAPSHOT, 'mode="a" name="World"', SERVER_HTML_A);
+	host.setAttribute('mode', 'b');
+	instance.update('mode');
+	assertEquals(host.querySelector('p'), null);
+	assertEquals(host.querySelector('em')!.textContent, 'none');
 
-		host.setAttribute('mode', 'a');
-		instance.update('mode');
-		assertEquals(host.querySelector('em'), null);
-		assertEquals(host.querySelector('p')!.textContent, 'Hi World');
+	host.setAttribute('mode', 'a');
+	instance.update('mode');
+	assertEquals(host.querySelector('em'), null);
+	assertEquals(host.querySelector('p')!.textContent, 'Hi World');
 
-		// Markers survive every swap, so the range stays patchable.
-		const comments = [...host.childNodes].filter((n: any) => n.nodeType === 8).map((n: any) => n.nodeValue);
-		assertEquals(comments, ['bfid:s0', 'bfid:s1']);
-	} finally {
-		restore();
-	}
+	// Markers survive every swap, so the range stays patchable.
+	const comments = [...host.childNodes].filter((n: any) => n.nodeType === 8).map((n: any) => n.nodeValue);
+	assertEquals(comments, ['bfid:s0', 'bfid:s1']);
 });
 
 Deno.test("exec: an unchanged branch index does not re-render", () => {
-	const { host, instance, restore } = mountSet(SET_SNAPSHOT, 'mode="a" name="World"', SERVER_HTML_A);
-	try {
-		const p = host.querySelector('p')!;
-		host.setAttribute('mode', 'a');   // still branch 0
-		instance.update('mode');
-		assertEquals(host.querySelector('p'), p);   // same node — never replaced
-	} finally {
-		restore();
-	}
+	const { host, instance } = mountSet(SET_SNAPSHOT, 'mode="a" name="World"', SERVER_HTML_A);
+	const p = host.querySelector('p')!;
+	host.setAttribute('mode', 'a');   // still branch 0
+	instance.update('mode');
+	assertEquals(host.querySelector('p'), p);   // same node — never replaced
 });
 
 Deno.test("exec: a set with no b-else renders nothing when no branch matches", () => {
@@ -279,73 +241,57 @@ Deno.test("exec: a set with no b-else renders nothing when no branch matches", (
 		target: { kind: 'ref-element' }, conditions: [`mode == 'a'`], liveVars: ['mode'],
 		setId: 's0', endId: 's1', snapshot, branches: [null],
 	});
-	const root = patchBranch('BackflipPatch_MyWidget', [], [set]);
+	const root = patchBranch([], [set]);
 	const js = generateClassForPartial('my-widget', [{ name: 'mode', isBool: false }], root, 'render')!;
-	const { host, instance, restore } = mount(js, 'my-widget', 'BackflipMyWidget', 'mode="a"', `<!--bfid:s0--><p>shown</p><!--bfid:s1-->`);
-	try {
-		host.setAttribute('mode', 'z');
-		instance.update('mode');
-		assertEquals(host.querySelector('p'), null);
-		assertEquals(host.textContent, '');
+	const { host, instance } = mount(js, 'my-widget', 'BackflipMyWidget', 'mode="a"', `<!--bfid:s0--><p>shown</p><!--bfid:s1-->`);
+	host.setAttribute('mode', 'z');
+	instance.update('mode');
+	assertEquals(host.querySelector('p'), null);
+	assertEquals(host.textContent, '');
 
-		host.setAttribute('mode', 'a');
-		instance.update('mode');
-		assertEquals(host.querySelector('p')!.textContent, 'shown');
-	} finally {
-		restore();
-	}
+	host.setAttribute('mode', 'a');
+	instance.update('mode');
+	assertEquals(host.querySelector('p')!.textContent, 'shown');
 });
 
 Deno.test("exec: a print site inside a re-rendered branch still patches (eviction + recreate)", () => {
 	// Swapping away deletes the branch's child instance; swapping back creates a fresh
 	// one, against which the print inside the freshly rendered branch stays patchable.
 	const print = printSite({ kind: 'bfid-element', bfid: 'p0' }, 'name', 'm0', 'm1');
-	const { host, instance, restore } = mountSet(SET_SNAPSHOT, 'mode="a" name="World"', SERVER_HTML_A, [print]);
-	try {
-		host.setAttribute('mode', 'b');
-		instance.update('mode');
-		host.setAttribute('mode', 'a');
-		instance.update('mode');
-		assertEquals(host.querySelector('p')!.textContent, 'Hi World');
+	const { host, instance } = mountSet(SET_SNAPSHOT, 'mode="a" name="World"', SERVER_HTML_A, [print]);
+	host.setAttribute('mode', 'b');
+	instance.update('mode');
+	host.setAttribute('mode', 'a');
+	instance.update('mode');
+	assertEquals(host.querySelector('p')!.textContent, 'Hi World');
 
-		host.setAttribute('name', 'Mars');
-		instance.update('name');
-		assertEquals(host.querySelector('p')!.textContent, 'Hi Mars');
-	} finally {
-		restore();
-	}
+	host.setAttribute('name', 'Mars');
+	instance.update('name');
+	assertEquals(host.querySelector('p')!.textContent, 'Hi Mars');
 });
 
 Deno.test("exec: patching inside an already-rendered branch (no swap) via forwarding", () => {
 	// `name` never changes the branch; the update forwards straight into the active
 	// child, which patches the live print — no re-render involved.
 	const print = printSite({ kind: 'bfid-element', bfid: 'p0' }, 'name', 'm0', 'm1');
-	const { host, instance, restore } = mountSet(SET_SNAPSHOT, 'mode="a" name="World"', SERVER_HTML_A, [print]);
-	try {
-		const p = host.querySelector('p')!;
-		host.setAttribute('name', 'Mars');
-		instance.update('name');
-		assertEquals(host.querySelector('p'), p);              // same node — never re-rendered
-		assertEquals(p.textContent, 'Hi Mars');                // but patched in place
-	} finally {
-		restore();
-	}
+	const { host, instance } = mountSet(SET_SNAPSHOT, 'mode="a" name="World"', SERVER_HTML_A, [print]);
+	const p = host.querySelector('p')!;
+	host.setAttribute('name', 'Mars');
+	instance.update('name');
+	assertEquals(host.querySelector('p'), p);              // same node — never re-rendered
+	assertEquals(p.textContent, 'Hi Mars');                // but patched in place
 });
 
 Deno.test("exec: re-rendering uses all live vars, not just the one that changed", () => {
 	const print = printSite({ kind: 'bfid-element', bfid: 'p0' }, 'name', 'm0', 'm1');
-	const { host, instance, restore } = mountSet(SET_SNAPSHOT, 'mode="a" name="World"', SERVER_HTML_A, [print]);
-	try {
-		// `name` changes while the branch is inactive; the swap back must pick it up.
-		host.setAttribute('mode', 'b');
-		instance.update('mode');
-		host.setAttribute('name', 'Mars');
-		host.setAttribute('mode', 'a');
-		instance.update('mode');
-		assertEquals(host.querySelector('p')!.textContent, 'Hi Mars');
-	} finally {
-		restore();
-	}
+	const { host, instance } = mountSet(SET_SNAPSHOT, 'mode="a" name="World"', SERVER_HTML_A, [print]);
+	// `name` changes while the branch is inactive; the swap back must pick it up.
+	host.setAttribute('mode', 'b');
+	instance.update('mode');
+	host.setAttribute('name', 'Mars');
+	host.setAttribute('mode', 'a');
+	instance.update('mode');
+	assertEquals(host.querySelector('p')!.textContent, 'Hi Mars');
 });
 
 // --- nested if-sets --------------------------------------------------------
@@ -377,70 +323,57 @@ const NESTED_SERVER_HTML =
 	`<!--bfid:s0--><!--bfid:m0--><p data-bfid="p0">Hi <!--bfid:pm0-->L<!--bfid:pm1--></p><!--bfid:m1--><!--bfid:s1-->`;
 
 function mountNested(hostAttrs: string) {
-	const printChild = patchBranch('BackflipPatch_m0_0',
-		[printSite({ kind: 'bfid-element', bfid: 'p0' }, 'label', 'pm0', 'pm1')]);
+	const printChild = patchBranch([printSite({ kind: 'bfid-element', bfid: 'p0' }, 'label', 'pm0', 'pm1')]);
 	const innerSet = ifSite({
 		target: { kind: 'ref-element' }, conditions: [`sub == 'x'`, null], liveVars: ['sub'],
 		setId: 'm0', endId: 'm1', snapshot: INNER_SNAPSHOT, subtreeVars: ['label'], branches: [printChild, null],
 	});
-	const outerChild = patchBranch('BackflipPatch_s0_0', [], [innerSet]);
+	const outerChild = patchBranch([], [innerSet]);
 	const outerSet = ifSite({
 		target: { kind: 'ref-element' }, conditions: [`mode == 'a'`, null], liveVars: ['mode'],
 		setId: 's0', endId: 's1', snapshot: OUTER_SNAPSHOT, subtreeVars: ['sub', 'label'], branches: [outerChild, null],
 	});
-	const root = patchBranch('BackflipPatch_MyWidget', [], [outerSet]);
+	const root = patchBranch([], [outerSet]);
 	const js = generateClassForPartial('my-widget',
 		[{ name: 'mode', isBool: false }, { name: 'sub', isBool: false }, { name: 'label', isBool: false }], root, 'render')!;
 	return mount(js, 'my-widget', 'BackflipMyWidget', hostAttrs, NESTED_SERVER_HTML);
 }
 
 Deno.test("exec: a var live only in a deep branch forwards all the way down and patches", () => {
-	const { host, instance, restore } = mountNested('mode="a" sub="x" label="L"');
-	try {
-		assertEquals(host.querySelector('p')!.textContent, 'Hi L');
-		host.setAttribute('label', 'Mars');
-		instance.update('label');
-		assertEquals(host.querySelector('p')!.textContent, 'Hi Mars');
-	} finally {
-		restore();
-	}
+	const { host, instance } = mountNested('mode="a" sub="x" label="L"');
+	assertEquals(host.querySelector('p')!.textContent, 'Hi L');
+	host.setAttribute('label', 'Mars');
+	instance.update('label');
+	assertEquals(host.querySelector('p')!.textContent, 'Hi Mars');
 });
 
 Deno.test("exec: changing a nested condition swaps only the inner branch", () => {
-	const { host, instance, restore } = mountNested('mode="a" sub="x" label="L"');
-	try {
-		host.setAttribute('sub', 'y');
-		instance.update('sub');
-		assertEquals(host.querySelector('p'), null);
-		assertEquals(host.querySelector('em')!.textContent, 'no');
+	const { host, instance } = mountNested('mode="a" sub="x" label="L"');
+	host.setAttribute('sub', 'y');
+	instance.update('sub');
+	assertEquals(host.querySelector('p'), null);
+	assertEquals(host.querySelector('em')!.textContent, 'no');
 
-		// The outer branch (mode) is untouched; swapping the inner condition back restores it.
-		host.setAttribute('sub', 'x');
-		instance.update('sub');
-		assertEquals(host.querySelector('em'), null);
-		assertEquals(host.querySelector('p')!.textContent, 'Hi L');
-	} finally {
-		restore();
-	}
+	// The outer branch (mode) is untouched; swapping the inner condition back restores it.
+	host.setAttribute('sub', 'x');
+	instance.update('sub');
+	assertEquals(host.querySelector('em'), null);
+	assertEquals(host.querySelector('p')!.textContent, 'Hi L');
 });
 
 Deno.test("exec: swapping the outer branch and back re-establishes the deep patch path", () => {
-	const { host, instance, restore } = mountNested('mode="a" sub="x" label="L"');
-	try {
-		host.setAttribute('mode', 'b');
-		instance.update('mode');
-		assertEquals(host.querySelector('span')!.textContent, 'B');
-		assertEquals(host.querySelector('p'), null);
+	const { host, instance } = mountNested('mode="a" sub="x" label="L"');
+	host.setAttribute('mode', 'b');
+	instance.update('mode');
+	assertEquals(host.querySelector('span')!.textContent, 'B');
+	assertEquals(host.querySelector('p'), null);
 
-		host.setAttribute('mode', 'a');
-		instance.update('mode');
-		// Fresh child chain rebuilt; the deep print is patchable again.
-		host.setAttribute('label', 'Deep');
-		instance.update('label');
-		assertEquals(host.querySelector('p')!.textContent, 'Hi Deep');
-	} finally {
-		restore();
-	}
+	host.setAttribute('mode', 'a');
+	instance.update('mode');
+	// Fresh child chain rebuilt; the deep print is patchable again.
+	host.setAttribute('label', 'Deep');
+	instance.update('label');
+	assertEquals(host.querySelector('p')!.textContent, 'Hi Deep');
 });
 
 // --- b-generate: the custom element class ----------------------------------
@@ -453,30 +386,25 @@ const MODE_ATTRS = [{ name: 'name', isBool: false }];
 
 // The module for `<my-widget name>` with one print site inside a <p data-bfid>.
 function widgetModule(mode: 'render' | 'base' | 'full'): string {
-	const root = patchBranch('BackflipPatch_MyWidget',
-		[printSite({ kind: 'bfid-element', bfid: 'bf0' }, 'name', 'bf1', 'bf2')]);
+	const root = patchBranch([printSite({ kind: 'bfid-element', bfid: 'bf0' }, 'name', 'bf1', 'bf2')]);
 	return generateClassForPartial('my-widget', MODE_ATTRS, root, mode)!;
 }
 
 const SERVER_HTML = (name: string) =>
 	`<my-widget name="${name}"><p data-bfid="bf0">Hello <!--bfid:bf1-->${name}<!--bfid:bf2-->!</p></my-widget>`;
 
-// The runtime functions these modules import, as classic-script source for a jsdom
-// window, standing in for the module's imports. The element base resolves to the
-// window's HTMLElement.
-const RUNTIME_SCRIPT = [
-	execFn.toString(),
-	'const ElementBase = HTMLElement;',
-	replaceBetween.toString(),
-	BackflipElement.toString(),
-].join('\n');
+// Stand in for the module's runtime import inside a jsdom window. BackflipElement is
+// defined in the window, so it extends that window's HTMLElement; BackflipShell
+// touches the DOM only through the element it is given, so this realm's class works.
+const ELEMENT_SCRIPT = ['const ElementBase = HTMLElement;', BackflipElement.toString()].join('\n');
+const beforeParse = (window: any) => { window.BackflipShell = BackflipShell; };
 
 // Strip the ES-module syntax so the source can be evaluated as a classic script. The
 // exported names are hung off globalThis, standing in for what an importer would bind.
 function asScript(js: string): string {
 	const exported = [...js.matchAll(/export class (\w+)/g)].map(m => m[1]);
 	return [
-		RUNTIME_SCRIPT,
+		ELEMENT_SCRIPT,
 		js.replaceAll('export class', 'class'),
 		...exported.map(n => `globalThis.${n} = ${n};`),
 	].join('\n');
@@ -494,7 +422,7 @@ function parsed(dom: InstanceType<typeof JSDOM>): Promise<void> {
  * does, and the path where init can run straight away.
  */
 async function defineAfterParse(js: string, bodyHtml: string) {
-	const dom = new JSDOM(`<!DOCTYPE html><body>${bodyHtml}</body>`, { runScripts: 'outside-only' });
+	const dom = new JSDOM(`<!DOCTYPE html><body>${bodyHtml}</body>`, { runScripts: 'outside-only', beforeParse });
 	const errors: string[] = [];
 	dom.window.console.error = (...args: unknown[]) => { errors.push(args.map(String).join(' ')); };
 	await parsed(dom);
@@ -506,7 +434,7 @@ async function defineAfterParse(js: string, bodyHtml: string) {
 function defineDuringParse(js: string, bodyHtml: string) {
 	const dom = new JSDOM(
 		`<!DOCTYPE html><html><head><script>${asScript(js)}</script></head><body>${bodyHtml}</body></html>`,
-		{ runScripts: 'dangerously' },
+		{ runScripts: 'dangerously', beforeParse },
 	);
 	return { dom, doc: dom.window.document };
 }
@@ -562,7 +490,7 @@ Deno.test("exec: a subclass that spreads observedAttributes patches; one that dr
 });
 
 Deno.test("exec: an element with no b-attrs registers and initializes without error", async () => {
-	const js = generateClassForPartial('my-widget', [], patchBranch('BackflipPatch_MyWidget'), 'full')!;
+	const js = generateClassForPartial('my-widget', [], patchBranch(), 'full')!;
 	const { doc, errors } = await defineAfterParse(js, `<my-widget><p>static</p></my-widget>`);
 	const host = doc.querySelector('my-widget')! as unknown as { bfPatch?: unknown };
 	assertEquals(host.bfPatch !== undefined, true);
