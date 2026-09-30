@@ -10,15 +10,25 @@ import { render, activeBranchIndex, execFn, type rfn, type IfRNode } from '../js
  */
 export function replaceBetween(parent: Node, startMarker: string, endMarker: string, node: Node): void {
 	const range = findMarkers(parent, startMarker, endMarker);
-	if (!range) return;
-	const [start, end] = range;
+	if (range) replaceRange(range, node);
+}
+
+// Replace everything between two sibling markers with `node`, keeping the markers.
+function replaceRange([start, end]: [ChildNode, ChildNode], node: Node): void {
 	let n = start.nextSibling;
 	while (n && n !== end) {
 		const next = n.nextSibling;
-		parent.removeChild(n);
+		n.remove();
 		n = next;
 	}
-	parent.insertBefore(node, end);
+	end.before(node);
+}
+
+// The text between two sibling markers.
+function textBetween([start, end]: [ChildNode, ChildNode]): string {
+	let text = '';
+	for (let n = start.nextSibling; n && n !== end; n = n.nextSibling) text += n.textContent ?? '';
+	return text;
 }
 
 // The two marker comments among `parent`'s direct children. Missing ones mean the
@@ -102,6 +112,9 @@ export interface BranchDesc {
 
 type Data = Record<string, unknown>;
 
+/** What a site shows in the DOM: presence for a bool attr, null for an absent attr, else text. */
+type Shown = string | boolean | null;
+
 interface SetState {
 	desc: SetDesc;
 	/** Vars in the set's branch conditions: a change can move the winning branch. */
@@ -113,18 +126,23 @@ interface SetState {
 }
 
 /**
- * Patches one branch's subtree, found under `refElem`. On construction it reads each
- * owned set's rendered branch from the DOM — not from `data`, which may have changed
- * since the render — and creates that branch's patch-branch.
+ * Patches one branch's subtree, found under `refElem`. What the DOM shows is the
+ * starting point, never `data`, which may have changed since the render: on
+ * construction it reads each owned set's rendered branch from the DOM and creates that
+ * branch's patch-branch, and each site's shown value is read from the DOM when first
+ * patched. A site or set is written only when its recomputed value differs.
  */
 export class PatchBranch {
 	desc: BranchDesc;
 	refElem: Element;
 	sets: SetState[];
+	/** What each site shows, index-aligned with `desc.sites`; undefined until read from the DOM. */
+	shown: (Shown | undefined)[];
 
 	constructor(desc: BranchDesc, refElem: Element, data: Data) {
 		this.desc = desc;
 		this.refElem = refElem;
+		this.shown = desc.sites.map(() => undefined);
 		this.sets = desc.sets.map(d => {
 			const elem = this.target(d.bfid);
 			return {
@@ -138,31 +156,31 @@ export class PatchBranch {
 	}
 
 	/**
-	 * Apply a change to var `name`. Sets run first: a re-render replaces whole subtrees,
-	 * so this branch's own sites are patched against the DOM that results. For each set
-	 * the var drives, a condition var re-renders it; a subtree var is forwarded to the
-	 * active branch; a var that is both does one or the other, never both.
+	 * Apply a change to var `name`, or, with no name, recompute everything. Sets run
+	 * first: a re-render replaces whole subtrees, so this branch's own sites are patched
+	 * against the DOM that results. For each set the var drives, a condition var
+	 * re-renders it; a subtree var is forwarded to the active branch; a var that is both
+	 * does one or the other, never both.
 	 */
-	update(name: string, data: Data): void {
+	update(data: Data, name?: string): void {
+		const all = name === undefined;
 		for (const s of this.sets) {
-			const inCond = s.condVars.has(name);
-			const inSub = s.desc.subtreeVars.includes(name);
-			if (inCond && this.renderIf(s, data)) continue;
-			if (inSub) s.children.get(s.active)?.update(name, data);
+			if ((all || s.condVars.has(name)) && this.renderIf(s, data)) continue;
+			if (all || s.desc.subtreeVars.includes(name)) s.children.get(s.active)?.update(data, name);
 		}
 
 		// One element lookup per target, in site order.
-		const byTarget = new Map<string | null, SiteDesc[]>();
-		for (const site of this.desc.sites) {
-			if (!site.expr.vars.includes(name)) continue;
+		const byTarget = new Map<string | null, number[]>();
+		this.desc.sites.forEach((site, i) => {
+			if (!all && !site.expr.vars.includes(name)) return;
 			const group = byTarget.get(site.bfid);
-			if (group) group.push(site);
-			else byTarget.set(site.bfid, [site]);
-		}
-		for (const [bfid, sites] of byTarget) {
+			if (group) group.push(i);
+			else byTarget.set(site.bfid, [i]);
+		});
+		for (const [bfid, indexes] of byTarget) {
 			const elem = this.target(bfid);
 			if (!elem) continue;
-			for (const site of sites) patchSite(elem, site, data);
+			for (const i of indexes) this.shown[i] = patchSite(elem, this.desc.sites[i], data, this.shown[i]);
 		}
 	}
 
@@ -201,16 +219,29 @@ export class PatchBranch {
 	}
 }
 
-function patchSite(elem: Element, site: SiteDesc, data: Data): void {
+// Write the site's value unless it already shows it, reading what it shows from the
+// DOM when `shown` is undefined. Returns what the site shows afterwards.
+function patchSite(elem: Element, site: SiteDesc, data: Data, shown: Shown | undefined): Shown | undefined {
 	const value = execFn(site.expr, data);
 	if ('attr' in site) {
-		if (!site.bool) elem.setAttribute(site.attr, String(value));
-		else if (value) elem.setAttribute(site.attr, '');
-		else elem.removeAttribute(site.attr);
-		return;
+		if (site.bool) {
+			const on = Boolean(value);
+			if (on === (shown === undefined ? elem.hasAttribute(site.attr) : shown)) return on;
+			if (on) elem.setAttribute(site.attr, '');
+			else elem.removeAttribute(site.attr);
+			return on;
+		}
+		const text = String(value);
+		if (text !== (shown === undefined ? elem.getAttribute(site.attr) : shown)) elem.setAttribute(site.attr, text);
+		return text;
 	}
+	const text = String(value);
+	if (text === shown) return shown;
+	const range = findMarkers(elem, site.markers[0], site.markers[1]);
+	if (!range) return shown;
 	// A text node, never markup: siblings are preserved and the value is not parsed.
-	replaceBetween(elem, site.markers[0], site.markers[1], elem.ownerDocument.createTextNode(String(value)));
+	if (shown !== undefined || textBetween(range) !== text) replaceRange(range, elem.ownerDocument.createTextNode(text));
+	return text;
 }
 
 // --- the shell --------------------------------------------------------------
@@ -241,8 +272,9 @@ export class BackflipShell {
 		return data;
 	}
 
-	update(name: string): void {
-		this.pb.update(name, this.collectData());
+	/** Apply a change to attribute `name`, or, with no name, recompute everything. */
+	update(name?: string): void {
+		this.pb.update(this.collectData(), name);
 	}
 }
 
@@ -270,22 +302,15 @@ export class BackflipElement extends ElementBase {
 
 	/** The shell instance, set once the element is connected and the document has parsed. */
 	bfPatch?: BackflipShell;
-	bfPending?: Set<string> | null;
 
 	connectedCallback(): void {
 		this.bfInit();
 	}
 
 	attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
-		// setAttribute with an unchanged value still fires this.
-		if (oldValue === newValue) return;
-		if (!this.bfPatch) {
-			// Upgrade replays every observed attribute before connectedCallback, and the
-			// server-rendered DOM already matches those. A change that really happened
-			// before init is replayed by bfInit.
-			(this.bfPending ??= new Set()).add(name);
-			return;
-		}
+		// setAttribute with an unchanged value still fires this. Before init there is
+		// nothing to patch: init compares everything against the DOM.
+		if (oldValue === newValue || !this.bfPatch) return;
 		this.bfPatch.update(name);
 	}
 
@@ -300,10 +325,8 @@ export class BackflipElement extends ElementBase {
 		this.bfCheckObserved();
 		const cls = this.constructor as typeof BackflipElement;
 		this.bfPatch = new cls.bfShell!(this);
-		if (this.bfPending) {
-			for (const name of this.bfPending) this.bfPatch.update(name);
-			this.bfPending = null;
-		}
+		// Whatever changed since the server render, reported or not, is fixed here.
+		this.bfPatch.update();
 	}
 
 	// observedAttributes is read once, at define() time, off the registered class, so

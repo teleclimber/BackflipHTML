@@ -447,8 +447,7 @@ Deno.test("exec: b-generate=full registers the element and patches it on attribu
 	const { doc, errors } = await defineAfterParse(widgetModule('full'), SERVER_HTML('World'));
 	const host = doc.querySelector('my-widget')!;
 	assertEquals(doc.defaultView!.customElements.get('my-widget') !== undefined, true);
-	// Upgrade replayed every observed attribute before connectedCallback; none of that
-	// patched anything, and the server-rendered DOM is untouched.
+	// Init compared every site against the server-rendered DOM, which already matches.
 	assertEquals(host.textContent, 'Hello World!');
 	assertEquals(errors, []);
 
@@ -524,7 +523,7 @@ Deno.test("exec: an element connected mid-parse defers init, then patches", asyn
 	assertEquals(host.textContent, 'Hello Mars!');
 });
 
-Deno.test("exec: an attribute changed before init is replayed once init runs", async () => {
+Deno.test("exec: an attribute changed before init is applied once init runs", async () => {
 	const { dom, doc } = defineDuringParse(widgetModule('full'), SERVER_HTML('World'));
 	const host = doc.querySelector('my-widget')!;
 	// Changed while init is still deferred: the callback records it and patches nothing.
@@ -570,6 +569,63 @@ Deno.test("exec: an element upgraded after its condition attribute changed rende
 	host.setAttribute('mode', 'a');
 	host.setAttribute('name', 'Mars');
 	assertEquals(host.querySelector('p')!.textContent, 'Hi Mars');
+});
+
+// `<my-widget viz>`, a bool attribute driving an attr site, a print and a set.
+function vizModule(): string {
+	const set = ifSite({
+		target: { kind: 'ref-element' }, conditions: ['viz', null], liveVars: ['viz'], setId: 's0', endId: 's1',
+		snapshot: `{ type:'if', branches: [
+			{ condition: { fn: function (viz) { return viz; }, vars: ['viz'] }, nodes: [ { type:'comment', text:'bfid:s0:0' }, { type:'raw', raw:'<b>yes</b>' } ] },
+			{ condition: undefined, nodes: [ { type:'comment', text:'bfid:s0:1' }, { type:'raw', raw:'<i>no</i>' } ] }
+		] }`,
+	});
+	const root = patchBranch([
+		attrSite('p0', 'data-viz', `viz ? 'y' : 'n'`),
+		printSite({ kind: 'bfid-element', bfid: 'p0' }, `viz ? 'on' : 'off'`, 'm0', 'm1'),
+	], [set]);
+	return generateClassForPartial('my-widget', [{ name: 'viz', isBool: true }], root, 'full')!;
+}
+
+const VIZ_ON = `<my-widget viz><p data-bfid="p0" data-viz="y"><!--bfid:m0-->on<!--bfid:m1--></p><!--bfid:s0--><!--bfid:s0:0--><b>yes</b><!--bfid:s1--></my-widget>`;
+
+Deno.test("exec: a bool attribute removed before upgrade updates everything that depends on it", async () => {
+	// Removing it before the element is defined leaves upgrade nothing to report.
+	const dom = new JSDOM(`<!DOCTYPE html><body>${VIZ_ON}</body>`, { runScripts: 'outside-only', beforeParse });
+	await parsed(dom);
+	const host = dom.window.document.querySelector('my-widget')!;
+	host.removeAttribute('viz');
+	dom.window.eval(asScript(vizModule()));
+	assertEquals(host.innerHTML,
+		`<p data-bfid="p0" data-viz="n"><!--bfid:m0-->off<!--bfid:m1--></p><!--bfid:s0--><!--bfid:s0:1--><i>no</i><!--bfid:s1-->`);
+});
+
+Deno.test("exec: a bool attribute removed while the document loads updates everything that depends on it", async () => {
+	const { dom, doc } = defineDuringParse(vizModule(), VIZ_ON);
+	const host = doc.querySelector('my-widget')!;
+	host.removeAttribute('viz');
+	await parsed(dom);
+	assertEquals(host.querySelector('p')!.textContent, 'off');
+	assertEquals(host.querySelector('i')!.textContent, 'no');
+});
+
+Deno.test("exec: init over a server render that matches its attributes writes nothing", async () => {
+	const dom = new JSDOM(`<!DOCTYPE html><body>${VIZ_ON}</body>`, { runScripts: 'outside-only', beforeParse });
+	await parsed(dom);
+	const host = dom.window.document.querySelector('my-widget')!;
+	const obs = new dom.window.MutationObserver(() => {});
+	obs.observe(host, { subtree: true, childList: true, attributes: true, characterData: true });
+	dom.window.eval(asScript(vizModule()));
+	assertEquals((host as unknown as { bfPatch?: unknown }).bfPatch !== undefined, true);
+	assertEquals(obs.takeRecords(), []);
+});
+
+Deno.test("exec: nothing is queued for init on the element", async () => {
+	const { dom, doc } = defineDuringParse(widgetModule('full'), SERVER_HTML('World'));
+	const host = doc.querySelector('my-widget')!;
+	host.setAttribute('name', 'Mars');
+	await parsed(dom);
+	assertEquals('bfPending' in host, false);
 });
 
 Deno.test("exec: moving the element does not re-initialize it", async () => {

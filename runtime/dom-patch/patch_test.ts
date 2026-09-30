@@ -111,26 +111,26 @@ function captureErrors<T>(f: () => T): { result: T, errors: unknown[][] } {
 Deno.test("PatchBranch: an attr site is set from its expression when one of its vars changes", () => {
 	const { el } = host(`<p data-bfid="p">x</p>`);
 	const pb = new PatchBranch({ sites: [{ bfid: 'p', attr: 'title', expr: expr('a + "-" + b', ['a', 'b']) }], sets: [] }, el, {});
-	pb.update('b', { a: 1, b: 2 });
+	pb.update({ a: 1, b: 2 }, 'b');
 	assertEquals(el.querySelector('p')!.getAttribute('title'), '1-2');
 	// A var the site does not use leaves it alone.
-	pb.update('z', { a: 9, b: 9 });
+	pb.update({ a: 9, b: 9 }, 'z');
 	assertEquals(el.querySelector('p')!.getAttribute('title'), '1-2');
 });
 
 Deno.test("PatchBranch: a bool attr site is present or absent", () => {
 	const { el } = host(`<p data-bfid="p">x</p>`);
 	const pb = new PatchBranch({ sites: [{ bfid: 'p', attr: 'hidden', bool: true, expr: expr('on', ['on']) }], sets: [] }, el, {});
-	pb.update('on', { on: true });
+	pb.update({ on: true }, 'on');
 	assertEquals(el.querySelector('p')!.getAttribute('hidden'), '');
-	pb.update('on', { on: false });
+	pb.update({ on: false }, 'on');
 	assertEquals(el.querySelector('p')!.hasAttribute('hidden'), false);
 });
 
 Deno.test("PatchBranch: a print site replaces its marker range with text, never markup", () => {
 	const { el } = host(`<p data-bfid="p">Hi <!--m0-->x<!--m1-->!</p>`);
 	const pb = new PatchBranch({ sites: [{ bfid: 'p', markers: ['m0', 'm1'], expr: expr('name', ['name']) }], sets: [] }, el, {});
-	pb.update('name', { name: '<b>Mars</b>' });
+	pb.update({ name: '<b>Mars</b>' }, 'name');
 	const p = el.querySelector('p')!;
 	assertEquals(p.textContent, 'Hi <b>Mars</b>!');
 	assertEquals(p.querySelector('b'), null);
@@ -143,7 +143,7 @@ Deno.test("PatchBranch: a null bfid targets the ref element itself", () => {
 		{ bfid: null, attr: 'class', expr: expr('c', ['c']) },
 		{ bfid: null, markers: ['m0', 'm1'], expr: expr('c', ['c']) },
 	], sets: [] }, el, {});
-	pb.update('c', { c: 'on' });
+	pb.update({ c: 'on' }, 'c');
 	assertEquals(el.getAttribute('class'), 'on');
 	assertEquals(el.textContent, 'on');
 });
@@ -157,7 +157,7 @@ Deno.test("PatchBranch: sites sharing an element look it up once per update", ()
 	let lookups = 0;
 	const orig = el.querySelector.bind(el);
 	(el as any).querySelector = (sel: string) => { lookups++; return orig(sel); };
-	pb.update('v', { v: 'x' });
+	pb.update({ v: 'x' }, 'v');
 	assertEquals(lookups, 1);
 	assertEquals(el.querySelector('p')!.getAttribute('aria-label'), 'x');
 });
@@ -168,7 +168,7 @@ Deno.test("PatchBranch: a missing element is reported and the other sites still 
 		{ bfid: 'gone', attr: 'title', expr: expr('v', ['v']) },
 		{ bfid: 'p', attr: 'title', expr: expr('v', ['v']) },
 	], sets: [] }, el, {});
-	const { errors } = captureErrors(() => pb.update('v', { v: 'x' }));
+	const { errors } = captureErrors(() => pb.update({ v: 'x' }, 'v'));
 	assertEquals(errors.length, 1);
 	assertEquals(String(errors[0][0]).includes('[data-bfid="gone"] not found'), true);
 	assertEquals(el.querySelector('p')!.getAttribute('title'), 'x');
@@ -210,10 +210,10 @@ Deno.test("PatchBranch: constructing does not touch the DOM", () => {
 Deno.test("PatchBranch: a condition var swaps the branch, and back, keeping the markers", () => {
 	const { el } = host(SERVER_A);
 	const pb = new PatchBranch({ sites: [], sets: [SET] }, el, { mode: 'a', name: 'World' });
-	pb.update('mode', { mode: 'b', name: 'World' });
+	pb.update({ mode: 'b', name: 'World' }, 'mode');
 	assertEquals(el.querySelector('p'), null);
 	assertEquals(el.querySelector('em')!.textContent, 'none');
-	pb.update('mode', { mode: 'a', name: 'World' });
+	pb.update({ mode: 'a', name: 'World' }, 'mode');
 	assertEquals(el.querySelector('p')!.textContent, 'Hi World');
 	const comments = [...el.childNodes].filter(n => n.nodeType === 8).map(n => n.nodeValue);
 	assertEquals(comments, ['s0', 'b0', 's1']);
@@ -223,14 +223,14 @@ Deno.test("PatchBranch: an unchanged winning branch is not re-rendered", () => {
 	const { el } = host(SERVER_A);
 	const pb = new PatchBranch({ sites: [], sets: [SET] }, el, { mode: 'a', name: 'World' });
 	const p = el.querySelector('p');
-	pb.update('mode', { mode: 'a', name: 'World' });
+	pb.update({ mode: 'a', name: 'World' }, 'mode');
 	assertEquals(el.querySelector('p'), p);
 });
 
 Deno.test("PatchBranch: with no b-else and no match, the set renders nothing", () => {
 	const { el } = host(SERVER_A);
 	const pb = new PatchBranch({ sites: [], sets: [SET_NO_ELSE] }, el, { mode: 'a', name: 'W' });
-	pb.update('mode', { mode: 'z', name: 'W' });
+	pb.update({ mode: 'z', name: 'W' }, 'mode');
 	assertEquals(el.innerHTML, SERVER_NONE);
 });
 
@@ -238,7 +238,7 @@ Deno.test("PatchBranch: a subtree var is forwarded to the active branch", () => 
 	const { el } = host(SERVER_A);
 	const pb = new PatchBranch({ sites: [], sets: [SET] }, el, { mode: 'a', name: 'World' });
 	const p = el.querySelector('p');
-	pb.update('name', { mode: 'a', name: 'Mars' });
+	pb.update({ mode: 'a', name: 'Mars' }, 'name');
 	assertEquals(el.querySelector('p'), p);   // patched in place, not re-rendered
 	assertEquals(p!.textContent, 'Hi Mars');
 });
@@ -246,12 +246,12 @@ Deno.test("PatchBranch: a subtree var is forwarded to the active branch", () => 
 Deno.test("PatchBranch: a swapped-in branch gets a fresh patch-branch that keeps patching", () => {
 	const { el } = host(SERVER_A);
 	const pb = new PatchBranch({ sites: [], sets: [SET] }, el, { mode: 'a', name: 'World' });
-	pb.update('mode', { mode: 'b', name: 'World' });
+	pb.update({ mode: 'b', name: 'World' }, 'mode');
 	// Changed while its branch is out: nothing to forward to.
-	pb.update('name', { mode: 'b', name: 'Mars' });
-	pb.update('mode', { mode: 'a', name: 'Mars' });
+	pb.update({ mode: 'b', name: 'Mars' }, 'name');
+	pb.update({ mode: 'a', name: 'Mars' }, 'mode');
 	assertEquals(el.querySelector('p')!.textContent, 'Hi Mars');
-	pb.update('name', { mode: 'a', name: 'Venus' });
+	pb.update({ mode: 'a', name: 'Venus' }, 'name');
 	assertEquals(el.querySelector('p')!.textContent, 'Hi Venus');
 });
 
@@ -274,11 +274,11 @@ Deno.test("PatchBranch: a var in both the conditions and the subtree re-renders 
 	const pb = new PatchBranch({ sites: [], sets: [set] }, el, { mode: 'x' });
 	const p = el.querySelector('p');
 	// Same branch: forwarded, patched in place.
-	pb.update('mode', { mode: 'y' });
+	pb.update({ mode: 'y' }, 'mode');
 	assertEquals(el.querySelector('p'), p);
 	assertEquals(p!.textContent, 'y');
 	// Different branch: re-rendered.
-	pb.update('mode', { mode: 'off' });
+	pb.update({ mode: 'off' }, 'mode');
 	assertEquals(el.querySelector('em')!.textContent, 'off');
 });
 
@@ -304,7 +304,7 @@ Deno.test("PatchBranch: a nested set swaps only its own range", () => {
 	const { el } = host(`<!--o0--><!--ob0--><div data-bfid="d"><!--i0--><!--ib0--><b>X</b><!--i1--></div><!--o1-->`);
 	const pb = new PatchBranch({ sites: [], sets: [OUTER_SET] }, el, { on: true, sub: 'x' });
 	const div = el.querySelector('div');
-	pb.update('sub', { on: true, sub: 'y' });
+	pb.update({ on: true, sub: 'y' }, 'sub');
 	assertEquals(el.querySelector('div'), div);   // the outer branch stayed
 	assertEquals(div!.innerHTML, '<!--i0--><!--ib1--><i>Y</i><!--i1-->');
 });
@@ -317,7 +317,7 @@ Deno.test("PatchBranch: a nested set swaps only its own range", () => {
 Deno.test("PatchBranch: DOM on branch 0, data on branch 1: the update renders branch 1", () => {
 	const { el } = host(SERVER_A);
 	const pb = new PatchBranch({ sites: [], sets: [SET] }, el, { mode: 'b', name: 'World' });
-	pb.update('mode', { mode: 'b', name: 'World' });
+	pb.update({ mode: 'b', name: 'World' }, 'mode');
 	assertEquals(el.innerHTML, SERVER_ELSE);
 });
 
@@ -325,8 +325,8 @@ Deno.test("PatchBranch: DOM on branch 1, data on branch 0: the update renders br
 	const { el } = host(SERVER_ELSE);
 	const { errors } = captureErrors(() => {
 		const pb = new PatchBranch({ sites: [], sets: [SET] }, el, { mode: 'a', name: 'World' });
-		pb.update('mode', { mode: 'a', name: 'World' });
-		pb.update('name', { mode: 'a', name: 'Mars' });
+		pb.update({ mode: 'a', name: 'World' }, 'mode');
+		pb.update({ mode: 'a', name: 'Mars' }, 'name');
 	});
 	assertEquals(errors, []);
 	assertEquals(el.querySelector('p')!.textContent, 'Hi Mars');
@@ -335,21 +335,21 @@ Deno.test("PatchBranch: DOM on branch 1, data on branch 0: the update renders br
 Deno.test("PatchBranch: DOM with no branch, data on branch 0: the update renders branch 0", () => {
 	const { el } = host(SERVER_NONE);
 	const pb = new PatchBranch({ sites: [], sets: [SET_NO_ELSE] }, el, { mode: 'a', name: 'World' });
-	pb.update('mode', { mode: 'a', name: 'World' });
+	pb.update({ mode: 'a', name: 'World' }, 'mode');
 	assertEquals(el.querySelector('p')!.textContent, 'Hi World');
 });
 
 Deno.test("PatchBranch: DOM on branch 0, data on no branch: the update empties the set", () => {
 	const { el } = host(SERVER_A);
 	const pb = new PatchBranch({ sites: [], sets: [SET_NO_ELSE] }, el, { mode: 'z', name: 'World' });
-	pb.update('mode', { mode: 'z', name: 'World' });
+	pb.update({ mode: 'z', name: 'World' }, 'mode');
 	assertEquals(el.innerHTML, SERVER_NONE);
 });
 
 Deno.test("PatchBranch: a nested set reads its own rendered branch from the DOM", () => {
 	const { el } = host(`<!--o0--><!--ob0--><div data-bfid="d"><!--i0--><!--ib0--><b>X</b><!--i1--></div><!--o1-->`);
 	const pb = new PatchBranch({ sites: [], sets: [OUTER_SET] }, el, { on: true, sub: 'y' });
-	pb.update('sub', { on: true, sub: 'y' });
+	pb.update({ on: true, sub: 'y' }, 'sub');
 	assertEquals(el.querySelector('div')!.innerHTML, '<!--i0--><!--ib1--><i>Y</i><!--i1-->');
 });
 
@@ -358,6 +358,80 @@ Deno.test("PatchBranch: a set whose markers are missing is reported and treated 
 	const { errors } = captureErrors(() => new PatchBranch({ sites: [], sets: [SET] }, el, { mode: 'a', name: 'W' }));
 	assertEquals(errors.length, 1);
 	assertEquals(String(errors[0][0]).includes('comment markers s0 / s1 not found'), true);
+});
+
+// --- PatchBranch: writes only what changed -----------------------------------
+
+// Every DOM mutation under `el` while `f` runs.
+function mutations(el: Element, f: () => void): MutationRecord[] {
+	const Observer = el.ownerDocument.defaultView!.MutationObserver;
+	const obs = new Observer(() => {});
+	obs.observe(el, { subtree: true, childList: true, attributes: true, characterData: true });
+	f();
+	const records = obs.takeRecords();
+	obs.disconnect();
+	return records;
+}
+
+Deno.test("PatchBranch: a full update whose DOM already matches the data writes nothing", () => {
+	const { el } = host(`<p data-bfid="p" title="T" hidden><!--m0-->World<!--m1--></p>${SERVER_A}`);
+	const data = { t: 'T', on: true, mode: 'a', name: 'World' };
+	const pb = new PatchBranch({ sites: [
+		{ bfid: 'p', attr: 'title', expr: expr('t', ['t']) },
+		{ bfid: 'p', attr: 'hidden', bool: true, expr: expr('on', ['on']) },
+		{ bfid: 'p', markers: ['m0', 'm1'], expr: expr('name', ['name']) },
+	], sets: [SET] }, el, data);
+	assertEquals(mutations(el, () => pb.update(data)), []);
+});
+
+Deno.test("PatchBranch: a full update fixes whatever differs from the data", () => {
+	const { el } = host(`<p data-bfid="p" title="T"><!--m0-->World<!--m1--></p>${SERVER_A}`);
+	const data = { t: 'U', mode: 'b', name: 'Mars' };
+	const pb = new PatchBranch({ sites: [
+		{ bfid: 'p', attr: 'title', expr: expr('t', ['t']) },
+		{ bfid: 'p', markers: ['m0', 'm1'], expr: expr('name', ['name']) },
+	], sets: [SET] }, el, data);
+	pb.update(data);
+	assertEquals(el.innerHTML, `<p data-bfid="p" title="U"><!--m0-->Mars<!--m1--></p>${SERVER_ELSE}`);
+});
+
+Deno.test("PatchBranch: a recomputed value equal to the rendered one writes nothing", () => {
+	const { el } = host(`<p data-bfid="p"><!--m0-->true<!--m1--></p>`);
+	const pb = new PatchBranch({ sites: [{ bfid: 'p', markers: ['m0', 'm1'], expr: expr('a.length > 3', ['a']) }], sets: [] }, el, {});
+	assertEquals(mutations(el, () => pb.update({ a: 'world' }, 'a')), []);
+	pb.update({ a: 'hi' }, 'a');
+	assertEquals(el.textContent, 'false');
+});
+
+// Each site kind, rendered as `html`: `same` leaves it untouched, `changed` rewrites it to `after`.
+const SITE_CASES: { label: string, html: string, site: BranchDesc['sites'][number], same: unknown, changed: unknown, after: string }[] = [
+	{ label: 'a string attr', html: `<p data-bfid="p" title="x"></p>`,
+		site: { bfid: 'p', attr: 'title', expr: expr('v', ['v']) }, same: 'x', changed: 'y', after: `<p data-bfid="p" title="y"></p>` },
+	{ label: 'a present bool attr', html: `<p data-bfid="p" hidden=""></p>`,
+		site: { bfid: 'p', attr: 'hidden', bool: true, expr: expr('v', ['v']) }, same: true, changed: false, after: `<p data-bfid="p"></p>` },
+	{ label: 'an absent bool attr', html: `<p data-bfid="p"></p>`,
+		site: { bfid: 'p', attr: 'hidden', bool: true, expr: expr('v', ['v']) }, same: false, changed: true, after: `<p data-bfid="p" hidden=""></p>` },
+	{ label: 'a print', html: `<p data-bfid="p"><!--m0-->x<!--m1--></p>`,
+		site: { bfid: 'p', markers: ['m0', 'm1'], expr: expr('v', ['v']) }, same: 'x', changed: 'y', after: `<p data-bfid="p"><!--m0-->y<!--m1--></p>` },
+	{ label: 'an empty print', html: `<p data-bfid="p"><!--m0--><!--m1--></p>`,
+		site: { bfid: 'p', markers: ['m0', 'm1'], expr: expr('v', ['v']) }, same: '', changed: 'y', after: `<p data-bfid="p"><!--m0-->y<!--m1--></p>` },
+];
+for (const c of SITE_CASES) {
+	Deno.test(`PatchBranch: ${c.label} is read from the DOM and written only when it changes`, () => {
+		const { el } = host(c.html);
+		const pb = new PatchBranch({ sites: [c.site], sets: [] }, el, {});
+		assertEquals(mutations(el, () => pb.update({ v: c.same }, 'v')), []);
+		pb.update({ v: c.changed }, 'v');
+		assertEquals(el.innerHTML, c.after);
+		assertEquals(mutations(el, () => pb.update({ v: c.changed }, 'v')), []);
+	});
+}
+
+Deno.test("PatchBranch: a swapped-in branch reads its rendered DOM, so an unchanged value writes nothing", () => {
+	const { el } = host(SERVER_ELSE);
+	const pb = new PatchBranch({ sites: [], sets: [SET] }, el, { mode: 'b', name: 'World' });
+	pb.update({ mode: 'a', name: 'World' }, 'mode');
+	assertEquals(mutations(el, () => pb.update({ mode: 'a', name: 'World' }, 'name')), []);
 });
 
 // --- BackflipShell -----------------------------------------------------------
