@@ -218,7 +218,7 @@ Deno.test("sites: an unsupported site kind throws (must be filtered before codeg
 
 // --- set descriptors -----------------------------------------------------------
 
-Deno.test("sets: a set names its anchor, markers, snapshot const and subtree vars", () => {
+Deno.test("sets: a set names its anchor, markers, snapshot const, subtree vars and branch markers", () => {
 	const set = ifPatchSite({
 		target: { kind: 'bfid-element', bfid: 'bf9' }, conditions: ['mode == 1', null], liveVars: ['mode'],
 		setId: 'bf0', endId: 'bf1', subtreeVars: ['name'], snapshot: `{ type:'if', branches: [] }`,
@@ -230,7 +230,8 @@ Deno.test("sets: a set names its anchor, markers, snapshot const and subtree var
 	const d = bfRoot.sets[0];
 	assertEquals(d.snapshot, defined.bfif_bf0);
 	assertEquals({ ...d, snapshot: undefined }, {
-		bfid: 'bf9', markers: ['bfid:bf0', 'bfid:bf1'], snapshot: undefined, subtreeVars: ['name'], branches: [null, null],
+		bfid: 'bf9', markers: ['bfid:bf0', 'bfid:bf1'], snapshot: undefined, subtreeVars: ['name'],
+		branchMarkers: ['bfid:bf0:0', 'bfid:bf0:1'], branches: [null, null],
 	});
 });
 

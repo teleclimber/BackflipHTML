@@ -11,10 +11,16 @@
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
+import { compileDirectory } from "../compiler/partials.ts";
+import { applyDomPatch } from "../compiler/generate/dom-patch/nodes2patch.ts";
+import { fileToJsModule } from "../compiler/generate/js/nodes2js.ts";
+import { fileToPhpFile } from "../compiler/generate/php/nodes2php.ts";
+import { renderRoot, type RootRNode } from "../runtime/js/render.ts";
 
 const TMPDIR = "/tmp/claude-1000/dom-patch-if";
 const REPO_ROOT = new URL("../", import.meta.url).pathname;
 const CLI_PATH = path.join(REPO_ROOT, "cli.ts");
+const RENDER_PHP = path.join(REPO_ROOT, "runtime/php/render.php");
 
 // A reactive custom element whose b-if set qualifies, plus a page that uses it.
 const APP_HTML = `<mode-badge b-attr:mode b-script="@scripts/mode-badge.js">
@@ -210,5 +216,67 @@ for (const missing of RUNTIME) Deno.test(`integration CLI: a build fails when di
 	} finally {
 		await fs.rm(workDir, { recursive: true, force: true });
 		await fs.rm(fakeRoot, { recursive: true, force: true });
+	}
+});
+
+// --- branch markers in the server render -------------------------------------
+
+// One page per branch of a three-branch set, so each render has exactly one winner.
+const APP_BRANCHES = `<mode-badge b-attr:mode b-generate="full">
+	<div><p b-if="mode == 'a'">Ay</p><em b-else-if="mode == 'b'">Bee</em><i b-else>Other</i></div>
+</mode-badge>
+
+<b-unwrap b-name="pagea" b-export><mode-badge mode="a"></mode-badge></b-unwrap>
+<b-unwrap b-name="pageb" b-export><mode-badge mode="b"></mode-badge></b-unwrap>
+<b-unwrap b-name="pagec" b-export><mode-badge mode="c"></mode-badge></b-unwrap>`;
+
+const PAGES = ["pagea", "pageb", "pagec"];
+
+// The branch markers in rendered HTML, as the branch index each names.
+function renderedBranches(html: string): number[] {
+	return [...html.matchAll(/<!--bfid:[^:>]+:(\d+)-->/g)].map(m => Number(m[1]));
+}
+
+async function compileBranchesApp(): Promise<{ root: string, file: any }> {
+	const root = path.join(TMPDIR, `b_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+	await fs.mkdir(root, { recursive: true });
+	await fs.writeFile(path.join(root, "app.html"), APP_BRANCHES);
+	const { directory } = await compileDirectory(root);
+	const file = directory.files.get("app.html")!;
+	applyDomPatch(file);
+	return { root, file };
+}
+
+Deno.test("integration JS: the server render carries only the winning branch's marker", async () => {
+	const { root, file } = await compileBranchesApp();
+	try {
+		const js = fileToJsModule(file, "app.html");
+		const names = [...js.matchAll(/^export const (\w+)/gm)].map(m => m[1]);
+		const mod = new Function(js.replace(/^export const /gm, "const ") + `\nreturn { ${names.join(", ")} };`)();
+		const rendered = PAGES.map(p => renderedBranches(renderRoot(mod[p] as RootRNode, {})));
+		assertEquals(rendered, [[0], [1], [2]]);
+	} finally {
+		await fs.rm(root, { recursive: true, force: true });
+	}
+});
+
+Deno.test("integration PHP: the server render carries only the winning branch's marker", async () => {
+	const { root, file } = await compileBranchesApp();
+	try {
+		const phpPath = path.join(root, "app.php");
+		await fs.writeFile(phpPath, fileToPhpFile(file, "app.html"));
+		const harness = `<?php
+require '${RENDER_PHP}';
+$partials = require '${phpPath}';
+foreach (${JSON.stringify(PAGES)} as $p) { echo backflip_renderRoot($partials[$p], []) . "\\0"; }
+`;
+		const harnessPath = path.join(root, "harness.php");
+		await fs.writeFile(harnessPath, harness);
+		const out = await new Deno.Command("php", { args: [harnessPath], stdout: "piped", stderr: "piped" }).output();
+		assertEquals(out.code, 0, `php failed: ${new TextDecoder().decode(out.stderr)}`);
+		const pages = new TextDecoder().decode(out.stdout).split("\0").slice(0, -1);
+		assertEquals(pages.map(renderedBranches), [[0], [1], [2]]);
+	} finally {
+		await fs.rm(root, { recursive: true, force: true });
 	}
 });

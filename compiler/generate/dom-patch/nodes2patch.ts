@@ -1,10 +1,10 @@
 import type { CompiledFile, ElementTNode, IfTNode, TNode } from '../../types.js';
 import type { Parsed } from '../../backcode.js';
 import { nodeToJS } from '../js/nodes2js.js';
-import { makeBfidGen, type BfidGen } from './bfid.js';
+import { branchMarker, makeBfidGen, type BfidGen } from './bfid.js';
 import { collectPatchTree, type BranchScope, type IfSetScope } from './collect.js';
 import { qualifies } from './filter.js';
-import { ensureBfid, ensureCallBfid, elementForSite, ensureCommentsAround } from './mutate-ast.js';
+import { ensureBfid, ensureBranchMarker, ensureCallBfid, elementForSite, ensureCommentsAround } from './mutate-ast.js';
 import {
 	allBranches, generateClassForPartial, generateFile, ifConstName, runtimeImportsFor,
 	type BfidSite, type IfSetPatchSite, type PatchBranch, type PatchTarget, type RuntimeFile,
@@ -137,6 +137,8 @@ function toIfSetPatchSite(
 	const set = scope.set;
 	const target = resolveTarget(elementForSite(set), refElement, gen);
 	const { startId: setId, endId } = ensureCommentsAround(set.container, set.node, gen);
+	// Before the branches' own sites, so the branch marker stays first in its content.
+	set.node.branches.forEach((b, i) => ensureBranchMarker(b, branchMarker(setId, i)));
 	// A branch with nothing patchable gets no descriptor.
 	const branches = scope.branches.map(child =>
 		child.sites.length === 0 && child.sets.length === 0 ? null : buildPatchBranch(child, gen));

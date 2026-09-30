@@ -18,7 +18,7 @@ Five site flavors are emitted:
 - **`caller-attr-expr`** — a `b-bind:`/`:` dynamic attribute on a **nested custom-element call** inside the partial body (e.g. `<child-el :show="show">` inside `parent-el`). The call renders as a real element, so the attribute is patched with `setAttribute` on it — exactly like an `attr` site — and the nested custom element observes the change and re-patches its own subtree. A `data-bfid` is stamped into the call's `callerAttrs` (merged into the rendered open tag); multiple dynamic caller attrs on the same call share one `data-bfid`. This is what lets a live var flow from a parent custom element down into a child custom element's attribute.
 - **`definition-root-attr`** — a `b-bind:`/`:` dynamic attribute on the partial's own wrapping tag (i.e. the custom element itself). No `data-bfid` is added — it resolves to the owning patch-branch's ref element, which for the root is the custom element.
 - **`print`** — a `{{ expr }}` interpolation. The print is bracketed by two marker comment nodes (`<!--bfid:<id>-->`), and its parent element gets a `data-bfid`. When that parent *is* the owning patch-branch's ref element (a print directly inside the custom element, or in a `b-unwrap` branch), no `data-bfid` is added and it targets the ref element. `b-if` / `b-for` wrappers are DOM-transparent, so the "parent element" is the nearest enclosing real element and the markers are inserted as immediate siblings of the print (inside the branch).
-- **`if-set`** — a whole `b-if` / `b-else-if` / `b-else` set, tracked as **one** site (not one per branch). Anchored exactly like a print: a marker pair brackets the `IfTNode` in its container array, and the nearest enclosing element gets a `data-bfid` (or it targets the owning patch-branch's ref element). Unlike the other flavors this one generates *new DOM* in the browser — see [b-if sets](#b-if-sets) below.
+- **`if-set`** — a whole `b-if` / `b-else-if` / `b-else` set, tracked as **one** site (not one per branch). Anchored exactly like a print: a marker pair brackets the `IfTNode` in its container array, and the nearest enclosing element gets a `data-bfid` (or it targets the owning patch-branch's ref element). Each branch's content also opens with a **branch marker** (`<!--bfid:<setId>:<index>-->`), so the rendered DOM shows which branch won. Unlike the other flavors this one generates *new DOM* in the browser — see [b-if sets](#b-if-sets) below.
 
 A site qualifies when **all** of these hold:
 
@@ -38,7 +38,7 @@ Sites whose ancestor chain contains a `ForTNode` are skipped (attrs, prints and 
 
 No `b-for` can currently reach here from valid source: a loop needs an iterable, a generating partial reads only its declared attributes, and a `b-attr` used as an iterable is a compile error. The loop handling — the skip, the subtree walk, and the value-name scoping in `computeSubtreeVars` — is kept because a declared input that is a collection is what makes `b-for` meaningful, and the `querySelector` problem above is what will then need solving.
 
-Other deliberate limitations, all covered above: patch sites inside an inactive branch of a **non-qualifying** nested set log `console.error` on every update (only qualifying sets get the patch-branch treatment that avoids this); `<script>` tags inside a branch do not execute when inserted via a fragment; and the initial active index is recomputed and trusted to match the server render. Nested `b-if` **is** supported — see [patch-branches](#patch-branches).
+Other deliberate limitations, all covered above: patch sites inside an inactive branch of a **non-qualifying** nested set log `console.error` on every update (only qualifying sets get the patch-branch treatment that avoids this); and `<script>` tags inside a branch do not execute when inserted via a fragment. Nested `b-if` **is** supported — see [patch-branches](#patch-branches).
 
 ## b-if sets
 
@@ -47,7 +47,7 @@ Attr and print patching edits DOM that is already there. An if-set instead **ren
 Three consequences shape the design:
 
 - **The runtime renders the branch** with the JS runtime's `render()`, from the snapshot the module carries. See [Runtime](#runtime).
-- **Snapshots are taken after all AST mutation, recursively.** `applyDomPatch` runs two passes per partial over the patch-branch tree (see [patch-branches](#patch-branches)): pass 1 mutates the AST at every depth (`data-bfid`s, print markers, and every set's marker pair), pass 2 snapshots each set's `IfTNode`. Taking a snapshot before every nested marker exists would produce a client-rendered branch missing markers the server-rendered HTML has, and every patch site inside it — including a nested set's anchors — would stop working.
+- **Snapshots are taken after all AST mutation, recursively.** `applyDomPatch` runs two passes per partial over the patch-branch tree (see [patch-branches](#patch-branches)): pass 1 mutates the AST at every depth (`data-bfid`s, print markers, and every set's marker pair and branch markers), pass 2 snapshots each set's `IfTNode`. Taking a snapshot before every nested marker exists would produce a client-rendered branch missing markers the server-rendered HTML has, and every patch site inside it — including a nested set's anchors — would stop working.
 - **The HTML becomes DOM via `range.createContextualFragment()`**, with the range's contents set to the target element, so a branch is parsed in its real parent context (a `<tr>` under a `<tbody>` survives).
 
 ### Trigger variables
@@ -62,7 +62,7 @@ An if-set is re-rendered (its branch swapped) **only by the live vars in its own
 
 ### Active-branch tracking
 
-When a patch-branch is constructed it computes every owned set's active branch index from the data it's handed — with `activeBranchIndex` on the set's snapshot, the same choice `render()` makes — and records it; it **does not render**, since the server already emitted the right branch. It also constructs the patch-branch for the active branch. Branches it swaps in later get theirs when they are rendered. The index is `0…n-1` for the winning branch, `-1` when nothing matches (a set with no `b-else` whose conditions are all falsy). The recomputed index is trusted to match the server render; if it doesn't, the DOM stays stale until the index changes.
+When a patch-branch is constructed it reads every owned set's active branch index **from the DOM**: the branch marker between the set's markers names the branch the server rendered. It does not compute the index from data, since an attribute may have changed between the render and init; the next update that recomputes the index then swaps in the branch the data now picks. Construction **does not render**. It also constructs the patch-branch for the active branch; branches swapped in later get theirs when they are rendered. The index is `0…n-1` for the winning branch, `-1` when nothing matches (a set with no `b-else` whose conditions are all falsy), which the DOM shows as no branch marker. A client-rendered branch carries its marker too, since the snapshot includes it.
 
 ### Additional qualification rules
 
@@ -99,6 +99,7 @@ export class BackflipMyElement extends BackflipShell {
         sets: [
             { bfid: 'bf3', markers: ['bfid:bf4', 'bfid:bf5'],
                 snapshot: bfif_bf4, subtreeVars: ['title'],
+                branchMarkers: ['bfid:bf4:0', 'bfid:bf4:1'],
                 branches: [ { sites: [ ... ], sets: [ ... ] }, null ] },
         ],
     };
@@ -112,7 +113,7 @@ The descriptors (the runtime's `BranchDesc`, `SetDesc` and `SiteDesc`):
 - **`bfid`** locates the element a site or set is anchored to: a descendant of the patch-branch's ref element with that `data-bfid`, or the ref element itself when `null`.
 - **An attr site** (`attr`, caller attr, definition-root attr) names the attribute as written, and `bool: true` for a boolean one. Its expression's value is set with `setAttribute(name, String(value))`, or a boolean one is present (`''`) or removed, matching the server-rendered HTML.
 - **A print site** names its marker comments. The range between them is replaced with a text node (never markup), so siblings are preserved and the value is never parsed.
-- **A set** names its markers, its module-level snapshot, the vars used anywhere in its branch content (`subtreeVars`), and one descriptor per branch — `null` for a branch with nothing to patch.
+- **A set** names its markers, its module-level snapshot, the vars used anywhere in its branch content (`subtreeVars`), each branch's marker (`branchMarkers`), and one descriptor per branch — `null` for a branch with nothing to patch.
 - **Expressions** are the same `rfn` literals the JS generator emits, evaluated by the renderer's own `execFn`.
 
 ## Patch-branches
@@ -145,7 +146,7 @@ export class BackflipMyWidgetElement extends BackflipElement {
 - **Everything the class owns is `bf`-prefixed** (`bfPatch`, `bfPending`, `bfInit`, `bfCheckObserved`, and the static `bfShell`), leaving the plain namespace to a subclass.
 - **The define is guarded** with `customElements.get`: a name may be registered once, and an unguarded throw would take the rest of the module with it.
 
-Known limitation: the replay covers attr and print sites, but not an if-set whose condition changed before init — a patch-branch computes the active index from current data when it is constructed and trusts the server to have rendered that branch (the same assumption noted for [active-branch tracking](#active-branch-tracking)).
+Known limitation: an observed attribute **removed** before upgrade produces no callback, so nothing that depends on it is replayed.
 
 Patching targets server-rendered DOM, so an element created with `document.createElement` has nothing to patch; that is documented as unsupported. No shadow root is ever attached.
 

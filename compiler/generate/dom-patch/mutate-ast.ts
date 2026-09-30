@@ -1,13 +1,16 @@
-import type { AttrPart, CustomElementCallTNode, ElementTNode, TNode } from '../../types.js';
+import type { AttrPart, CustomElementCallTNode, ElementTNode, IfBranch, TNode } from '../../types.js';
 import { commentMarker, type BfidGen } from './bfid.js';
 import { isIfSetSite, type Site } from './collect.js';
 
 const BFID_RE = /\sdata-bfid="([^"]*)"/;
 const MARKER_PREFIX = 'bfid:';
 
-// The id inside a `bfid:<id>` marker comment, or null if `text` isn't one.
+// The id inside a `bfid:<id>` marker comment, or null if `text` isn't one. A branch
+// marker (`bfid:<setId>:<index>`) is not one: it never belongs to a pair.
 function markerId(text: string): string | null {
-	return text.startsWith(MARKER_PREFIX) ? text.slice(MARKER_PREFIX.length) : null;
+	if (!text.startsWith(MARKER_PREFIX)) return null;
+	const id = text.slice(MARKER_PREFIX.length);
+	return id.includes(':') ? null : id;
 }
 
 /**
@@ -43,6 +46,16 @@ export function ensureCommentsAround(
 	// `node` is now at idx+1; the closing marker goes right after it, at idx+2.
 	container.splice(idx + 2, 0, { type: 'comment', text: commentMarker(endId) });
 	return { startId, endId };
+}
+
+/**
+ * Open a `b-if` branch's content with its branch marker, so the rendered DOM shows
+ * which branch won. Idempotent, like `ensureCommentsAround`.
+ */
+export function ensureBranchMarker(branch: IfBranch, text: string): void {
+	const first = branch.tnodes[0];
+	if (first?.type === 'comment' && first.text === text) return;
+	branch.tnodes.unshift({ type: 'comment', text });
 }
 
 // Reuse an existing `data-bfid` static attr in `attrs`, or append one. Idempotent,

@@ -1,9 +1,9 @@
 import { assertEquals } from "jsr:@std/assert";
 
-import type { ElementTNode, PrintTNode, TNode } from "../../types.ts";
+import type { ElementTNode, IfBranch, PrintTNode, TNode } from "../../types.ts";
 import { interpretBackcode } from "../../backcode.ts";
 import { makeSequentialBfidGen } from "./bfid.ts";
-import { ensureBfid, ensureCommentsAround } from "./mutate-ast.ts";
+import { ensureBfid, ensureBranchMarker, ensureCommentsAround } from "./mutate-ast.ts";
 
 function el(attrs: any[] = []): ElementTNode {
 	return { type: 'element', tagName: 'div', attrs, tnodes: [] };
@@ -93,6 +93,30 @@ Deno.test("ensureCommentsAround is idempotent: a second call reuses the markers 
 	assertEquals(second, first);       // same ids
 	assertEquals(calls, 0);            // no new ids generated
 	assertEquals(container.length, 5); // no new comments spliced in
+});
+
+Deno.test("ensureCommentsAround does not mistake a branch marker for half of a pair", () => {
+	const print: TNode = { type: 'print', data: interpretBackcode('x') };
+	const container: TNode[] = [
+		{ type: 'comment', text: 'bfid:s0:0' }, print, { type: 'comment', text: 'bfid:other' },
+	];
+	const ids = ensureCommentsAround(container, print, makeSequentialBfidGen());
+	assertEquals(ids, { startId: 'bf0', endId: 'bf1' });
+	assertEquals(container.map((n: any) => n.text ?? n.type),
+		['bfid:s0:0', 'bfid:bf0', 'print', 'bfid:bf1', 'bfid:other']);
+});
+
+Deno.test("ensureBranchMarker puts the marker first in the branch, once", () => {
+	const branch: IfBranch = { tnodes: [{ type: 'raw', raw: '<p>A</p>' }] };
+	ensureBranchMarker(branch, 'bfid:s0:0');
+	ensureBranchMarker(branch, 'bfid:s0:0');
+	assertEquals(branch.tnodes, [{ type: 'comment', text: 'bfid:s0:0' }, { type: 'raw', raw: '<p>A</p>' }]);
+});
+
+Deno.test("ensureBranchMarker marks an empty branch", () => {
+	const branch: IfBranch = { tnodes: [] };
+	ensureBranchMarker(branch, 'bfid:s0:1');
+	assertEquals(branch.tnodes, [{ type: 'comment', text: 'bfid:s0:1' }]);
 });
 
 Deno.test("ensureCommentsAround throws when the node is not in the container", () => {

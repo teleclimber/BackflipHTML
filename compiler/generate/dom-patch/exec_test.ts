@@ -171,9 +171,11 @@ Deno.test("exec: missing markers log an error and skip without throwing", () => 
 // --- if-sets ---------------------------------------------------------------
 
 // A two-branch set whose first branch contains a patchable print, mirroring what
-// the compiler emits: the branch HTML carries the same data-bfid and marker
-// comments as the server-rendered output, so it stays patchable after a swap.
-const BRANCH_A = `{ type:'raw', raw:'<p data-bfid="p0">Hi ' },
+// the compiler emits: each branch opens with its branch marker, and the branch HTML
+// carries the same data-bfid and marker comments as the server-rendered output, so
+// it stays patchable after a swap.
+const BRANCH_A = `{ type:'comment', text:'bfid:s0:0' },
+	{ type:'raw', raw:'<p data-bfid="p0">Hi ' },
 	{ type:'comment', text:'bfid:m0' },
 	{ type:'print', data: { fn: function (name) { return name; }, vars: ['name'] } },
 	{ type:'comment', text:'bfid:m1' },
@@ -181,10 +183,10 @@ const BRANCH_A = `{ type:'raw', raw:'<p data-bfid="p0">Hi ' },
 
 const SET_SNAPSHOT = `{ type:'if', branches: [
 	{ condition: { fn: function (mode) { return mode == 'a'; }, vars: ['mode'] }, nodes: [ ${BRANCH_A} ] },
-	{ condition: undefined, nodes: [ { type:'raw', raw:'<em>none</em>' } ] }
+	{ condition: undefined, nodes: [ { type:'comment', text:'bfid:s0:1' }, { type:'raw', raw:'<em>none</em>' } ] }
 ] }`;
 
-const SERVER_HTML_A = `<!--bfid:s0--><p data-bfid="p0">Hi <!--bfid:m0-->World<!--bfid:m1--></p><!--bfid:s1-->`;
+const SERVER_HTML_A = `<!--bfid:s0--><!--bfid:s0:0--><p data-bfid="p0">Hi <!--bfid:m0-->World<!--bfid:m1--></p><!--bfid:s1-->`;
 
 // The set sits directly in the custom element, so its target is the ref element
 // (the host). `childSites` become the branch's own patch-branch, so branch content
@@ -222,7 +224,7 @@ Deno.test("exec: changing the condition var swaps the branch, and back again", (
 
 	// Markers survive every swap, so the range stays patchable.
 	const comments = [...host.childNodes].filter((n: any) => n.nodeType === 8).map((n: any) => n.nodeValue);
-	assertEquals(comments, ['bfid:s0', 'bfid:s1']);
+	assertEquals(comments, ['bfid:s0', 'bfid:s0:0', 'bfid:s1']);
 });
 
 Deno.test("exec: an unchanged branch index does not re-render", () => {
@@ -235,7 +237,7 @@ Deno.test("exec: an unchanged branch index does not re-render", () => {
 
 Deno.test("exec: a set with no b-else renders nothing when no branch matches", () => {
 	const snapshot = `{ type:'if', branches: [
-		{ condition: { fn: function (mode) { return mode == 'a'; }, vars: ['mode'] }, nodes: [ { type:'raw', raw:'<p>shown</p>' } ] }
+		{ condition: { fn: function (mode) { return mode == 'a'; }, vars: ['mode'] }, nodes: [ { type:'comment', text:'bfid:s0:0' }, { type:'raw', raw:'<p>shown</p>' } ] }
 	] }`;
 	const set = ifSite({
 		target: { kind: 'ref-element' }, conditions: [`mode == 'a'`], liveVars: ['mode'],
@@ -243,7 +245,7 @@ Deno.test("exec: a set with no b-else renders nothing when no branch matches", (
 	});
 	const root = patchBranch([], [set]);
 	const js = generateClassForPartial('my-widget', [{ name: 'mode', isBool: false }], root, 'render')!;
-	const { host, instance } = mount(js, 'my-widget', 'BackflipMyWidget', 'mode="a"', `<!--bfid:s0--><p>shown</p><!--bfid:s1-->`);
+	const { host, instance } = mount(js, 'my-widget', 'BackflipMyWidget', 'mode="a"', `<!--bfid:s0--><!--bfid:s0:0--><p>shown</p><!--bfid:s1-->`);
 	host.setAttribute('mode', 'z');
 	instance.update('mode');
 	assertEquals(host.querySelector('p'), null);
@@ -300,27 +302,29 @@ Deno.test("exec: re-rendering uses all live vars, not just the one that changed"
 // holds a print of `label`. Markers: outer s0/s1, inner m0/m1, print pm0/pm1.
 const INNER_SNAPSHOT = `{ type:'if', branches: [
 	{ condition: { fn: function (sub) { return sub == 'x'; }, vars: ['sub'] }, nodes: [
+		{ type:'comment', text:'bfid:m0:0' },
 		{ type:'raw', raw:'<p data-bfid="p0">Hi ' },
 		{ type:'comment', text:'bfid:pm0' },
 		{ type:'print', data: { fn: function (label) { return label; }, vars: ['label'] } },
 		{ type:'comment', text:'bfid:pm1' },
 		{ type:'raw', raw:'</p>' }
 	] },
-	{ condition: undefined, nodes: [ { type:'raw', raw:'<em>no</em>' } ] }
+	{ condition: undefined, nodes: [ { type:'comment', text:'bfid:m0:1' }, { type:'raw', raw:'<em>no</em>' } ] }
 ] }`;
 
 // As generated: the nested set appears by the name of its own module-level const.
 const OUTER_SNAPSHOT = `{ type:'if', branches: [
 	{ condition: { fn: function (mode) { return mode == 'a'; }, vars: ['mode'] }, nodes: [
+		{ type:'comment', text:'bfid:s0:0' },
 		{ type:'comment', text:'bfid:m0' },
 		bfif_m0,
 		{ type:'comment', text:'bfid:m1' }
 	] },
-	{ condition: undefined, nodes: [ { type:'raw', raw:'<span>B</span>' } ] }
+	{ condition: undefined, nodes: [ { type:'comment', text:'bfid:s0:1' }, { type:'raw', raw:'<span>B</span>' } ] }
 ] }`;
 
 const NESTED_SERVER_HTML =
-	`<!--bfid:s0--><!--bfid:m0--><p data-bfid="p0">Hi <!--bfid:pm0-->L<!--bfid:pm1--></p><!--bfid:m1--><!--bfid:s1-->`;
+	`<!--bfid:s0--><!--bfid:s0:0--><!--bfid:m0--><!--bfid:m0:0--><p data-bfid="p0">Hi <!--bfid:pm0-->L<!--bfid:pm1--></p><!--bfid:m1--><!--bfid:s1-->`;
 
 function mountNested(hostAttrs: string) {
 	const printChild = patchBranch([printSite({ kind: 'bfid-element', bfid: 'p0' }, 'label', 'pm0', 'pm1')]);
@@ -529,6 +533,43 @@ Deno.test("exec: an attribute changed before init is replayed once init runs", a
 
 	await parsed(dom);
 	assertEquals(host.textContent, 'Hello Mars!');
+});
+
+// The module for `<my-widget mode name>` holding SET_SNAPSHOT, whose first branch prints `name`.
+function setModule(mode: 'render' | 'base' | 'full'): string {
+	const child = patchBranch([printSite({ kind: 'bfid-element', bfid: 'p0' }, 'name', 'm0', 'm1')]);
+	const set = ifSite({
+		target: { kind: 'ref-element' }, conditions: [`mode == 'a'`, null], liveVars: ['mode'],
+		setId: 's0', endId: 's1', snapshot: SET_SNAPSHOT, subtreeVars: child.vars, branches: [child, null],
+	});
+	return generateClassForPartial('my-widget',
+		[{ name: 'mode', isBool: false }, { name: 'name', isBool: false }], patchBranch([], [set]), mode)!;
+}
+
+Deno.test("exec: a condition attribute changed before init renders the branch it now picks", async () => {
+	const { dom, doc } = defineDuringParse(setModule('full'), `<my-widget mode="a" name="World">${SERVER_HTML_A}</my-widget>`);
+	const host = doc.querySelector('my-widget')!;
+	host.setAttribute('mode', 'b');
+	await parsed(dom);
+	assertEquals(host.querySelector('p'), null);
+	assertEquals(host.querySelector('em')!.textContent, 'none');
+});
+
+Deno.test("exec: an element upgraded after its condition attribute changed renders the branch it now picks", async () => {
+	// The attribute changes before the element is defined at all; upgrade reports only
+	// its current value.
+	const dom = new JSDOM(`<!DOCTYPE html><body><my-widget mode="a" name="World">${SERVER_HTML_A}</my-widget></body>`,
+		{ runScripts: 'outside-only', beforeParse });
+	await parsed(dom);
+	const host = dom.window.document.querySelector('my-widget')!;
+	host.setAttribute('mode', 'b');
+	dom.window.eval(asScript(setModule('full')));
+	assertEquals(host.querySelector('em')!.textContent, 'none');
+
+	// And back: the swapped-in branch is patchable.
+	host.setAttribute('mode', 'a');
+	host.setAttribute('name', 'Mars');
+	assertEquals(host.querySelector('p')!.textContent, 'Hi Mars');
 });
 
 Deno.test("exec: moving the element does not re-initialize it", async () => {

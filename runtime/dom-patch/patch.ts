@@ -9,16 +9,9 @@ import { render, activeBranchIndex, execFn, type rfn, type IfRNode } from '../js
  * with `node`. The markers themselves survive, so the range stays patchable.
  */
 export function replaceBetween(parent: Node, startMarker: string, endMarker: string, node: Node): void {
-	let start: ChildNode | null = null, end: ChildNode | null = null;
-	for (const child of parent.childNodes) {
-		if (child.nodeType !== 8) continue;
-		if (child.nodeValue === startMarker) start = child;
-		else if (child.nodeValue === endMarker) end = child;
-	}
-	if (!start || !end) {
-		console.error(`BackflipHTML: comment markers ${startMarker} / ${endMarker} not found; skipping update`, parent);
-		return;
-	}
+	const range = findMarkers(parent, startMarker, endMarker);
+	if (!range) return;
+	const [start, end] = range;
 	let n = start.nextSibling;
 	while (n && n !== end) {
 		const next = n.nextSibling;
@@ -26,6 +19,36 @@ export function replaceBetween(parent: Node, startMarker: string, endMarker: str
 		n = next;
 	}
 	parent.insertBefore(node, end);
+}
+
+// The two marker comments among `parent`'s direct children. Missing ones mean the
+// rendered DOM diverged from the compiled template, so they are reported.
+function findMarkers(parent: Node, startMarker: string, endMarker: string): [ChildNode, ChildNode] | null {
+	let start: ChildNode | null = null, end: ChildNode | null = null;
+	for (const child of parent.childNodes) {
+		if (child.nodeType !== 8) continue;
+		if (child.nodeValue === startMarker) start = child;
+		else if (child.nodeValue === endMarker) end = child;
+	}
+	if (!start || !end) {
+		console.error(`BackflipHTML: comment markers ${startMarker} / ${endMarker} not found`, parent);
+		return null;
+	}
+	return [start, end];
+}
+
+// The index of the branch rendered between a set's markers, from the branch marker
+// that opens it; -1 when none is there.
+function renderedBranchIndex(parent: Node, desc: SetDesc): number {
+	const range = findMarkers(parent, desc.markers[0], desc.markers[1]);
+	if (!range) return -1;
+	for (let n = range[0].nextSibling; n && n !== range[1]; n = n.nextSibling) {
+		if (n.nodeType === 8) {
+			const idx = desc.branchMarkers.indexOf(n.nodeValue!);
+			if (idx !== -1) return idx;
+		}
+	}
+	return -1;
 }
 
 // --- descriptors ------------------------------------------------------------
@@ -62,6 +85,11 @@ export interface SetDesc {
 	subtreeVars: string[];
 	/** Index-aligned with the snapshot's branches; null for a branch with nothing to patch. */
 	branches: (BranchDesc | null)[];
+	/**
+	 * Index-aligned with the snapshot's branches: the comment that opens each branch's
+	 * content, so the DOM shows which branch is rendered.
+	 */
+	branchMarkers: string[];
 }
 
 /** A subtree that is wholly present or wholly absent: its own sites, and the sets it owns. */
@@ -85,9 +113,9 @@ interface SetState {
 }
 
 /**
- * Patches one branch's subtree, found under `refElem`. On construction it records each
- * owned set's active branch — without rendering, since the server already emitted it —
- * and creates that branch's patch-branch.
+ * Patches one branch's subtree, found under `refElem`. On construction it reads each
+ * owned set's rendered branch from the DOM — not from `data`, which may have changed
+ * since the render — and creates that branch's patch-branch.
  */
 export class PatchBranch {
 	desc: BranchDesc;
@@ -97,12 +125,15 @@ export class PatchBranch {
 	constructor(desc: BranchDesc, refElem: Element, data: Data) {
 		this.desc = desc;
 		this.refElem = refElem;
-		this.sets = desc.sets.map(d => ({
-			desc: d,
-			condVars: new Set(d.snapshot.branches.flatMap(b => b.condition?.vars ?? [])),
-			active: activeBranchIndex(d.snapshot, data),
-			children: new Map(),
-		}));
+		this.sets = desc.sets.map(d => {
+			const elem = this.target(d.bfid);
+			return {
+				desc: d,
+				condVars: new Set(d.snapshot.branches.flatMap(b => b.condition?.vars ?? [])),
+				active: elem ? renderedBranchIndex(elem, d) : -1,
+				children: new Map(),
+			};
+		});
 		for (const s of this.sets) this.createChild(s, s.active, data);
 	}
 

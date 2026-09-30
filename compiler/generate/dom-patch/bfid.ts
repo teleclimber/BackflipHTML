@@ -8,6 +8,12 @@ export function commentMarker(id: string): string {
 	return 'bfid:' + id;
 }
 
+// Text of the marker comment that opens branch `index` of the `b-if` set whose leading
+// marker is `setId` (e.g. `bfid:bf3:1`). The `:` sets it apart from a pair marker.
+export function branchMarker(setId: string, index: number): string {
+	return `${commentMarker(setId)}:${index}`;
+}
+
 export interface BfidOptions {
 	prefix?: string;
 }

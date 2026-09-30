@@ -1,5 +1,5 @@
 import { backcodeToJS } from '../js/nodes2js.js';
-import { commentMarker } from './bfid.js';
+import { branchMarker, commentMarker } from './bfid.js';
 import type { BackcodeSite, IfSetSite } from './collect.js';
 import type { GenerateMode } from '../../types.js';
 
@@ -178,9 +178,11 @@ function genBranchDesc(branch: PatchBranch, depth: number): string {
 function genSetDesc(s: IfSetPatchSite, depth: number): string {
 	const ind = '\t'.repeat(depth + 1);
 	const branches = s.branches.map(b => b ? genBranchDesc(b, depth + 2) : 'null');
+	const branchMarkers = s.branches.map((_, i) => `'${branchMarker(s.setId, i)}'`).join(', ');
 	return [
 		`{ bfid: ${bfidLiteral(s.target)}, markers: ${markersLiteral(s.setId, s.endId)},`,
 		`${ind}snapshot: ${ifConstName(s.setId)}, subtreeVars: [${s.subtreeVars.map(v => `'${v}'`).join(', ')}],`,
+		`${ind}branchMarkers: [${branchMarkers}],`,
 		`${ind}branches: ${genList(branches, depth + 1)} }`,
 	].join('\n');
 }

@@ -394,9 +394,10 @@ Deno.test("end-to-end: an if-set is bracketed by markers and its parent gets a b
 	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
 	if (!js) throw new Error('expected js');
 
-	// Markers bracket the whole set (one pair, not one per branch), inside the <div>.
+	// One marker pair brackets the whole set, inside the <div>; each branch opens with
+	// its own branch marker.
 	const root = file.partials.get('my-widget')!;
-	assertEquals(collectComments(root.tnodes), ['bfid:bf1', 'bfid:bf2']);
+	assertEquals(collectComments(root.tnodes), ['bfid:bf1', 'bfid:bf1:0', 'bfid:bf1:1', 'bfid:bf2']);
 	// The <div> is the nearest enclosing element, so it anchors the lookup.
 	const div = root.tnodes.find((n: any) => n.type === 'element') as ElementTNode;
 	assertEquals(div.attrs.some(a => a.type === 'static' && a.raw.includes('data-bfid="bf0"')), true);
@@ -404,7 +405,8 @@ Deno.test("end-to-end: an if-set is bracketed by markers and its parent gets a b
 	const { bfRoot, defined } = evalModule(js, 'my-widget');
 	assertEquals(bfRoot.sets.length, 1);
 	const set = bfRoot.sets[0];
-	assertEquals([set.bfid, set.markers, set.subtreeVars, set.branches], ['bf0', ['bfid:bf1', 'bfid:bf2'], [], [null, null]]);
+	assertEquals([set.bfid, set.markers, set.subtreeVars, set.branches, set.branchMarkers],
+		['bf0', ['bfid:bf1', 'bfid:bf2'], [], [null, null], ['bfid:bf1:0', 'bfid:bf1:1']]);
 	assertEquals(set.snapshot, defined.bfif_bf1);
 });
 
@@ -482,7 +484,7 @@ Deno.test("end-to-end: an if-set directly in the custom element targets the elem
 	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
 	if (!js) throw new Error('expected js');
 	const root = file.partials.get('my-widget')!;
-	assertEquals(collectComments(root.tnodes), ['bfid:bf0', 'bfid:bf1']);
+	assertEquals(collectComments(root.tnodes), ['bfid:bf0', 'bfid:bf0:0', 'bfid:bf0:1', 'bfid:bf1']);
 	assertEquals(evalModule(js, 'my-widget').bfRoot.sets[0].bfid, null);
 });
 
@@ -504,6 +506,40 @@ Deno.test("end-to-end: the if-set snapshot is taken after pass-1 markers are add
 	for (const marker of printSite.markers) {
 		assertEquals(snapshot.includes(`{ type: 'comment', text: '${marker}' }`), true);
 	}
+});
+
+Deno.test("end-to-end: each branch marker opens its branch, before any other marker", async () => {
+	// The first branch starts with a print, whose marker pair must come after the
+	// branch marker; the b-else branch is empty and still gets one.
+	const file = await compileCustomElement(
+		`<my-widget b-attr:mode><b-unwrap b-if="mode == 'a'">{{ mode }}</b-unwrap><b-unwrap b-else-if="mode == 'b'">B</b-unwrap><b-unwrap b-else></b-unwrap></my-widget>`
+	);
+	domPatch(file, { bfidGen: makeSequentialBfidGen() });
+	const ifNode = file.partials.get('my-widget')!.tnodes.find((n: any) => n.type === 'if') as any;
+	const firsts = ifNode.branches.map((b: any) => b.tnodes[0]);
+	assertEquals(firsts.map((n: any) => [n.type, n.text]),
+		[['comment', 'bfid:bf0:0'], ['comment', 'bfid:bf0:1'], ['comment', 'bfid:bf0:2']]);
+	assertEquals(collectComments(ifNode.branches[0].tnodes), ['bfid:bf0:0', 'bfid:bf2', 'bfid:bf3']);
+});
+
+Deno.test("end-to-end: the snapshot carries every branch marker", async () => {
+	const file = await compileCustomElement(
+		`<my-widget b-attr:mode><p b-if="mode == 'a'">A</p><em b-else>B</em></my-widget>`
+	);
+	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
+	if (!js) throw new Error('expected js');
+	const { bfRoot } = evalModule(js, 'my-widget');
+	const set = bfRoot.sets[0];
+	assertEquals(set.snapshot.branches.map((b: any) => b.nodes[0]),
+		set.branchMarkers.map((text: string) => ({ type: 'comment', text })));
+});
+
+Deno.test("end-to-end: a var-free b-if nested in a qualifying set gets no branch markers", async () => {
+	const file = await compileCustomElement(
+		`<my-widget b-attr:mode><div b-if="mode == 'a'"><p b-if="1 == 1">always</p></div><span b-else>B</span></my-widget>`
+	);
+	domPatch(file, { bfidGen: makeSequentialBfidGen() });
+	assertEquals(collectComments(file.partials.get('my-widget')!.tnodes), ['bfid:bf0', 'bfid:bf0:0', 'bfid:bf0:1', 'bfid:bf1']);
 });
 
 Deno.test("end-to-end: a render-mode module imports only BackflipShell", async () => {
@@ -549,10 +585,11 @@ Deno.test("end-to-end: a nested if-set is its own patch-branch (nesting supporte
 	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
 	if (!js) throw new Error('expected js');
 
-	// Three marker pairs in the AST: the outer set, the inner set, and the print
-	// inside it. The inner markers are also carried inside the outer's snapshot.
+	// Three marker pairs in the AST (the outer set, the inner set, and the print
+	// inside it), and a branch marker per branch: two for the outer set, one for the
+	// inner. The inner markers are also carried inside the outer's snapshot.
 	const comments = collectComments(file.partials.get('my-widget')!.tnodes);
-	assertEquals(comments.length, 6);
+	assertEquals(comments.length, 9);
 
 	// Two module-level snapshots, one per set.
 	assertEquals((js.match(/const bfif_/g) ?? []).length, 2);

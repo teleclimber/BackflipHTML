@@ -175,20 +175,31 @@ Deno.test("PatchBranch: a missing element is reported and the other sites still 
 });
 
 // A set directly in the host on `mode`: branch 0 (`mode == 'a'`) prints `name` and
-// has its own patch-branch; branch 1 is a b-else with nothing to patch.
+// has its own patch-branch; branch 1 is a b-else with nothing to patch. Each branch
+// opens with its branch marker (`b0`, `b1`).
 const SET_SNAPSHOT: IfRNode = { type: 'if', branches: [
 	{ condition: expr("mode == 'a'", ['mode']), nodes: [
+		{ type: 'comment', text: 'b0' },
 		{ type: 'raw', raw: '<p data-bfid="p">Hi ' },
 		{ type: 'comment', text: 'n0' },
 		{ type: 'print', data: expr('name', ['name']) },
 		{ type: 'comment', text: 'n1' },
 		{ type: 'raw', raw: '</p>' },
 	] },
-	{ nodes: [{ type: 'raw', raw: '<em>none</em>' }] },
+	{ nodes: [{ type: 'comment', text: 'b1' }, { type: 'raw', raw: '<em>none</em>' }] },
 ] };
 const BRANCH_A: BranchDesc = { sites: [{ bfid: 'p', markers: ['n0', 'n1'], expr: expr('name', ['name']) }], sets: [] };
-const SET: SetDesc = { bfid: null, markers: ['s0', 's1'], snapshot: SET_SNAPSHOT, subtreeVars: ['name'], branches: [BRANCH_A, null] };
-const SERVER_A = `<!--s0--><p data-bfid="p">Hi <!--n0-->World<!--n1--></p><!--s1-->`;
+const SET: SetDesc = {
+	bfid: null, markers: ['s0', 's1'], snapshot: SET_SNAPSHOT, subtreeVars: ['name'],
+	branches: [BRANCH_A, null], branchMarkers: ['b0', 'b1'],
+};
+const SERVER_A = `<!--s0--><!--b0--><p data-bfid="p">Hi <!--n0-->World<!--n1--></p><!--s1-->`;
+const SERVER_ELSE = `<!--s0--><!--b1--><em>none</em><!--s1-->`;
+// SET without its b-else: nothing renders when `mode` isn't 'a'.
+const SET_NO_ELSE: SetDesc = {
+	...SET, snapshot: { type: 'if', branches: [SET_SNAPSHOT.branches[0]] }, branches: [BRANCH_A], branchMarkers: ['b0'],
+};
+const SERVER_NONE = `<!--s0--><!--s1-->`;
 
 Deno.test("PatchBranch: constructing does not touch the DOM", () => {
 	const { el } = host(SERVER_A);
@@ -205,7 +216,7 @@ Deno.test("PatchBranch: a condition var swaps the branch, and back, keeping the 
 	pb.update('mode', { mode: 'a', name: 'World' });
 	assertEquals(el.querySelector('p')!.textContent, 'Hi World');
 	const comments = [...el.childNodes].filter(n => n.nodeType === 8).map(n => n.nodeValue);
-	assertEquals(comments, ['s0', 's1']);
+	assertEquals(comments, ['s0', 'b0', 's1']);
 });
 
 Deno.test("PatchBranch: an unchanged winning branch is not re-rendered", () => {
@@ -217,11 +228,10 @@ Deno.test("PatchBranch: an unchanged winning branch is not re-rendered", () => {
 });
 
 Deno.test("PatchBranch: with no b-else and no match, the set renders nothing", () => {
-	const snapshot: IfRNode = { type: 'if', branches: [SET_SNAPSHOT.branches[0]] };
 	const { el } = host(SERVER_A);
-	const pb = new PatchBranch({ sites: [], sets: [{ ...SET, snapshot, branches: [BRANCH_A] }] }, el, { mode: 'a', name: 'W' });
+	const pb = new PatchBranch({ sites: [], sets: [SET_NO_ELSE] }, el, { mode: 'a', name: 'W' });
 	pb.update('mode', { mode: 'z', name: 'W' });
-	assertEquals(el.innerHTML, '<!--s0--><!--s1-->');
+	assertEquals(el.innerHTML, SERVER_NONE);
 });
 
 Deno.test("PatchBranch: a subtree var is forwarded to the active branch", () => {
@@ -249,17 +259,18 @@ Deno.test("PatchBranch: a var in both the conditions and the subtree re-renders 
 	// `mode` picks the branch and is also printed inside it.
 	const snapshot: IfRNode = { type: 'if', branches: [
 		{ condition: expr("mode != 'off'", ['mode']), nodes: [
+			{ type: 'comment', text: 'b0' },
 			{ type: 'raw', raw: '<p data-bfid="p">' },
 			{ type: 'comment', text: 'n0' },
 			{ type: 'print', data: expr('mode', ['mode']) },
 			{ type: 'comment', text: 'n1' },
 			{ type: 'raw', raw: '</p>' },
 		] },
-		{ nodes: [{ type: 'raw', raw: '<em>off</em>' }] },
+		{ nodes: [{ type: 'comment', text: 'b1' }, { type: 'raw', raw: '<em>off</em>' }] },
 	] };
 	const branch: BranchDesc = { sites: [{ bfid: 'p', markers: ['n0', 'n1'], expr: expr('mode', ['mode']) }], sets: [] };
-	const set: SetDesc = { bfid: null, markers: ['s0', 's1'], snapshot, subtreeVars: ['mode'], branches: [branch, null] };
-	const { el } = host(`<!--s0--><p data-bfid="p"><!--n0-->x<!--n1--></p><!--s1-->`);
+	const set: SetDesc = { bfid: null, markers: ['s0', 's1'], snapshot, subtreeVars: ['mode'], branches: [branch, null], branchMarkers: ['b0', 'b1'] };
+	const { el } = host(`<!--s0--><!--b0--><p data-bfid="p"><!--n0-->x<!--n1--></p><!--s1-->`);
 	const pb = new PatchBranch({ sites: [], sets: [set] }, el, { mode: 'x' });
 	const p = el.querySelector('p');
 	// Same branch: forwarded, patched in place.
@@ -271,25 +282,82 @@ Deno.test("PatchBranch: a var in both the conditions and the subtree re-renders 
 	assertEquals(el.querySelector('em')!.textContent, 'off');
 });
 
+// An outer set on `on` whose first branch holds a <div> with an inner set on `sub`.
+const INNER: IfRNode = { type: 'if', branches: [
+	{ condition: expr("sub == 'x'", ['sub']), nodes: [{ type: 'comment', text: 'ib0' }, { type: 'raw', raw: '<b>X</b>' }] },
+	{ nodes: [{ type: 'comment', text: 'ib1' }, { type: 'raw', raw: '<i>Y</i>' }] },
+] };
+const OUTER: IfRNode = { type: 'if', branches: [
+	{ condition: expr('on', ['on']), nodes: [
+		{ type: 'comment', text: 'ob0' },
+		{ type: 'raw', raw: '<div data-bfid="d">' }, { type: 'comment', text: 'i0' }, INNER, { type: 'comment', text: 'i1' }, { type: 'raw', raw: '</div>' },
+	] },
+	{ nodes: [{ type: 'comment', text: 'ob1' }] },
+] };
+const INNER_SET: SetDesc = { bfid: 'd', markers: ['i0', 'i1'], snapshot: INNER, subtreeVars: [], branches: [null, null], branchMarkers: ['ib0', 'ib1'] };
+const OUTER_SET: SetDesc = {
+	bfid: null, markers: ['o0', 'o1'], snapshot: OUTER, subtreeVars: ['sub'],
+	branches: [{ sites: [], sets: [INNER_SET] }, null], branchMarkers: ['ob0', 'ob1'],
+};
+
 Deno.test("PatchBranch: a nested set swaps only its own range", () => {
-	const inner: IfRNode = { type: 'if', branches: [
-		{ condition: expr("sub == 'x'", ['sub']), nodes: [{ type: 'raw', raw: '<b>X</b>' }] },
-		{ nodes: [{ type: 'raw', raw: '<i>Y</i>' }] },
-	] };
-	const outer: IfRNode = { type: 'if', branches: [
-		{ condition: expr('on', ['on']), nodes: [
-			{ type: 'raw', raw: '<div data-bfid="d">' }, { type: 'comment', text: 'i0' }, inner, { type: 'comment', text: 'i1' }, { type: 'raw', raw: '</div>' },
-		] },
-		{ nodes: [] },
-	] };
-	const innerSet: SetDesc = { bfid: 'd', markers: ['i0', 'i1'], snapshot: inner, subtreeVars: [], branches: [null, null] };
-	const outerSet: SetDesc = { bfid: null, markers: ['o0', 'o1'], snapshot: outer, subtreeVars: ['sub'], branches: [{ sites: [], sets: [innerSet] }, null] };
-	const { el } = host(`<!--o0--><div data-bfid="d"><!--i0--><b>X</b><!--i1--></div><!--o1-->`);
-	const pb = new PatchBranch({ sites: [], sets: [outerSet] }, el, { on: true, sub: 'x' });
+	const { el } = host(`<!--o0--><!--ob0--><div data-bfid="d"><!--i0--><!--ib0--><b>X</b><!--i1--></div><!--o1-->`);
+	const pb = new PatchBranch({ sites: [], sets: [OUTER_SET] }, el, { on: true, sub: 'x' });
 	const div = el.querySelector('div');
 	pb.update('sub', { on: true, sub: 'y' });
 	assertEquals(el.querySelector('div'), div);   // the outer branch stayed
-	assertEquals(div!.innerHTML, '<!--i0--><i>Y</i><!--i1-->');
+	assertEquals(div!.innerHTML, '<!--i0--><!--ib1--><i>Y</i><!--i1-->');
+});
+
+// --- PatchBranch: the rendered branch is read from the DOM ------------------
+//
+// Data that changed before the patch-branch was built must not be mistaken for what
+// the server rendered.
+
+Deno.test("PatchBranch: DOM on branch 0, data on branch 1: the update renders branch 1", () => {
+	const { el } = host(SERVER_A);
+	const pb = new PatchBranch({ sites: [], sets: [SET] }, el, { mode: 'b', name: 'World' });
+	pb.update('mode', { mode: 'b', name: 'World' });
+	assertEquals(el.innerHTML, SERVER_ELSE);
+});
+
+Deno.test("PatchBranch: DOM on branch 1, data on branch 0: the update renders branch 0 and it patches", () => {
+	const { el } = host(SERVER_ELSE);
+	const { errors } = captureErrors(() => {
+		const pb = new PatchBranch({ sites: [], sets: [SET] }, el, { mode: 'a', name: 'World' });
+		pb.update('mode', { mode: 'a', name: 'World' });
+		pb.update('name', { mode: 'a', name: 'Mars' });
+	});
+	assertEquals(errors, []);
+	assertEquals(el.querySelector('p')!.textContent, 'Hi Mars');
+});
+
+Deno.test("PatchBranch: DOM with no branch, data on branch 0: the update renders branch 0", () => {
+	const { el } = host(SERVER_NONE);
+	const pb = new PatchBranch({ sites: [], sets: [SET_NO_ELSE] }, el, { mode: 'a', name: 'World' });
+	pb.update('mode', { mode: 'a', name: 'World' });
+	assertEquals(el.querySelector('p')!.textContent, 'Hi World');
+});
+
+Deno.test("PatchBranch: DOM on branch 0, data on no branch: the update empties the set", () => {
+	const { el } = host(SERVER_A);
+	const pb = new PatchBranch({ sites: [], sets: [SET_NO_ELSE] }, el, { mode: 'z', name: 'World' });
+	pb.update('mode', { mode: 'z', name: 'World' });
+	assertEquals(el.innerHTML, SERVER_NONE);
+});
+
+Deno.test("PatchBranch: a nested set reads its own rendered branch from the DOM", () => {
+	const { el } = host(`<!--o0--><!--ob0--><div data-bfid="d"><!--i0--><!--ib0--><b>X</b><!--i1--></div><!--o1-->`);
+	const pb = new PatchBranch({ sites: [], sets: [OUTER_SET] }, el, { on: true, sub: 'y' });
+	pb.update('sub', { on: true, sub: 'y' });
+	assertEquals(el.querySelector('div')!.innerHTML, '<!--i0--><!--ib1--><i>Y</i><!--i1-->');
+});
+
+Deno.test("PatchBranch: a set whose markers are missing is reported and treated as rendering nothing", () => {
+	const { el } = host(`<p data-bfid="p">Hi</p>`);
+	const { errors } = captureErrors(() => new PatchBranch({ sites: [], sets: [SET] }, el, { mode: 'a', name: 'W' }));
+	assertEquals(errors.length, 1);
+	assertEquals(String(errors[0][0]).includes('comment markers s0 / s1 not found'), true);
 });
 
 // --- BackflipShell -----------------------------------------------------------
