@@ -38,7 +38,7 @@ backflip <input-dir> <output-dir> --lang <js|php|dom-patch>
 - `<output-dir>` — must be empty (when provided via CLI); output files mirror the input directory structure
 - `--lang js` — generate JavaScript modules (`.js`)
 - `--lang php` — generate PHP files (`.php`)
-- `--lang dom-patch` — generate browser-side patcher classes (`.js`) for custom-element partials with reactive attributes (see [Configuration → `dom-patch`](configuration.md#lang-dom-patch))
+- `--lang dom-patch` — generate browser-side patcher classes (`.js`) for custom-element partials with reactive attributes (see [Client-side patching](dom-patch.md))
 
 **Examples:**
 
@@ -55,19 +55,7 @@ backflip ./templates ./out --lang dom-patch
 
 When the output directory is specified via CLI arguments, it must be empty before running. When the output directory comes from `backflip.json`, it is automatically emptied before writing. The input hierarchy is preserved, with `.html` extensions replaced by `.js` or `.php`.
 
-When a `dom-patch` output produces scripts but its output directory is not covered by any [asset](assets.md) prefix, the build prints a non-fatal warning and the generated scripts are **not** auto-included by the renderer:
-
-```
-warning: dom-patch output "<path>" is not covered by an asset prefix; generated scripts will not be auto-included. Add an asset entry whose directory contains this output dir.
-```
-
-Compiling also reports, against the definition tag, a custom element partial whose client JS does not add up (see [`b-generate`](partials.md#generated-client-js-b-generate)):
-
-- it declares `b-attr` but has neither `b-generate` nor `b-script`, so nothing is generated and the attributes patch nothing;
-- it is `base` or `render` with no `b-script`, so nothing loads the generated module;
-- it is `full` *and* has a `b-script`, so the element is registered twice.
-
-See [Configuration → `dom-patch`](configuration.md#lang-dom-patch) for how the generated module's URL is derived, and [Partials → Client script](partials.md#client-script-b-script) for `b-script`.
+A `dom-patch` build warns when its output directory is not covered by an asset entry, and when a custom element partial's client JS does not add up. See [Client-side patching](dom-patch.md#rules-and-errors).
 
 ## Check mode
 

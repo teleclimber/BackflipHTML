@@ -75,6 +75,7 @@ Tools that show how a subsystem reaches its results, for people working on that 
 
 - [Directives reference](docs/directives.md) — all `b-*` directives and the expression language
 - [Partials](docs/partials.md) — defining, including, and composing partials with slots
+- [Client-side patching](docs/dom-patch.md) — custom elements that update in the browser (`b-generate`)
 - [Assets](docs/assets.md) — configuring and referencing static assets like images and styles
 - [CLI](docs/cli.md) — compiling templates from the command line
 - [Configuration](docs/configuration.md) — `backflip.json` reference

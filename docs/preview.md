@@ -94,7 +94,7 @@ is navigable from any node.
 
 ## dom-patch reactivity
 
-Custom-element partials with reactive attributes compile to a [dom-patch](../compiler/generate/dom-patch/README.md) JS class that updates specific elements in the browser. Each patchable element is tagged with a `data-bfid` marker that the class locates via `querySelector`.
+Custom-element partials with reactive attributes compile to a [dom-patch](dom-patch.md) JS class that updates specific elements in the browser. Each patchable element is tagged with a `data-bfid` marker that the class locates via `querySelector`.
 
 Because bfids are generated per compile, the JS emitted by a separate `backflip build` would query ids that don't match what the preview renders. So the preview **regenerates the dom-patch JS on each render and serves that** instead of the on-disk build output — guaranteeing the served class queries the exact bfids in the previewed HTML.
 

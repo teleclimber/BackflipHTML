@@ -178,7 +178,7 @@ the whole value, so accepting one rewrites the value rather than appending to it
 ### Asset references
 
 Two attribute forms name an asset: any attribute with the `~` suffix (`src~=`,
-`:srcset~=`), and [`b-script=`](../docs/partials.md#client-script-b-script) on a
+`:srcset~=`), and [`b-script=`](../docs/dom-patch.md#client-script-b-script) on a
 custom element partial definition, which names a module rather than setting an
 attribute value and so carries no `~`. Hover, go-to-definition, find-references
 and completion all decide what the cursor is on through `src/asset-attr.ts`.

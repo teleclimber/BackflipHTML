@@ -61,13 +61,7 @@ The element is repeated once per item in `collection`. `item` is a new variable 
 
 All three directives compile to a single `IfTNode`. They can be nested freely inside `b-for` blocks and other `b-if` blocks.
 
-**Client-side reactivity.** Inside a custom-element partial that generates client JS (see [`b-generate`](partials.md#generated-client-js-b-generate)), a `b-if` set whose conditions are driven by `b-attr` variables re-renders in the browser when those attributes change — the branch is rendered client-side and swapped into place. Sets may be **nested**: an inner set becomes its own patch unit, so changing an inner condition re-renders just the inner branch, and content inside a rendered branch keeps patching. This applies to a set that is:
-
-- not inside a `b-for`;
-- driven only by `b-attr` variables in its own branch conditions — an expression elsewhere in the set, or a condition mixing in a non-`b-attr` variable, disqualifies the whole set;
-- free of partial references, custom-element calls, slots, and asset references anywhere in its subtree.
-
-Nested `b-for` is fine inside a reactive set; it is re-rendered as part of the branch that owns it. A set that doesn't meet these conditions still renders correctly server-side — it just stays frozen in the browser. See the [dom-patch generator](../compiler/generate/dom-patch/README.md) for the full rules.
+**Client-side reactivity.** Inside a custom element partial that uses [`b-generate`](#b-generate--client-side-patching), a `b-if` set driven by its declared attributes re-renders in the browser when they change. See [Reactive `b-if`](dom-patch.md#reactive-b-if) for which sets qualify.
 
 **Errors:**
 - `b-else` or `b-else-if` without a preceding `b-if` element
@@ -154,6 +148,20 @@ Use it when you need a directive target but don't want an extra wrapper element 
 ```
 
 `<b-unwrap>` works with all directives. It is also used in the partials system — see [`docs/partials.md`](partials.md).
+
+---
+
+## `b-generate` — client-side patching
+
+On a [custom element partial](partials.md#custom-element-partials) definition tag, `b-generate` has Backflip generate the JavaScript that patches the element's rendered HTML in the browser when one of its declared attributes changes. The value — `full`, `base` or `render` — says how much is generated and how much you write yourself.
+
+```html
+<my-widget b-attr:count b-generate="full">
+    <span :data-count="count">{{ count }}</span>
+</my-widget>
+```
+
+See [Client-side patching](dom-patch.md) for the modes, the companion `b-script` directive, and what updates.
 
 ---
 

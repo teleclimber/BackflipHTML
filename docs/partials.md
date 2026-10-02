@@ -280,7 +280,7 @@ The compiler reports errors for:
 - A required `b-attr` not provided at the call site, or `b-data:NAME` colliding with a declared `b-attr:NAME`
 - `b-data:NAME` at a call site where `NAME` does not appear in the target partial's data shape (i.e. the partial does not use a variable of that name and does not declare a `b-attr:NAME`). This catches typos and stale bindings that would otherwise be silently discarded.
 - A call site that does not pass a variable the target partial uses. The partial's context holds only what the call binds, so an unbound variable could only render empty (see [Partial scope](#partial-scope)).
-- `b-data:NAME` at a call site whose target generates client JS, or a variable used in such a partial that it does not declare (see [Rules and limits](#rules-and-limits)). Declare the value with `b-attr:NAME` instead.
+- `b-data:NAME` at a call site whose target generates client JS, or a variable used in such a partial that it does not declare (see [Client-side patching → Rules and errors](dom-patch.md#rules-and-errors)). Declare the value with `b-attr:NAME` instead.
 
 ---
 
@@ -428,80 +428,9 @@ For `b-attr:NAME.bool` (boolean):
 - A boolean `b-attr` used directly in a `{{ }}` interpolation produces a warning. Use a string `b-attr` if you need to print the value, or convert explicitly. (No warning for the reverse: a string `b-attr` used in a boolean context like `b-if`.)
 - `b-attr:NAME` should be all lowercase (hyphens are fine). HTML lowercases attribute names, so a name written as `b-attr:fooBar` is silently treated as `foobar`, and references to `fooBar` inside the partial body will not work. The compiler emits a warning when a `b-attr:` name contains uppercase letters.
 
-### Generated client JS (`b-generate`)
+### Client-side patching (`b-generate`, `b-script`)
 
-A custom element partial can have Backflip generate its browser-side JavaScript. `b-generate` on the definition tag says how much:
-
-| Value | Generated | You write |
-|---|---|---|
-| `full` | the patch class, an `HTMLElement` subclass, and `customElements.define()` | nothing |
-| `base` | the patch class and an `HTMLElement` subclass to extend | a subclass and its `customElements.define()` |
-| `render` | the patch class alone | the whole web component |
-
-```html
-<!-- works with no JavaScript of your own -->
-<my-widget b-attr:count b-generate="full">
-	<span :data-count="count">{{ count }}</span>
-</my-widget>
-```
-
-Each partial that generates JS gets **its own module**, named after its tag (`my-widget.js`) at the root of the [dom-patch output dir](configuration.md#lang-dom-patch). It exports:
-
-- `BackflipMyWidget` — the patch class. Constructed with the element, it reads the declared attributes and patches the rendered DOM. Always exported.
-- `BackflipMyWidgetElement` — the `HTMLElement` subclass driving it, for `base` and `full`.
-
-Nothing is generated when a partial has neither `b-generate` nor `b-script`; a partial that declares `b-attr` in that state builds with a warning, since its attributes cannot patch anything in the browser.
-
-#### Extending the generated class (`base`)
-
-```js
-import { BackflipMyWidgetElement } from '/bfdom/my-widget.js';
-
-class MyWidget extends BackflipMyWidgetElement {
-	static observedAttributes = [...super.observedAttributes, 'open'];
-
-	connectedCallback() {
-		super.connectedCallback();
-		this.addEventListener('click', () => this.toggleAttribute('open'));
-	}
-}
-customElements.define('my-widget', MyWidget);
-```
-
-Two rules the browser enforces silently, so the generated class is written around them:
-
-- `observedAttributes` and the lifecycle callbacks are read **once**, when `customElements.define()` runs, off the class you register. A subclass that declares `static observedAttributes` without spreading `super.observedAttributes`, or defines `connectedCallback` / `attributeChangedCallback` without calling `super`, stops the patching with no error. The generated class reports a missing attribute to the console when it initializes.
-- The generated class puts only `bf`-prefixed members on the element (`bfPatch`, `bfInit`, …) and on the class (`bfShell`), so the rest of the namespace is yours. `bfPatch` is the patch class instance, available once the element is connected and the document has parsed.
-
-Subclassing is not a way to extend a `full` partial: `customElements.define()` refuses a constructor that is already registered, and a subclass could only be registered under a different tag name — one the server never renders. Use `base` when you need your own behavior.
-
-#### Rules and limits
-
-- `b-generate` is allowed only on a custom element partial **definition** tag, takes one of the three values above, and cannot be bare.
-- **Data comes in through `b-attr` only.** The generated code patches the DOM in the browser from the values it can read off the element, so anything the browser cannot see could go stale the moment an attribute changes. Two rules follow: a variable the partial body uses must be declared with `b-attr:NAME`, and `b-data:NAME` on a call to such a partial is an error. It also means the partial takes strings and booleans, and no other kind of value.
-- With `b-script` present and no `b-generate`, the mode is `base` — your module registers the element.
-- `full` together with `b-script` warns: the element is already registered, and a second `define()` of the same tag throws.
-- A partial that generates JS must have a project-unique tag name (two definitions of one name would fight over the same module and the same registration).
-- The generated element patches **server-rendered** DOM. An element created in JavaScript (`document.createElement('my-widget')`) has no content to patch, and is not supported.
-- No shadow root is attached: patching works against the light-DOM children the server rendered.
-
-### Client script (`b-script`)
-
-For `base` and `render`, the browser needs your module — the one that subclasses or drives the generated class. Point the renderer at it with `b-script` on the definition tag, using an [asset path](assets.md):
-
-```html
-<my-widget b-attr:count b-script="@scripts/my-widget.js">
-	<span :data-count="count">{{ count }}</span>
-</my-widget>
-```
-
-When a page renders `<my-widget>`, the renderer auto-includes `@scripts/my-widget.js` as `<script type="module">` (the **entry**), and `<link rel="modulepreload">` for the generated module it imports (the **dependency**). With `b-generate="full"` there is no author module: the generated one *is* the entry. See [JS runtime → auto-include](runtime-js.md#dom-patch-script-auto-include) for placement and ordering.
-
-Rules:
-
-- `b-script` is allowed only on a custom element partial **definition** tag. Using it elsewhere is a compile error.
-- Its value is an asset path (`@name/subpath`); the asset directory must be configured (see [Assets](assets.md)) and the file must exist. At most one `b-script` per definition.
-- A `base` or `render` partial with no `b-script` builds with a warning — nothing would load the generated module.
+A custom element partial can have Backflip generate the JavaScript that keeps it live in the browser, re-patching its rendered HTML when a declared attribute changes. `b-generate` says how much is generated and `b-script` names your own module. Partials that use them take data through `b-attr` only. See [Client-side patching](dom-patch.md).
 
 ### Conflicting attributes
 
