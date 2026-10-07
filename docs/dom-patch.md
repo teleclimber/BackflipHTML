@@ -27,8 +27,9 @@ An expression that uses no variable never changes and is left alone. Only what a
 Not patched:
 
 - anything inside a `b-for` loop;
-- static attributes on nested custom-element calls, and dynamic ones that carry an asset reference (the browser has no asset map);
-- slot content, which belongs to the caller;
+- dynamic attributes on nested custom-element calls that carry an asset reference (`:src~`), since the browser has no asset map;
+- slot content passed to a nested custom element;
+- the partial's own slots, which hold the caller's content;
 - the contents of a `b-part` call.
 
 ### Reactive `b-if`
