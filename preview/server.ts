@@ -2,7 +2,7 @@ import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
-import { loadConfig, resolveConfigRoot, resolveAssetDirs, resolveDomPatchOutputDirs, type BackflipConfig } from '../compiler/config.js';
+import { loadConfig, resolveConfigRoot, resolveAssetDirs, resolveStoreDirs, resolveDomPatchOutputDirs, type BackflipConfig } from '../compiler/config.js';
 import { compileDirectory, type CompiledDirectory } from '../compiler/partials.js';
 import { collectRefSites, refSitesFor } from '../compiler/partial-refs.js';
 import { previewPartial } from './preview.js';
@@ -36,6 +36,7 @@ export interface ServerContext {
 	/** Config with asset prefixes rewritten to the preview's `/__assets/<name>/` serving prefixes, used to derive dom-patch script URLs. */
 	previewConfig?: BackflipConfig;
 	projectDir?: string;                // dir the config paths resolve against
+	storeDirs?: string[];               // absolute store dirs
 }
 
 /** Build the server context: compile templates and load CSS. */
@@ -55,9 +56,8 @@ export async function buildContext(projectDir: string, opts?: { domPatchTmpDir?:
 		assetMap = new Map(config.assets.map(a => [a.name, `/__assets/${a.name}/`]));
 	}
 
-	const { directory, errors } = await compileDirectory(inputDir,
-		assetMap || assetDirsMap ? { assetMap, assetDirs: assetDirsMap } : undefined
-	);
+	const storeDirs = resolveStoreDirs(projectDir, config);
+	const { directory, errors } = await compileDirectory(inputDir, { assetMap, assetDirs: assetDirsMap, storeDirs });
 
 	if (assetDirsMap) {
 		const refs = collectAllAssetReferences(directory.files, assetDirsMap);
@@ -104,7 +104,7 @@ export async function buildContext(projectDir: string, opts?: { domPatchTmpDir?:
 		assets: config.assets?.map(a => ({ ...a, prefix: `/__assets/${a.name}/` })),
 	};
 
-	return { directory, cssHrefs, templateRoot: inputDir, assetDirs: assetDirsMap, assetMap, domPatchOutputDirs, domPatchTmpDir, domPatchAssets: new Map(), previewConfig, projectDir };
+	return { directory, cssHrefs, templateRoot: inputDir, assetDirs: assetDirsMap, assetMap, domPatchOutputDirs, domPatchTmpDir, domPatchAssets: new Map(), previewConfig, projectDir, storeDirs };
 }
 
 interface IndexPartial {
@@ -408,6 +408,7 @@ if (import.meta.url === `file://${process.argv[1]}` ||
 		get domPatchAssets() { return ctx.domPatchAssets; },
 		get previewConfig() { return ctx.previewConfig; },
 		get projectDir() { return ctx.projectDir; },
+		get storeDirs() { return ctx.storeDirs; },
 	};
 
 	const server = createServer(liveCtx, sseClients);
@@ -424,11 +425,12 @@ if (import.meta.url === `file://${process.argv[1]}` ||
 			templateRoot: ctx.templateRoot,
 			configPath,
 			assetDirs: ctx.assetDirs ? Array.from(ctx.assetDirs.values()) : undefined,
+			storeDirs: ctx.storeDirs,
 		};
 	}
 
 	const onWatch: WatchCallback = async (category) => {
-		if (category === 'template' || category === 'config' || category === 'asset') {
+		if (category === 'template' || category === 'config' || category === 'asset' || category === 'store') {
 			try {
 				console.log('Recompiling templates...');
 				ctx = await buildContext(projectDir, { domPatchTmpDir: ctx.domPatchTmpDir });

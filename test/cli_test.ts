@@ -210,3 +210,55 @@ Deno.test("Config: reference to a dom-patch asset no template generates is still
         await fs.rm(workDir, { recursive: true, force: true });
     }
 });
+
+// A project with one store dir inside an asset path (served) and one outside it.
+async function writeStoresProject(workDir: string, extraStoreFiles: Record<string, string> = {}): Promise<void> {
+    const files: Record<string, string> = {
+        "templates/page.html": `<html b-name="page" b-export><body></body></html>\n`,
+        "static/stores/widgets.js": `import { BackflipStore } from '/static/bfdom/runtime/dom-patch/stores.js';\nexport default new BackflipStore('widgets');\n`,
+        "server/stores/users.js": `import { BackflipStore } from '/static/bfdom/runtime/dom-patch/stores.js';\nexport default new BackflipStore('users');\n`,
+        ...extraStoreFiles,
+    };
+    for (const [rel, content] of Object.entries(files)) {
+        await fs.mkdir(path.dirname(path.join(workDir, rel)), { recursive: true });
+        await fs.writeFile(path.join(workDir, rel), content);
+    }
+    await fs.writeFile(path.join(workDir, "backflip.json"), JSON.stringify({
+        root: "templates",
+        assets: [{ name: "static", path: "static", prefix: "/static/" }],
+        stores: ["static/stores", "server/stores"],
+    }));
+}
+
+Deno.test("Config: --check accepts served and unserved store dirs", async () => {
+    const workDir = path.join(TMPDIR, "cli-test-stores-ok");
+    await fs.rm(workDir, { recursive: true, force: true });
+    await writeStoresProject(workDir);
+    try {
+        const { code, stderr } = await runCli(["--check"], workDir);
+        assertEquals(code, 0, `Expected exit 0, got ${code}. stderr: ${stderr}`);
+    } finally {
+        await fs.rm(workDir, { recursive: true, force: true });
+    }
+});
+
+Deno.test("Config: --check reports store file errors with their file and position", async () => {
+    const workDir = path.join(TMPDIR, "cli-test-stores-bad");
+    await fs.rm(workDir, { recursive: true, force: true });
+    await writeStoresProject(workDir, {
+        "server/stores/dup.js": `import { BackflipStore } from '/x.js';\nexport default new BackflipStore('widgets');\n`,
+        "server/stores/bad.js": `export default 42;\n`,
+    });
+    try {
+        const { code, stderr } = await runCli(["--check"], workDir);
+        assertEquals(code, 1, `Expected exit 1. stderr: ${stderr}`);
+        const dup = path.join(workDir, "server/stores/dup.js");
+        const widgets = path.join(workDir, "static/stores/widgets.js");
+        const bad = path.join(workDir, "server/stores/bad.js");
+        assertEquals(stderr.includes(`${dup}:2:34: store "widgets" is also declared in ${widgets}`), true, stderr);
+        assertEquals(stderr.includes(`${widgets}:2:34: store "widgets" is also declared in ${dup}`), true, stderr);
+        assertEquals(stderr.includes(`${bad}:1:16: the default export of a store file must be`), true, stderr);
+    } finally {
+        await fs.rm(workDir, { recursive: true, force: true });
+    }
+});

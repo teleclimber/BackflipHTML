@@ -1,7 +1,7 @@
 import { assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert";
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
-import { loadConfig, resolveConfigRoot, resolveAssetDirs, resolveDomPatchOutputDirs, resolveDomPatchScriptUrl, CONFIG_FILENAME, type BackflipConfig } from './config.ts';
+import { loadConfig, resolveConfigRoot, resolveAssetDirs, resolveStoreDirs, resolveDomPatchOutputDirs, resolveDomPatchScriptUrl, CONFIG_FILENAME, type BackflipConfig } from './config.ts';
 
 const TMPDIR = '/tmp/claude-1000/';
 
@@ -440,4 +440,52 @@ Deno.test("resolveAssetDirs - resolves asset paths to absolute", () => {
 Deno.test("resolveAssetDirs - returns empty map when no assets", () => {
 	const result = resolveAssetDirs("/home/user/project", { root: "." });
 	assertEquals(result.size, 0);
+});
+
+// --- stores ---
+
+Deno.test("loadConfig - stores as a single dir", async () => {
+	const dir = await makeTempDir("stores_one");
+	await fs.mkdir(path.join(dir, "stores"), { recursive: true });
+	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({ root: ".", stores: "stores" }));
+	const { config, errors } = await loadConfig(dir);
+	assertEquals(config!.stores, ["stores"]);
+	assertEquals(errors, []);
+});
+
+Deno.test("loadConfig - stores as an array of dirs", async () => {
+	const dir = await makeTempDir("stores_many");
+	await fs.mkdir(path.join(dir, "a"), { recursive: true });
+	await fs.mkdir(path.join(dir, "b"), { recursive: true });
+	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({ root: ".", stores: ["a", "b"] }));
+	const { config, errors } = await loadConfig(dir);
+	assertEquals(config!.stores, ["a", "b"]);
+	assertEquals(errors, []);
+});
+
+Deno.test("loadConfig - throws when stores is not a string or array of strings", async () => {
+	const dir = await makeTempDir("stores_bad");
+	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({ root: ".", stores: ["a", 1] }));
+	await assertRejects(() => loadConfig(dir), Error, '"stores" must be a string or an array of strings');
+});
+
+Deno.test("loadConfig - throws when a stores dir escapes the project directory", async () => {
+	const dir = await makeTempDir("stores_escape");
+	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({ root: ".", stores: "../elsewhere" }));
+	await assertRejects(() => loadConfig(dir), Error, 'must not escape the project directory');
+});
+
+Deno.test("loadConfig - stores dir not found is a soft error", async () => {
+	const dir = await makeTempDir("stores_nodir");
+	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({ root: ".", stores: "nope" }));
+	const { config, errors } = await loadConfig(dir);
+	assertEquals(config!.stores, ["nope"]);
+	assertEquals(errors.length, 1);
+	assertStringIncludes(errors[0], 'stores directory not found: nope');
+});
+
+Deno.test("resolveStoreDirs - resolves store dirs to absolute", () => {
+	assertEquals(resolveStoreDirs("/proj", { root: ".", stores: ["static/stores", "server/stores"] }),
+		["/proj/static/stores", "/proj/server/stores"]);
+	assertEquals(resolveStoreDirs("/proj", { root: "." }), []);
 });

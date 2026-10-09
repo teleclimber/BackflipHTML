@@ -1,6 +1,6 @@
 /**
  * What can be written at the cursor: an asset path, a `b-part` target, a custom
- * element partial tag, or a slot name in `b-in`.
+ * element partial tag, a slot name in `b-in`, or a `b-store:` on a partial definition.
  *
  * Every item carries its own `textEdit` and `filterText`. Without them a client
  * falls back to the word under the cursor, and no editor's word pattern treats
@@ -17,11 +17,12 @@ import { CompletionItem, CompletionItemKind } from 'vscode-languageserver';
 import type { Position, Range } from 'vscode-languageserver';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 import { assetRefEditAtCursor } from './asset-attr.js';
-import { findEnclosingCallSiteTag, openAttrValueEdit, tagNameBeingTyped } from './tag-context.js';
+import { findEnclosingCallSiteTag, findEnclosingOpeningTag, isDefinitionTag, maskQuoted, openAttrValueEdit, tagNameBeingTyped } from './tag-context.js';
 import {
 	exportedPartials, partialsInFile, resolveCallTarget, visibleCustomElementDefs,
 	type PartialDef, type ProjectIndex,
 } from './index.js';
+import type { StoreTable } from '@backflip/html';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 
@@ -380,6 +381,45 @@ export function getGenerateCompletions(
 }
 
 /**
+ * `b-store:NAME` for each declared store, offered while an attribute name is typed
+ * on a partial definition tag. A store the tag already declares is left out.
+ */
+export function getStoreCompletions(
+	doc: TextDocument,
+	position: Position,
+	stores: StoreTable,
+): CompletionItem[] {
+	const line = doc.getText({ start: { line: position.line, character: 0 }, end: { line: position.line + 1, character: 0 } });
+	const m = line.substring(0, position.character).match(/(?<=\s)[\w:.-]*$/);
+	if (!m || m.index === undefined) return [];
+	const tag = findEnclosingOpeningTag(doc, position.line, position.character);
+	if (!tag || !isDefinitionTag(doc, tag)) return [];
+	// The cursor must be between attributes, not inside a quoted value.
+	const upToCursor = tag.openTagText.substring(0, doc.offsetAt(position) - tag.startOffset);
+	if (/["']/.test(maskQuoted(upToCursor))) return [];
+
+	const typed = m[0];
+	const ahead = line.substring(position.character).match(/^[\w:.-]*/)![0];
+	const range: Range = {
+		start: { line: position.line, character: m.index },
+		end: { line: position.line, character: position.character + ahead.length },
+	};
+	const declared = new Set([...tag.openTagText.matchAll(/\sb-store:([\w$]+)/g)].map(d => d[1]));
+	return [...stores.values()]
+		.filter(s => !declared.has(s.name))
+		.map(s => `b-store:${s.name}`)
+		.filter(label => matchesTyped(label, typed))
+		.map(label => ({
+			label,
+			kind: CompletionItemKind.Property,
+			detail: 'store',
+			filterText: typed,
+			sortText: sortKey('0', typed, label),
+			textEdit: { range, newText: label },
+		}));
+}
+
+/**
  * Everything offered at the cursor. The probes answer for disjoint positions,
  * so the first that has something to say is the answer.
  */
@@ -390,6 +430,7 @@ export async function getCompletions(
 	index: ProjectIndex,
 	assetDirs?: Map<string, string> | null,
 	readDir: ReadDir = readDirFromDisk,
+	stores?: StoreTable | null,
 ): Promise<CompletionItem[]> {
 	const line = doc.getText({
 		start: { line: position.line, character: 0 },
@@ -410,6 +451,11 @@ export async function getCompletions(
 
 	const slots = getSlotCompletions(doc, position, filePath, index);
 	if (slots.length > 0) return slots;
+
+	if (stores && stores.size > 0) {
+		const storeItems = getStoreCompletions(doc, position, stores);
+		if (storeItems.length > 0) return storeItems;
+	}
 
 	return getCustomElementCompletions(line, ch, position.line, filePath, index);
 }

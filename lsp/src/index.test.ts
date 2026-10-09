@@ -42,6 +42,7 @@ describe('buildIndex', () => {
 			files: new Map([
 				['page.html', { partials: new Map([['header', makeRoot([], loc)]]) }],
 			]),
+			stores: new Map(),
 		};
 
 		const index = buildIndex(dir);
@@ -60,6 +61,7 @@ describe('buildIndex', () => {
 			files: new Map([
 				['page.html', { partials: new Map([['main', makeRoot([ref])]]) }],
 			]),
+			stores: new Map(),
 		};
 
 		const index = buildIndex(dir);
@@ -75,6 +77,7 @@ describe('buildIndex', () => {
 			files: new Map([
 				['page.html', { partials: new Map([['main', makeRoot([ref])]]) }],
 			]),
+			stores: new Map(),
 		};
 
 		const index = buildIndex(dir);
@@ -92,6 +95,7 @@ describe('buildIndex', () => {
 					['card', makeRoot([], makeLoc(1, 1, 1, 15))],
 				]) }],
 			]),
+			stores: new Map(),
 		};
 
 		const index = buildIndex(dir);
@@ -108,6 +112,7 @@ describe('buildIndex', () => {
 					['card', makeRoot([], makeLoc(1, 1, 1, 20), { exported: true })],
 				]) }],
 			]),
+			stores: new Map(),
 		};
 
 		const index = buildIndex(dir);
@@ -123,6 +128,7 @@ describe('buildIndex', () => {
 					['card', makeRoot([], makeLoc(1, 1, 1, 20))],
 				]) }],
 			]),
+			stores: new Map(),
 		};
 
 		const index = buildIndex(dir);
@@ -138,6 +144,7 @@ describe('buildIndex', () => {
 					['card', makeRoot([makeSlot('header'), makeSlot(undefined), makeSlot('footer')], makeLoc(1, 1, 1, 20))],
 				]) }],
 			]),
+			stores: new Map(),
 		};
 
 		const index = buildIndex(dir);
@@ -189,6 +196,7 @@ describe('buildIndex', () => {
 			files: new Map([
 				['page.html', { partials: new Map([['main', makeRoot([ref])]]) }],
 			]),
+			stores: new Map(),
 		};
 
 		const index = buildIndex(dir);
@@ -289,7 +297,7 @@ describe('buildIndex — references nested in markup', () => {
 	}
 
 	function fileWith(tnodes: any[]): CompiledDirectory {
-		return { files: new Map([['page.html', { partials: new Map([['main', makeRoot(tnodes)]]) }]]) };
+		return { files: new Map([['page.html', { partials: new Map([['main', makeRoot(tnodes)]]) }]]), stores: new Map() };
 	}
 
 	it('finds a reference inside a plain element', () => {

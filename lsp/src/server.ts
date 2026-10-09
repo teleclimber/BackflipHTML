@@ -14,14 +14,15 @@ import {
 	DiagnosticSeverity,
 } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { compileDirectory, loadConfig, resolveConfigRoot, resolveAssetDirs, resolveDomPatchOutputDirs, CONFIG_FILENAME, previewPartial, parseBPartValue, type BackflipError, type CompiledFile, type CompileOptions, type LoadConfigResult } from '@backflip/html';
+import { compileDirectory, loadConfig, resolveConfigRoot, resolveAssetDirs, resolveStoreDirs, resolveDomPatchOutputDirs, CONFIG_FILENAME, previewPartial, parseBPartValue, type BackflipError, type CompiledFile, type CompileOptions, type LoadConfigResult, type StoreTable } from '@backflip/html';
 import { analyzeCss, discoverCssFiles, type CssAnalysisResult, type CssSourceFile } from '@backflip/css';
 import { discoverAssetFileInfos, collectAllAssetReferences, validateAssetFiles, buildAssetUsageReport, filterReport, renderAssetReportHtml, type AssetReference } from '@backflip/assets';
 import { buildIndex, type ProjectIndex } from './index.js';
 import { errorsToDiagnostics, cssFailuresToDiagnostics } from './diagnostics.js';
 import { assetAttrAtCursor } from './asset-attr.js';
 import { getCompletions } from './completion.js';
-import { findDefinition, findAssetDefinition, findCustomElementDefinition } from './definition.js';
+import { findDefinition, findAssetDefinition, findCustomElementDefinition, findStoreDefinition } from './definition.js';
+import { storeAtCursor } from './stores.js';
 import { findReferences, parseAssetRefAtCursor, findAssetReferences } from './references.js';
 import { getDocumentSymbols } from './symbols.js';
 import { getHover, findElementsForSelector, findRulesForElement, findCustomElementTagAtCursor } from './hover.js';
@@ -50,6 +51,11 @@ let assetDirs: Map<string, string> | undefined;
 let assetReferences: AssetReference[] = [];
 let domPatchOutputDirs: string[] = [];
 let domPatchTmpDir: string | undefined;
+let storeDirs: string[] = [];
+/** The declared stores, from the last compile. */
+let stores: StoreTable = new Map();
+/** Store files we published diagnostics for, so they can be cleared. */
+let knownStoreFiles: Set<string> = new Set();
 let fileWatcher: Watcher | null = null;
 
 connection.onInitialize((params: InitializeParams): InitializeResult => {
@@ -99,12 +105,15 @@ async function loadAndApplyConfig(): Promise<void> {
 			assetMap = undefined;
 			assetDirs = undefined;
 			domPatchOutputDirs = [];
+			storeDirs = [];
+			stores = new Map();
 			clearAllDiagnostics();
 			projectIndex = { partialDefs: new Map(), partialRefs: [] };
 			return;
 		}
 		templateRoot = resolveConfigRoot(workspaceRoot, config);
 		domPatchOutputDirs = resolveDomPatchOutputDirs(workspaceRoot, config);
+		storeDirs = resolveStoreDirs(workspaceRoot, config);
 		if (config.assets && config.assets.length > 0) {
 			assetMap = new Map(config.assets.map(a => [a.name, `/__assets/${a.name}/`]));
 			assetDirs = resolveAssetDirs(workspaceRoot, config);
@@ -126,6 +135,8 @@ async function loadAndApplyConfig(): Promise<void> {
 		assetMap = undefined;
 		assetDirs = undefined;
 		domPatchOutputDirs = [];
+		storeDirs = [];
+		stores = new Map();
 		configErrors = [];
 		clearAllDiagnostics();
 		projectIndex = { partialDefs: new Map(), partialRefs: [] };
@@ -156,6 +167,7 @@ function setupFileWatcher(): void {
 	if (assetDirs && assetDirs.size > 0) {
 		options.assetDirs = Array.from(assetDirs.values());
 	}
+	if (storeDirs.length > 0) options.storeDirs = storeDirs;
 
 	const onWatch: WatchCallback = (category) => {
 		if (category === 'config') {
@@ -181,6 +193,11 @@ function clearAllDiagnostics(): void {
 		connection.sendDiagnostics({ uri: `file://${cssPath}`, diagnostics: [] });
 	}
 	knownCssFiles = new Set();
+
+	for (const storeFile of knownStoreFiles) {
+		connection.sendDiagnostics({ uri: `file://${storeFile}`, diagnostics: [] });
+	}
+	knownStoreFiles = new Set();
 }
 
 async function recompile(): Promise<void> {
@@ -195,8 +212,10 @@ async function recompile(): Promise<void> {
 		const compileOpts: CompileOptions = { includeLocs: true };
 		if (assetMap) compileOpts.assetMap = assetMap;
 		if (assetDirs) compileOpts.assetDirs = assetDirs;
+		if (storeDirs.length > 0) compileOpts.storeDirs = storeDirs;
 		const { directory, errors } = await compileDirectory(templateRoot, compileOpts);
 		compiledFiles = directory.files;
+		stores = directory.stores;
 
 		// Collected once per compile and kept: validation, find-references and the
 		// usage report all read the same set.
@@ -266,6 +285,18 @@ async function recompile(): Promise<void> {
 				uri: `file://${cssPath}`,
 				diagnostics: cssDiags.get(cssPath) ?? [],
 			});
+		}
+
+		// Store file errors, published against the store files themselves: they live
+		// outside templateRoot, so their absolute path is the URI. A store file that
+		// had diagnostics and has none now is cleared.
+		const storeFiles = new Set([...diagsByFile.keys()].filter(f => path.isAbsolute(f)));
+		for (const storeFile of knownStoreFiles) {
+			if (!storeFiles.has(storeFile)) connection.sendDiagnostics({ uri: `file://${storeFile}`, diagnostics: [] });
+		}
+		knownStoreFiles = storeFiles;
+		for (const storeFile of storeFiles) {
+			connection.sendDiagnostics({ uri: `file://${storeFile}`, diagnostics: diagsByFile.get(storeFile)! });
 		}
 
 		// Also publish diagnostics for files without a specific file path
@@ -342,6 +373,13 @@ connection.onDefinition((params: DefinitionParams) => {
 	}
 
 	const relPath = path.relative(templateRoot, uri.replace('file://', ''));
+
+	// Check if cursor is on a store: its variable, or its b-store: attribute
+	const compiledFile = compiledFiles.get(relPath);
+	if (compiledFile) {
+		const store = storeAtCursor(doc, params.position, compiledFile, stores);
+		if (store) return findStoreDefinition(store, uri);
+	}
 
 	// Check if cursor is on a custom element partial tag
 	const ceTag = findCustomElementTagAtCursor(line, params.position.character);
@@ -441,7 +479,7 @@ connection.onHover((params: HoverParams) => {
 	const hasAssetAttr = assetAttrAtCursor(line, ch) !== null;
 	connection.console.log(`[hover] file=${relPath} line=${params.position.line} ch=${ch} assetDirs=${assetDirs ? assetDirs.size : 'null'} hasAssetAttr=${hasAssetAttr} line=${JSON.stringify(line.trimEnd())}`);
 
-	const result = getHover(doc, params.position, relPath, projectIndex, cssAnalysis, cssPaths, templateRoot, assetDirs, compiledFiles.get(relPath));
+	const result = getHover(doc, params.position, relPath, projectIndex, cssAnalysis, cssPaths, templateRoot, assetDirs, compiledFiles.get(relPath), stores);
 	if (result) {
 		const preview = typeof result.contents === 'object' && 'value' in result.contents
 			? result.contents.value.substring(0, 80)
@@ -466,7 +504,7 @@ connection.onCompletion(async (params: CompletionParams): Promise<CompletionList
 	if (!doc) return empty;
 
 	const relPath = path.relative(templateRoot, params.textDocument.uri.replace('file://', ''));
-	const items = await getCompletions(doc, params.position, relPath, projectIndex, assetDirs);
+	const items = await getCompletions(doc, params.position, relPath, projectIndex, assetDirs, undefined, stores);
 	return { isIncomplete: true, items };
 });
 

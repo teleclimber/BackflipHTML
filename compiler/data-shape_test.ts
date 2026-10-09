@@ -428,6 +428,70 @@ Deno.test("inferDataShape: b-for loop var used directly in print", () => {
 	assertUsages(s.elementShape!, ['printed']);
 });
 
+Deno.test("inferDataShape: b-for over a member path puts elementShape on that path", () => {
+	const root = makeRoot([
+		makeForReal('m', 'meters.data', [makePrintReal('m.index')]),
+	]);
+	const s = inferDataShape(root).get('meters')!;
+	assertEquals(s.elementShape, undefined);
+	const data = s.properties!.get('data')!;
+	assertUsages(data, ['iterable']);
+	assertUsages(data.elementShape!.properties!.get('index')!, ['printed']);
+});
+
+Deno.test("inferDataShape: b-for over a deep member path puts elementShape on the leaf", () => {
+	const root = makeRoot([
+		makeForReal('c', 'a.b.c', [makePrintReal('c.name')]),
+	]);
+	const a = inferDataShape(root).get('a')!;
+	const b = a.properties!.get('b')!;
+	const c = b.properties!.get('c')!;
+	assertEquals(a.elementShape, undefined);
+	assertEquals(b.elementShape, undefined);
+	assertUsages(c, ['iterable']);
+	assertUsages(c.elementShape!.properties!.get('name')!, ['printed']);
+});
+
+Deno.test("inferDataShape: b-for over an indexed path puts elementShape on the indexed entry", () => {
+	const root = makeRoot([
+		makeForReal('r', 'rows[k]', [makePrintReal('r.name')]),
+	]);
+	const shapes = inferDataShape(root);
+	const rows = shapes.get('rows')!;
+	assertEquals(rows.indexed, true);
+	assertEquals(rows.indexVars, ['k']);
+	assertUsages(rows, ['iterable']);
+	assertUsages(rows.elementShape!.properties!.get('name')!, ['printed']);
+	assertEquals(shapes.has('k'), true);
+	assertEquals(shapes.get('k')!.elementShape, undefined);
+});
+
+Deno.test("inferDataShape: nested b-for over a member of the outer loop var", () => {
+	const root = makeRoot([
+		makeForReal('group', 'groups', [
+			makeForReal('item', 'group.items', [makePrintReal('item.name')]),
+		]),
+	]);
+	const groups = inferDataShape(root).get('groups')!;
+	const group = groups.elementShape!;
+	assertEquals(group.elementShape, undefined);
+	const items = group.properties!.get('items')!;
+	assertUsages(items, ['iterable']);
+	assertUsages(items.elementShape!.properties!.get('name')!, ['printed']);
+});
+
+Deno.test("inferDataShape: b-for over a ternary puts elementShape on the branches, not the test", () => {
+	const root = makeRoot([
+		makeForReal('x', 'flag ? a.list : b', [makePrintReal('x.name')]),
+	]);
+	const shapes = inferDataShape(root);
+	assertEquals(shapes.get('flag')!.elementShape, undefined);
+	assertEquals(shapes.get('a')!.elementShape, undefined);
+	const list = shapes.get('a')!.properties!.get('list')!;
+	assertUsages(list.elementShape!.properties!.get('name')!, ['printed']);
+	assertUsages(shapes.get('b')!.elementShape!.properties!.get('name')!, ['printed']);
+});
+
 // --- Passed to partial ---
 
 Deno.test("inferDataShape: passed usage from b-data binding", () => {
@@ -532,6 +596,52 @@ Deno.test("inferDataShape: computed member sets indexed flag", () => {
 	assertUsages(s, ['printed']);
 	assertEquals(s.indexed, true);
 	assertUsages(shapes.get('idx')!, ['printed']);
+});
+
+Deno.test("inferDataShape: an index variable inside a property chain is a free variable", () => {
+	for (const code of ['items[idx].name', 'store.data[idx].name', 'store.data[idx]', 'a.b[idx].c.d', 'a[b.c[idx].d]']) {
+		const shapes = inferDataShape(makeRoot([makePrintReal(code)]));
+		assertEquals(shapes.has('idx'), true, `${code}: ${[...shapes.keys()]}`);
+	}
+});
+
+Deno.test("inferDataShape: an index variable inside a property chain in an attribute is a free variable", () => {
+	const el: ElementTNode = {
+		type: 'element', tagName: 'a', tnodes: [],
+		attrs: [{ type: 'dynamic', name: 'title', expr: realParsed('m.list[k].label'), isBoolean: false }],
+	};
+	const shapes = inferDataShape(makeRoot([el]));
+	assertUsages(shapes.get('k')!, ['printed']);
+});
+
+Deno.test("inferDataShape: an index is used as a key, whatever the expression's context", () => {
+	const ifNode: IfTNode = { type: 'if', branches: [{ condition: realParsed('m[a] ? n.x[b].y : o[c]'), tnodes: [] }] };
+	const shapes = inferDataShape(makeRoot([ifNode]));
+	for (const v of ['a', 'b', 'c']) assertUsages(shapes.get(v)!, ['printed']);
+	assertEquals(shapes.get('m')!.usages.has('boolean'), true);
+});
+
+Deno.test("inferDataShape: an indexed shape records the variable it is indexed by", () => {
+	const shapes = inferDataShape(makeRoot([makePrintReal('items[idx]'), makePrintReal('widgets.data[widget_id].name')]));
+	assertEquals(shapes.get('items')!.indexVars, ['idx']);
+	assertEquals(shapes.get('widgets')!.properties!.get('data')!.indexVars, ['widget_id']);
+});
+
+Deno.test("inferDataShape: index variables merge across uses", () => {
+	const shapes = inferDataShape(makeRoot([makePrintReal('m[a].x'), makePrintReal('m[b].y'), makePrintReal('m[a].z')]));
+	assertEquals(shapes.get('m')!.indexVars, ['a', 'b']);
+});
+
+Deno.test("inferDataShape: a literal, a loop variable or an expression index records no index variable", () => {
+	const shapes = inferDataShape(makeRoot([
+		makePrintReal('lit[0].name'),
+		makePrintReal('expr[a + b]'),
+		makeForReal('i', 'ids', [makePrintReal('looped[i].name')]),
+	]));
+	assertEquals(shapes.get('lit')!.indexVars, undefined);
+	assertEquals(shapes.get('expr')!.indexVars, undefined);
+	assertEquals(shapes.get('looped')!.indexVars, undefined);
+	assertEquals(shapes.get('looped')!.indexed, true);
 });
 
 Deno.test("inferDataShape: slot contents tracked in caller scope", () => {

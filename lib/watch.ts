@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-export type WatchCategory = 'template' | 'config' | 'asset';
+export type WatchCategory = 'template' | 'config' | 'asset' | 'store';
 
 export type WatchCallback = (category: WatchCategory) => void;
 
@@ -12,6 +12,8 @@ export interface WatchOptions {
 	configPath?: string;
 	/** Absolute paths to asset directories to watch. */
 	assetDirs?: string[];
+	/** Absolute paths to store directories to watch (for .js files). */
+	storeDirs?: string[];
 	/** Debounce interval in milliseconds (default 150). */
 	debounceMs?: number;
 }
@@ -177,6 +179,16 @@ export function createWatcher(options: WatchOptions, callback: WatchCallback): W
 				existenceCategory: 'config',
 			}));
 		}
+	}
+
+	// Watch each store directory for store file changes; existence changes emit
+	// `config`, as for asset directories.
+	for (const storeDir of options.storeDirs ?? []) {
+		watchers.push(trackDir(storeDir, debounced, {
+			contentCategory: 'store',
+			existenceCategory: 'config',
+			contentFilter: (filename) => filename.endsWith('.js'),
+		}));
 	}
 
 	// Watch config file.

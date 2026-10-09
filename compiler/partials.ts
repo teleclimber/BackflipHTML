@@ -1,5 +1,4 @@
 import * as fs from 'node:fs/promises';
-import type { Dirent } from 'node:fs';
 import * as path from 'node:path';
 import stream from 'node:stream';
 import { RewritingStream } from 'parse5-html-rewriting-stream';
@@ -8,41 +7,13 @@ import { collectSlots, isCustomElementTagName, parseBPartValue, VOID_ELEMENTS } 
 import { resolvePartial, resolveCustomElementCalls, linkBAttrBindings } from './link.js';
 import type { CompiledFile, CompileOptions, PartialRegistry, PartialRefTNode, PartialDef, TNode, RawTNode, SourceLoc } from './types.js';
 import { BackflipError } from './errors.js';
+import { collectFiles } from './files.js';
+import { buildStoreTable, readStoreFiles, type StoreTable } from './stores.js';
 import { validateBAttrUsage, validateGeneratedPartialInputs, inferDataShape } from './data-shape.js';
 
 export interface CompiledDirectory {
     files: Map<string, CompiledFile>  // key: relative file path e.g. "blog/general.html"
-}
-
-/**
- * Recursively collect all .html files under `dir`, returning relative paths.
- */
-const SKIP_DIRS = new Set(['node_modules', '.git', 'dist']);
-
-async function collectHtmlFiles(dir: string, base: string = dir): Promise<string[]> {
-    let entries: Dirent<string>[];
-    try {
-        entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch (err: any) {
-        // A missing directory (e.g. a template root that hasn't been created yet,
-        // or a subdirectory removed mid-scan) contributes no files rather than
-        // crashing the caller. Watch-based tools rely on this to start and then
-        // pick the directory up once it appears.
-        if (err?.code === 'ENOENT') return [];
-        throw err;
-    }
-    const results: string[] = [];
-    for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-            if (SKIP_DIRS.has(entry.name)) continue;
-            const sub = await collectHtmlFiles(fullPath, base);
-            results.push(...sub);
-        } else if (entry.isFile() && entry.name.endsWith('.html')) {
-            results.push(path.relative(base, fullPath));
-        }
-    }
-    return results;
+    stores: StoreTable
 }
 
 /**
@@ -415,15 +386,28 @@ function validateTNode(
             // it declares belong here, which is what reopens b-data: for them below.
             const declaredProps = new Set<string>();
             const generatesJs = ceTarget?.generate !== undefined;
+            // A declared store comes from the renderer, never from the call site.
+            const declaredStores = new Set((targetPartial.stores ?? []).map(s => s.name));
+
+            // --- Reject b-data naming a store the target declares ----------------------
+            const rejected = new Set<string>();
+            for (const binding of ref.bindings) {
+                if (!declaredStores.has(binding.name)) continue;
+                rejected.add(binding.name);
+                ctx.errors.push(new BackflipError(
+                    `b-data:${binding.name} is not allowed: <${ref.partialName}> declares b-store:${binding.name}, which it gets from the renderer`,
+                    errorLoc(ctx.sourceRelPath, binding.nameLoc ?? ref.loc)
+                ));
+            }
 
             // --- Reject b-data on a partial that generates client JS -------------------
             // Such a partial is patched in the browser, which sees only what the
             // definition declares — so it takes declared inputs, not free-form data.
             // (a b-part call cannot target a custom element, so the kind check is
             // narrowing for the tag name, not an extra condition)
-            const rejected = new Set<string>();
             if (generatesJs && ref.kind === 'custom-element') {
                 for (const binding of ref.bindings) {
+                    if (rejected.has(binding.name)) continue;
                     // Bindings synthesized from a declared attribute, and values bound to a
                     // declared prop, are the accepted inputs. Anything else came from a
                     // b-data: the browser could not see. A name that is both b-data and
@@ -464,7 +448,7 @@ function validateTNode(
             // validateGeneratedPartialInputs reports it — once, whether or not it is called.
             const bound = new Set(ref.bindings.map(b => b.name));
             const missing = generatesJs ? [] : [...shape.keys()]
-                .filter(v => !bound.has(v) && !declaredAttrs.has(v))
+                .filter(v => !bound.has(v) && !declaredAttrs.has(v) && !declaredStores.has(v))
                 .sort();
             if (missing.length > 0) {
                 const subject = missing.length === 1 ? 'variable' : 'variables';
@@ -570,17 +554,19 @@ function sliceLines(html: string, from: number, to: number): { slice: string, st
 /**
  * Compile all HTML template files in a directory.
  *
- * Reads every .html file under `dir` and hands the contents to `compileFiles`,
- * which does all the work. Keys in the result are paths relative to `dir`.
+ * Reads every .html file under `dir`, and every store file under
+ * `options.storeDirs`, and hands the contents to `compileFiles`, which does all
+ * the work. Keys in the result are paths relative to `dir`.
  */
 export async function compileDirectory(dir: string, options?: CompileOptions): Promise<{ directory: CompiledDirectory, errors: BackflipError[] }> {
-    const relPaths = await collectHtmlFiles(dir);
+    const relPaths = await collectFiles(dir, '.html');
     const fileContents = new Map<string, string>();
     await Promise.all(relPaths.map(async (relPath) => {
         const absPath = path.join(dir, relPath);
         fileContents.set(relPath, await fs.readFile(absPath, 'utf-8'));
     }));
-    return compileFiles(fileContents, options);
+    if (!options?.storeDirs?.length) return compileFiles(fileContents, options);
+    return compileFiles(fileContents, { ...options, storeFiles: await readStoreFiles(options.storeDirs) });
 }
 
 /**
@@ -598,6 +584,10 @@ export async function compileDirectory(dir: string, options?: CompileOptions): P
  */
 export async function compileFiles(fileContents: Map<string, string>, options?: CompileOptions): Promise<{ directory: CompiledDirectory, errors: BackflipError[] }> {
     const allErrors: BackflipError[] = [];
+
+    const { stores, errors: storeErrors } = buildStoreTable(options?.storeFiles ?? new Map(), options?.assetDirs);
+    allErrors.push(...storeErrors);
+    options = { ...options, stores };
 
     // Pass 1: build the registry from the given sources
     const relPaths = [...fileContents.keys()];
@@ -691,5 +681,5 @@ export async function compileFiles(fileContents: Map<string, string>, options?: 
         }
     }
 
-    return { directory: { files }, errors: allErrors };
+    return { directory: { files, stores }, errors: allErrors };
 }

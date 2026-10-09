@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, CommentTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, CustomElementCallTNode, PartialBinding, ElementTNode, AttrBindTNode, AttrPart, CompiledFile } from '../../types.js';
+import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, CommentTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, CustomElementCallTNode, PartialBinding, ElementTNode, AttrBindTNode, AttrPart, CompiledFile, PartialStore } from '../../types.js';
 import type { Parsed } from '../../backcode.js';
 import { generatePhpFunction } from './generatephp.js';
 import { collectPartialRefs } from '../../walk.js';
@@ -8,12 +8,14 @@ export function sanitizeName(name: string): string {
 	return name.replace(/[^a-zA-Z0-9_$]/g, '_');
 }
 
-export function nodeToPhp(n: TNode | RootTNode, assetMap?: Map<string, string>): string {
+// `partialName` is the name of the partial a root node is, which render errors
+// about its stores name.
+export function nodeToPhp(n: TNode | RootTNode, assetMap?: Map<string, string>, partialName?: string): string {
 	let out = '';
 
 	switch (n.type) {
 		case 'root':
-			out = rootToPhp(n, assetMap);
+			out = rootToPhp(n, assetMap, partialName);
 			break;
 		case 'for':
 			out = forToPhp(n, assetMap);
@@ -49,19 +51,26 @@ export function nodeToPhp(n: TNode | RootTNode, assetMap?: Map<string, string>):
 	return out;
 }
 
-function rootToPhp(n: RootTNode, assetMap?: Map<string, string>): string {
+function rootToPhp(n: RootTNode, assetMap?: Map<string, string>, partialName?: string): string {
 	const nodes = n.tnodes.map(nn => nodeToPhp(nn, assetMap)).join(',\n    ');
+	const stores = n.stores && n.stores.length > 0
+		? `${partialName ? `, 'name' => '${escapeStr(partialName)}'` : ''}, 'stores' => [${n.stores.map(storeToPhp).join(', ')}]`
+		: '';
 	if (n.kind === 'custom-element') {
 		const scripts = n.scripts && n.scripts.length > 0
 			? `, 'scripts' => [${n.scripts.map(s => `['url' => '${escapeStr(s.url)}', 'kind' => '${s.kind}']`).join(', ')}]`
 			: '';
 		if (n.definitionAttrs && n.definitionAttrs.length > 0) {
 			const defAttrs = attrPartsToAttrsOnlyRNodePhp(n.definitionAttrs, assetMap);
-			return `['type' => 'root', 'customElement' => true${scripts}, 'definitionAttrNodes' => [\n    ${defAttrs}\n], 'nodes' => [\n    ${nodes}\n]]`;
+			return `['type' => 'root', 'customElement' => true${scripts}${stores}, 'definitionAttrNodes' => [\n    ${defAttrs}\n], 'nodes' => [\n    ${nodes}\n]]`;
 		}
-		return `['type' => 'root', 'customElement' => true${scripts}, 'definitionAttrNodes' => [], 'nodes' => [\n    ${nodes}\n]]`;
+		return `['type' => 'root', 'customElement' => true${scripts}${stores}, 'definitionAttrNodes' => [], 'nodes' => [\n    ${nodes}\n]]`;
 	}
-	return `['type' => 'root', 'nodes' => [\n    ${nodes}\n]]`;
+	return `['type' => 'root'${stores}, 'nodes' => [\n    ${nodes}\n]]`;
+}
+
+function storeToPhp(s: PartialStore): string {
+	return `['name' => '${s.name}', 'shipped' => ${s.shipped ? 'true' : 'false'}${s.src ? `, 'src' => '${escapeStr(s.src)}'` : ''}]`;
 }
 
 function forToPhp(for_node: ForTNode, assetMap?: Map<string, string>): string {
@@ -323,7 +332,7 @@ export function fileToPhpFile(file: CompiledFile, filePath: string, assetMap?: M
 	const assignments: string[] = [];
 	for (const name of sorted) {
 		const root = file.partials.get(name)!;
-		assignments.push(`$${sanitizeName(name)} = ${nodeToPhp(root, assetMap)};`);
+		assignments.push(`$${sanitizeName(name)} = ${nodeToPhp(root, assetMap, name)};`);
 	}
 
 	// Build compact call

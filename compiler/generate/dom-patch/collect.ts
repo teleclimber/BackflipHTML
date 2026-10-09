@@ -25,7 +25,7 @@ export type BackcodeSiteKind =
 export interface BackcodeSite {
 	site: BackcodeSiteKind;
 	parsed: Parsed;
-	/** The declared attributes this site's expression names — every variable in it. */
+	/** The declared inputs (b-attr and b-store) this site's expression names — every variable in it. */
 	liveVars: string[];
 	inForLoop: boolean;
 }

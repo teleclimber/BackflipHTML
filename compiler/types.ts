@@ -1,4 +1,5 @@
 import type { Parsed } from './backcode.js';
+import type { StoreTable } from './stores.js';
 
 export interface SourceLoc {
 	startLine: number;    // 1-based
@@ -23,6 +24,20 @@ interface BaseRoot {
 	loc?: SourceLoc,
 	exported?: boolean,
 	meta?: PartialMeta,
+	stores?: PartialStore[],  // the stores declared with b-store:NAME, in source order
+}
+
+// A store a partial declares with b-store:NAME. Every rendered partial gets each
+// one it declares in its context; a shipped one also reaches the browser.
+//  - src:     the store file's URL, while an asset dir serves it — an "@name/subpath"
+//             path until resolveAssetRefs rewrites it
+//  - shipped: the partial's generated client code reads it (set by applyDomPatch)
+//  - loc:     the b-store: attribute
+export interface PartialStore {
+	name: string,
+	src?: string,
+	shipped?: boolean,
+	loc?: SourceLoc,
 }
 export interface NamedPartialRoot extends BaseRoot {
 	kind: 'named',
@@ -205,4 +220,7 @@ export interface CompileOptions {
 	locBase?: LocBase;                 // absent = {line: 0, offset: 0}: locations stay slice-relative
 	assetMap?: Map<string, string>;    // @name -> replacement prefix
 	assetDirs?: Map<string, string>;   // @name -> absolute dir path (for file existence checks)
+	storeDirs?: string[];              // absolute store dirs; compileDirectory reads their store files
+	storeFiles?: Map<string, string>;  // store file sources by absolute path; compileFiles builds the store table from them
+	stores?: StoreTable;               // the declared stores, as compileFiles hands them to each partial
 }

@@ -288,7 +288,7 @@ Deno.test("server serves generated dom-patch JS for a dom-patch dir nested insid
 	const assetDir = '/proj/server/static';
 	const buildDir = path.join(assetDir, 'bfdom');
 	const dpCtx: ServerContext = {
-		directory: { files: new Map([['badge.html', file]]) },
+		directory: { files: new Map([['badge.html', file]]), stores: new Map() },
 		cssHrefs: [],
 		templateRoot: '/templates',
 		assetDirs: new Map([['static', assetDir]]),

@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, CommentTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, CustomElementCallTNode, PartialBinding, ElementTNode, AttrBindTNode, AttrPart, CompiledFile } from '../../types.js';
+import type { TNode, ForTNode, RootTNode, PrintTNode, RawTNode, CommentTNode, IfTNode, IfBranch, SlotTNode, PartialRefTNode, CustomElementCallTNode, PartialBinding, ElementTNode, AttrBindTNode, AttrPart, CompiledFile, PartialStore } from '../../types.js';
 import type { Parsed } from '../../backcode.js';
 import { generateFunction } from './generatejs.js';
 import { collectPartialRefs } from '../../walk.js';
@@ -16,6 +16,8 @@ export interface NodeToJsOptions {
 	assetMap?: Map<string, string>;
 	/** A name to emit in place of an if node's literal, or undefined to emit it inline. */
 	ifRef?: (n: IfTNode) => string | undefined;
+	/** The name of the partial a root node is, which render errors about its stores name. */
+	partialName?: string;
 }
 
 export function nodeToJS(n :TNode|RootTNode, opts: NodeToJsOptions = {}) :string {
@@ -61,17 +63,24 @@ export function nodeToJS(n :TNode|RootTNode, opts: NodeToJsOptions = {}) :string
 
 function rootToJS(n: RootTNode, opts: NodeToJsOptions = {}): string {
 	const body = n.tnodes!.map(nn => nodeToJS(nn, opts)).join(',\n');
+	const stores = n.stores && n.stores.length > 0
+		? `${opts.partialName ? `, name: '${escapeStr(opts.partialName)}'` : ''}, stores: [${n.stores.map(storeToJS).join(', ')}]`
+		: '';
 	if (n.kind === 'custom-element') {
 		const scripts = n.scripts && n.scripts.length > 0
 			? `, scripts: [${n.scripts.map(s => `{ url: '${escapeStr(s.url)}', kind: '${s.kind}' }`).join(', ')}]`
 			: '';
 		if (n.definitionAttrs && n.definitionAttrs.length > 0) {
 			const defAttrs = attrPartsToAttrsOnlyRNodeJS(n.definitionAttrs, opts);
-			return `{ type:"root", customElement: true${scripts}, definitionAttrNodes: [\n${defAttrs}\n], nodes: [\n${body}\n] }`;
+			return `{ type:"root", customElement: true${scripts}${stores}, definitionAttrNodes: [\n${defAttrs}\n], nodes: [\n${body}\n] }`;
 		}
-		return `{ type:"root", customElement: true${scripts}, definitionAttrNodes: [], nodes: [\n${body}\n] }`;
+		return `{ type:"root", customElement: true${scripts}${stores}, definitionAttrNodes: [], nodes: [\n${body}\n] }`;
 	}
-	return `{ type:"root", nodes: [\n${body}\n] }`;
+	return `{ type:"root"${stores}, nodes: [\n${body}\n] }`;
+}
+
+function storeToJS(s: PartialStore): string {
+	return `{ name: '${s.name}', shipped: ${!!s.shipped}${s.src ? `, src: '${escapeStr(s.src)}'` : ''} }`;
 }
 
 function forToJS(for_node: ForTNode, opts: NodeToJsOptions = {}) :string {
@@ -338,7 +347,7 @@ export function fileToJsModule(file: CompiledFile, filePath: string, assetMap?: 
 	const exports: string[] = [];
 	for (const name of sorted) {
 		const root = file.partials.get(name)!;
-		exports.push(`export const ${sanitizeName(name)} = ${nodeToJS(root, { assetMap })};`);
+		exports.push(`export const ${sanitizeName(name)} = ${nodeToJS(root, { assetMap, partialName: name })};`);
 	}
 
 	return [...imports, '', ...exports].join('\n');

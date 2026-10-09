@@ -248,12 +248,15 @@ function patchSite(elem: Element, site: SiteDesc, data: Data, shown: Shown | und
 
 /**
  * Base class of every generated shell (`BackflipMyWidget`). The subclass declares the
- * partial's attributes and its root branch; the shell reads the attributes off the
- * element and hands every change to the root patch-branch.
+ * partial's attributes, the stores it reads and its root branch; the shell reads the
+ * attributes off the element, puts them next to the stores, and hands every change to
+ * the root patch-branch.
  */
 export class BackflipShell {
 	/** Each declared `b-attr`, and whether it is read as a string or a boolean. */
 	static bfAttrs: Record<string, 'string' | 'bool'> = {};
+	/** Each store the partial's patching reads, by name: the store file's default export. */
+	static bfStores: Record<string, unknown> = {};
 	static bfRoot: BranchDesc = { sites: [], sets: [] };
 
 	ce: Element;
@@ -265,8 +268,9 @@ export class BackflipShell {
 	}
 
 	collectData(): Data {
-		const data: Data = {};
-		for (const [name, type] of Object.entries((this.constructor as typeof BackflipShell).bfAttrs)) {
+		const shell = this.constructor as typeof BackflipShell;
+		const data: Data = { ...shell.bfStores };
+		for (const [name, type] of Object.entries(shell.bfAttrs)) {
 			data[name] = type === 'bool' ? this.ce.hasAttribute(name) : this.ce.getAttribute(name) ?? '';
 		}
 		return data;

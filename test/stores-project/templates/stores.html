@@ -1,0 +1,29 @@
+<my-widget b-store:widgets b-attr:widget_id b-generate="full">
+	<h3>{{ widgets.data[widget_id] ? widgets.data[widget_id].name : '' }}</h3>
+</my-widget>
+
+<my-tagger b-store:tags b-attr:label b-generate="full">
+	<p>{{ label }}</p>
+	<ul><li b-for="t in tags.data.list">{{ t }}</li></ul>
+</my-tagger>
+
+<b-unwrap b-name="owner-line" b-store:users>
+	<p class="owner">{{ users.data[owner].full_name }}</p>
+</b-unwrap>
+
+<html b-name="page" b-export b-store:users>
+<body>
+	<p>{{ title }}: {{ users.data.ann.full_name }}</p>
+	<my-widget widget_id="42"></my-widget>
+	<my-widget widget_id="7"></my-widget>
+	<my-tagger label="tags"></my-tagger>
+	<div b-part="#owner-line" b-data:owner="'bob'"></div>
+</body>
+</html>
+
+<html b-name="untaken" b-export>
+<body>
+	<b-unwrap b-if="show"><my-widget widget_id="42"></my-widget></b-unwrap>
+	<b-unwrap b-for="x in items"><my-widget :widget_id="x"></my-widget></b-unwrap>
+</body>
+</html>

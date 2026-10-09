@@ -5,7 +5,8 @@ import { classNameFor } from './codegen.js';
  * Evaluate a generated module (whole, or the body `generateClassForPartial` returns)
  * with stand-in runtime base classes, and return what the runtime would be handed:
  * the shell's statics and every name the module defines. Imports and the define line
- * are dropped; there is no runtime or registry here.
+ * are dropped; there is no runtime or registry here. Each `bfstore_NAME` a shell
+ * names is bound to `{ storeFile: NAME }`.
  */
 export function evalModule(js: string, partialName: string) {
 	class BackflipShell {}
@@ -15,11 +16,12 @@ export function evalModule(js: string, partialName: string) {
 		.replaceAll('export class', 'class')
 		.replace(/^if \(!customElements.*$/m, '');
 	const names = [...src.matchAll(/^(?:const|class) (\w+)/gm)].map(m => m[1]);
+	const storeNames = [...new Set([...src.matchAll(/\bbfstore_(\w+)/g)].map(m => m[1]))];
 	// deno-lint-ignore no-explicit-any
-	const defined: Record<string, any> = new Function('BackflipShell', 'BackflipElement',
-		`${src}\nreturn { ${names.join(', ')} };`)(BackflipShell, BackflipElement);
+	const defined: Record<string, any> = new Function('BackflipShell', 'BackflipElement', ...storeNames.map(n => `bfstore_${n}`),
+		`${src}\nreturn { ${names.join(', ')} };`)(BackflipShell, BackflipElement, ...storeNames.map(n => ({ storeFile: n })));
 	const shell = defined[classNameFor(partialName)];
-	return { shell, bfAttrs: shell.bfAttrs, bfRoot: shell.bfRoot, defined, BackflipShell, BackflipElement };
+	return { shell, bfAttrs: shell.bfAttrs, bfStores: shell.bfStores, bfRoot: shell.bfRoot, defined, BackflipShell, BackflipElement };
 }
 
 /**

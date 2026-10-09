@@ -1660,6 +1660,27 @@ async function fatalsFor(suffix: string, html: string) {
     return errors.filter(e => e.severity !== 'warning');
 }
 
+Deno.test("compileDirectory - an index variable inside a property chain is used, so passing it is no error", async () => {
+    const fatal = await fatalsFor("index_in_chain", `
+        <b-unwrap b-name="row">{{ list[i].name }}{{ map.data[k].name }}</b-unwrap>
+        <b-unwrap b-name="page">
+            <b-unwrap b-part="#row" b-data:list="l" b-data:i="0" b-data:map="m" b-data:k="'a'"></b-unwrap>
+        </b-unwrap>
+    `);
+    assertEquals(fatal, [], JSON.stringify(fatal.map(e => e.message)));
+});
+
+Deno.test("compileDirectory - an index variable inside a property chain must be passed", async () => {
+    const fatal = await fatalsFor("index_in_chain_missing", `
+        <b-unwrap b-name="row">{{ list[i].name }}</b-unwrap>
+        <b-unwrap b-name="page">
+            <b-unwrap b-part="#row" b-data:list="l"></b-unwrap>
+        </b-unwrap>
+    `);
+    assertEquals(fatal.length, 1, JSON.stringify(fatal.map(e => e.message)));
+    assertStringIncludes(fatal[0].message, 'variable i used in partial <row> but not passed at this call site');
+});
+
 Deno.test("compileDirectory - a call that passes nothing to a partial that needs a var errors", async () => {
     const fatal = await fatalsFor("missing_one", `
         <b-unwrap b-name="badge">{{ label }}</b-unwrap>

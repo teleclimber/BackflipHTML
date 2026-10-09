@@ -232,84 +232,167 @@ function backflip_evalBinding(array $binding, array $ctx): mixed
 }
 
 /**
- * Batch render of a page root. Collects the script URLs of every reactive
- * custom-element partial actually rendered and injects matching <script> tags.
- * Defined as the collected output of backflip_streamRenderRoot so batch and
- * streaming are byte-identical.
+ * Batch render of a page root. Collects the scripts and shipped stores of every
+ * reactive custom-element partial actually rendered and injects them. Defined as
+ * the collected output of backflip_streamRenderRoot so batch and streaming are
+ * byte-identical.
  */
-function backflip_renderRoot(array $node, array $ctx, array $slots = []): string
+function backflip_renderRoot(array $node, array $ctx, array $slots = [], array $stores = []): string
 {
-    return implode('', iterator_to_array(backflip_streamRenderRoot($node, $ctx, $slots), false));
+    return implode('', iterator_to_array(backflip_streamRenderRoot($node, $ctx, $slots, $stores), false));
 }
 
 /**
- * Add a partial's scripts to the collector. $scripts is an ordered set
- * (URL => kind); first-seen kind wins, insertion order is preserved.
+ * What a page render gathers from the partials it actually renders, and the
+ * auto-include block built from it.
  */
-function backflip_collectScripts(array &$scripts, ?array $list): void
+final class BackflipPageCollector
 {
-    if ($list === null) {
-        return;
+    /** URL => kind; first-seen wins, insertion order is preserved. */
+    private array $scripts = [];
+    /** Store name => its escaped JSON, in first-shipped order. */
+    private array $stores = [];
+
+    public function __construct(private array $storeData) {}
+
+    public function add(?array $root): void
+    {
+        foreach (($root['stores'] ?? []) as $s) {
+            if (!$s['shipped'] || isset($this->stores[$s['name']])) {
+                continue;
+            }
+            $this->stores[$s['name']] = backflip_storeJson($s['name'], $this->storeData[$s['name']] ?? null);
+            if (isset($s['src'])) {
+                $this->addScript($s['src'], 'dependency');
+            }
+        }
+        foreach (($root['scripts'] ?? []) as $s) {
+            $this->addScript($s['url'], $s['kind']);
+        }
     }
-    foreach ($list as $s) {
-        if (!isset($scripts[$s['url']])) {
-            $scripts[$s['url']] = $s['kind'];
+
+    private function addScript(string $url, string $kind): void
+    {
+        if (!isset($this->scripts[$url])) {
+            $this->scripts[$url] = $kind;
+        }
+    }
+
+    /**
+     * Store tags come first, so the data is in the document before any module runs.
+     * Dependency modules follow as <link rel="modulepreload"> so the browser can
+     * fetch them in parallel with the entry modules that import them; entry modules
+     * come last as <script type="module">. Nothing collected → empty string.
+     */
+    public function block(): string
+    {
+        $tags = [];
+        foreach ($this->stores as $name => $json) {
+            $escaped = htmlspecialchars((string)$name, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+            $tags[] = '<script type="application/json" data-bf-store="' . $escaped . '">' . $json . '</script>';
+        }
+        $preloads = [];
+        $modules = [];
+        foreach ($this->scripts as $url => $kind) {
+            $escaped = htmlspecialchars((string)$url, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+            if ($kind === 'dependency') {
+                $preloads[] = '<link rel="modulepreload" href="' . $escaped . '">';
+            } else {
+                $modules[] = '<script src="' . $escaped . '" type="module"></script>';
+            }
+        }
+        return implode("\n", array_merge($tags, $preloads, $modules));
+    }
+}
+
+/**
+ * A store's data as JSON that cannot end its <script> tag: `<`, `>` and `&` are
+ * escaped, and so are U+2028 and U+2029 (json_encode escapes those by default).
+ */
+function backflip_storeJson(string $name, mixed $data): string
+{
+    try {
+        return json_encode(
+            $data,
+            JSON_HEX_TAG | JSON_HEX_AMP | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR
+        );
+    } catch (\JsonException $e) {
+        throw new \RuntimeException("store \"$name\" cannot be serialized to JSON: " . $e->getMessage());
+    }
+}
+
+/**
+ * Threaded through a render. $stores holds one store object per passed store
+ * (['data' => ...], which is what `NAME.data` reads); $page is set only under a
+ * page render.
+ */
+final class BackflipRenderState
+{
+    public array $stores = [];
+
+    public function __construct(array $storeData, public ?BackflipPageCollector $page = null)
+    {
+        foreach ($storeData as $name => $data) {
+            $this->stores[$name] = ['data' => $data];
         }
     }
 }
 
 /**
- * Build the auto-include block from the (ordered, deduped) collector. Dependency
- * modules are emitted first as <link rel="modulepreload"> so the browser can fetch
- * them in parallel with the entry modules that import them; entry modules follow as
- * <script type="module">. Empty collector → empty string.
+ * Bind each store $root declares into $ctx, its context.
  */
-function backflip_buildScriptBlock(array $scripts): string
+function backflip_bindStores(array &$ctx, array $root, BackflipRenderState $rs): void
 {
-    if (count($scripts) === 0) {
-        return '';
-    }
-    $preloads = [];
-    $modules = [];
-    foreach ($scripts as $url => $kind) {
-        $escaped = htmlspecialchars((string)$url, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-        if ($kind === 'dependency') {
-            $preloads[] = '<link rel="modulepreload" href="' . $escaped . '">';
-        } else {
-            $modules[] = '<script src="' . $escaped . '" type="module"></script>';
+    foreach (($root['stores'] ?? []) as $s) {
+        $name = $s['name'];
+        if (!array_key_exists($name, $rs->stores)) {
+            $partial = $root['name'] ?? '';
+            throw new \RuntimeException(
+                "partial \"$partial\" declares b-store:$name, but no store \"$name\" was passed to the renderer"
+            );
         }
+        $ctx[$name] = $rs->stores[$name];
     }
-    return implode("\n", array_merge($preloads, $modules));
 }
 
 /**
- * Public streaming page entry. Seeds the script collector with this root's own
- * scripts, streams the body, and injects the auto-include block before the
- * first </body> (see backflip_injectScriptsStreaming). Distinct from
- * backflip_streamRenderRootInner, the non-injecting primitive used for nested partials.
+ * Public streaming page entry. Seeds the page collector with this root's own
+ * scripts and stores, streams the body, and injects the auto-include block before
+ * the first </body> (see backflip_injectBlockStreaming). Distinct from
+ * backflip_streamRenderRootInner, the non-injecting primitive used for nested
+ * partials. The root's context is $ctx plus the stores the root declares.
  */
-function backflip_streamRenderRoot(array $node, array $ctx, array $slots = []): Generator
+function backflip_streamRenderRoot(array $node, array $ctx, array $slots = [], array $stores = []): Generator
 {
-    $scripts = [];
-    backflip_collectScripts($scripts, $node['scripts'] ?? null);
-    yield from backflip_injectScriptsStreaming(
-        backflip_streamRenderRootInner($node, $ctx, $slots, $scripts),
-        $scripts
+    $page = new BackflipPageCollector($stores);
+    $rs = new BackflipRenderState($stores, $page);
+    foreach (($node['stores'] ?? []) as $s) {
+        if (array_key_exists($s['name'], $ctx)) {
+            $partial = $node['name'] ?? '';
+            throw new \RuntimeException(
+                "ctx key \"{$s['name']}\" is also a store the root partial \"$partial\" declares; rename one"
+            );
+        }
+    }
+    backflip_bindStores($ctx, $node, $rs);
+    $page->add($node);
+    yield from backflip_injectBlockStreaming(
+        backflip_streamRenderRootInner($node, $ctx, $slots, $rs),
+        $page
     );
 }
 
 /**
- * Stream $inner, injecting the <script> block immediately before the first
+ * Stream $inner, injecting the auto-include block immediately before the first
  * </body> (case-insensitive) — or appending it at the end when no </body> exists.
- * The block can't be built until $inner is exhausted (the script set is only
+ * The block can't be built until $inner is exhausted (the collector is only
  * complete then), so once </body> is seen we withhold everything from it onward
  * (just "</body></html>" + trailing whitespace, normally) and flush block + tail
  * at the end. A small carry guards against </body> split across chunk boundaries.
  * Placement and ordering match the old batch seek exactly, so backflip_renderRoot
- * stays byte-identical. $scripts is read after $inner finishes, so it must be the
- * same array the inner generator populates by reference.
+ * stays byte-identical.
  */
-function backflip_injectScriptsStreaming(Generator $inner, array &$scripts): Generator
+function backflip_injectBlockStreaming(Generator $inner, BackflipPageCollector $page): Generator
 {
     $bodyClose = '</body>';
     $carry = '';            // possible partial </body> prefix held back (pre-match)
@@ -332,7 +415,7 @@ function backflip_injectScriptsStreaming(Generator $inner, array &$scripts): Gen
             $carry = $keep > 0 ? substr($buf, strlen($buf) - $keep) : '';
         }
     }
-    $block = backflip_buildScriptBlock($scripts);
+    $block = $page->block();
     if ($tail !== null) {
         yield $block . $tail;
     } else {
@@ -349,17 +432,17 @@ function backflip_injectScriptsStreaming(Generator $inner, array &$scripts): Gen
  * Non-injecting root walk. Reused recursively for nested partials, so it must not
  * emit <script> tags — only the page-level backflip_streamRenderRoot does that.
  */
-function backflip_streamRenderRootInner(array $node, array $ctx, array $slots = [], array &$scripts = []): Generator
+function backflip_streamRenderRootInner(array $node, array $ctx, array $slots, BackflipRenderState $rs): Generator
 {
     foreach ($node['nodes'] as $child) {
-        yield from backflip_streamRender($child, $ctx, $slots, $scripts);
+        yield from backflip_streamRender($child, $ctx, $slots, $rs);
     }
 }
 
 /**
  * Dispatch on $node['type']. Yields string chunks.
  */
-function backflip_streamRender(array $node, array $ctx, array $slots = [], array &$scripts = []): Generator
+function backflip_streamRender(array $node, array $ctx, array $slots, BackflipRenderState $rs): Generator
 {
     switch ($node['type']) {
         case 'raw':
@@ -372,16 +455,16 @@ function backflip_streamRender(array $node, array $ctx, array $slots = [], array
             yield backflip_renderPrint($node, $ctx);
             break;
         case 'for':
-            yield from backflip_streamRenderFor($node, $ctx, $slots, $scripts);
+            yield from backflip_streamRenderFor($node, $ctx, $slots, $rs);
             break;
         case 'if':
-            yield from backflip_streamRenderIf($node, $ctx, $slots, $scripts);
+            yield from backflip_streamRenderIf($node, $ctx, $slots, $rs);
             break;
         case 'partial-ref':
-            yield from backflip_streamRenderPartialRef($node, $ctx, $slots, $scripts);
+            yield from backflip_streamRenderPartialRef($node, $ctx, $slots, $rs);
             break;
         case 'slot':
-            yield from backflip_streamRenderSlot($node, $slots, $scripts);
+            yield from backflip_streamRenderSlot($node, $slots, $rs);
             break;
         case 'attr-bind':
             yield backflip_renderAttrBind($node, $ctx);
@@ -396,7 +479,7 @@ function backflip_streamRender(array $node, array $ctx, array $slots = [], array
 /**
  * Streaming render of a for-loop node.
  */
-function backflip_streamRenderFor(array $node, array $ctx, array $slots, array &$scripts = []): Generator
+function backflip_streamRenderFor(array $node, array $ctx, array $slots, BackflipRenderState $rs): Generator
 {
     $iterable = backflip_execFn($node['iterable'], $ctx);
 
@@ -409,7 +492,7 @@ function backflip_streamRenderFor(array $node, array $ctx, array $slots, array &
     foreach ($iterable as $item) {
         $innerCtx = array_merge($ctx, [$node['valName'] => $item]);
         foreach ($node['nodes'] as $child) {
-            yield from backflip_streamRender($child, $innerCtx, $slots, $scripts);
+            yield from backflip_streamRender($child, $innerCtx, $slots, $rs);
         }
     }
 }
@@ -417,13 +500,13 @@ function backflip_streamRenderFor(array $node, array $ctx, array $slots, array &
 /**
  * Streaming render of an if/elseif/else node.
  */
-function backflip_streamRenderIf(array $node, array $ctx, array $slots, array &$scripts = []): Generator
+function backflip_streamRenderIf(array $node, array $ctx, array $slots, BackflipRenderState $rs): Generator
 {
     foreach ($node['branches'] as $branch) {
         $condition = $branch['condition'] ?? null;
         if ($condition === null || backflip_isTruthy(backflip_execFn($condition, $ctx))) {
             foreach ($branch['nodes'] as $child) {
-                yield from backflip_streamRender($child, $ctx, $slots, $scripts);
+                yield from backflip_streamRender($child, $ctx, $slots, $rs);
             }
             return;
         }
@@ -444,19 +527,21 @@ function backflip_renderPrint(array $node, array $ctx): string
 /**
  * Streaming render of a partial-ref node.
  */
-function backflip_streamRenderPartialRef(array $node, array $ctx, array $slots = [], array &$scripts = []): Generator
+function backflip_streamRenderPartialRef(array $node, array $ctx, array $slots, BackflipRenderState $rs): Generator
 {
     if (!empty($node['customElement'])) {
-        yield from backflip_streamRenderCustomElementRef($node, $ctx, $slots, $scripts);
+        yield from backflip_streamRenderCustomElementRef($node, $ctx, $slots, $rs);
         return;
     }
 
-    // 1. Build child context: a partial's context holds its bindings and nothing
-    //    else, so it starts empty. The bindings are evaluated in the caller ctx.
+    // 1. Build child context: a partial's context holds its bindings and declared
+    //    stores and nothing else, so it starts empty. The bindings are evaluated in
+    //    the caller ctx.
     $childCtx = [];
     foreach ($node['bindings'] as $binding) {
         $childCtx[$binding['name']] = backflip_evalBinding($binding, $ctx);
     }
+    backflip_bindStores($childCtx, $node['partial'], $rs);
 
     // 2. Build slot map: capture nodes + the caller's ctx AND slot map (NOT childCtx)
     $slotMap = [];
@@ -468,10 +553,10 @@ function backflip_streamRenderPartialRef(array $node, array $ctx, array $slots =
     $wrapper = $node['wrapper'] ?? null;
     if ($wrapper !== null) {
         yield $wrapper['open'];
-        yield from backflip_streamRenderRootInner($node['partial'], $childCtx, $slotMap, $scripts);
+        yield from backflip_streamRenderRootInner($node['partial'], $childCtx, $slotMap, $rs);
         yield $wrapper['close'];
     } else {
-        yield from backflip_streamRenderRootInner($node['partial'], $childCtx, $slotMap, $scripts);
+        yield from backflip_streamRenderRootInner($node['partial'], $childCtx, $slotMap, $rs);
     }
 }
 
@@ -479,7 +564,7 @@ function backflip_streamRenderPartialRef(array $node, array $ctx, array $slots =
  * Streaming render of a custom-element partial-ref. Produces a single merged tag
  * with caller-side attrs (caller ctx) and definition-side attrs (childCtx) interleaved.
  */
-function backflip_streamRenderCustomElementRef(array $node, array $ctx, array $slots = [], array &$scripts = []): Generator
+function backflip_streamRenderCustomElementRef(array $node, array $ctx, array $slots, BackflipRenderState $rs): Generator
 {
     $tagName = $node['callerTagName'];
 
@@ -487,21 +572,18 @@ function backflip_streamRenderCustomElementRef(array $node, array $ctx, array $s
         // Fallback: render as plain HTML — caller-side attrs only, default slot in caller ctx.
         yield '<' . $tagName;
         foreach (($node['callerOpenTag'] ?? []) as $n) {
-            yield from backflip_streamRender($n, $ctx, [], $scripts);
+            yield from backflip_streamRender($n, $ctx, [], $rs);
         }
         yield '>';
         $def = $node['slots']['default'] ?? null;
         if ($def !== null) {
             foreach ($def as $n) {
-                yield from backflip_streamRender($n, $ctx, $slots, $scripts);
+                yield from backflip_streamRender($n, $ctx, $slots, $rs);
             }
         }
         yield '</' . $tagName . '>';
         return;
     }
-
-    // This reactive partial actually rendered — record its scripts for auto-inclusion.
-    backflip_collectScripts($scripts, $node['partial']['scripts'] ?? null);
 
     // Bindings evaluated in caller ctx, applied to childCtx for body and definition
     // attrs. Nothing else reaches it — see backflip_streamRenderPartialRef.
@@ -509,6 +591,10 @@ function backflip_streamRenderCustomElementRef(array $node, array $ctx, array $s
     foreach ($node['bindings'] as $binding) {
         $childCtx[$binding['name']] = backflip_evalBinding($binding, $ctx);
     }
+    backflip_bindStores($childCtx, $node['partial'], $rs);
+
+    // This reactive partial actually rendered — record its scripts and stores for auto-inclusion.
+    $rs->page?->add($node['partial']);
     $slotMap = [];
     foreach ($node['slots'] as $slotName => $nodes) {
         $slotMap[$slotName] = ['nodes' => $nodes, 'ctx' => $ctx, 'slots' => $slots];
@@ -517,14 +603,14 @@ function backflip_streamRenderCustomElementRef(array $node, array $ctx, array $s
     // Single merged open tag: caller-side attrs in caller ctx, definition-side attrs in childCtx.
     yield '<' . $tagName;
     foreach (($node['callerOpenTag'] ?? []) as $n) {
-        yield from backflip_streamRender($n, $ctx, [], $scripts);
+        yield from backflip_streamRender($n, $ctx, [], $rs);
     }
     foreach (($node['partial']['definitionAttrNodes'] ?? []) as $n) {
-        yield from backflip_streamRender($n, $childCtx, [], $scripts);
+        yield from backflip_streamRender($n, $childCtx, [], $rs);
     }
     yield '>';
     foreach ($node['partial']['nodes'] as $n) {
-        yield from backflip_streamRender($n, $childCtx, $slotMap, $scripts);
+        yield from backflip_streamRender($n, $childCtx, $slotMap, $rs);
     }
     yield '</' . $tagName . '>';
 }
@@ -573,7 +659,7 @@ function backflip_renderAttrBind(array $node, array $ctx): string
 /**
  * Streaming render of a slot node.
  */
-function backflip_streamRenderSlot(array $node, array $slots, array &$scripts = []): Generator
+function backflip_streamRenderSlot(array $node, array $slots, BackflipRenderState $rs): Generator
 {
     $slotName = $node['name'] ?? 'default';
 
@@ -585,6 +671,6 @@ function backflip_streamRenderSlot(array $node, array $slots, array &$scripts = 
     foreach ($slotEntry['nodes'] as $child) {
         // Render in the caller's lexical environment: its ctx and the slot map in
         // effect where the content was written (so a nested b-slot forwards).
-        yield from backflip_streamRender($child, $slotEntry['ctx'], $slotEntry['slots'] ?? [], $scripts);
+        yield from backflip_streamRender($child, $slotEntry['ctx'], $slotEntry['slots'] ?? [], $rs);
     }
 }

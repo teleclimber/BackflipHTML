@@ -365,3 +365,27 @@ Deno.test("debounces rapid changes", async () => {
 		await Deno.remove(dir, { recursive: true }).catch(() => {});
 	}
 });
+
+Deno.test("watches .js files in a store directory", async () => {
+	const dir = await Deno.makeTempDir();
+	const templates = `${dir}/templates`;
+	const stores = `${dir}/stores`;
+	await Deno.mkdir(templates);
+	await Deno.mkdir(stores);
+	await Deno.writeTextFile(`${stores}/widgets.js`, 'a');
+
+	const { callback, promise, cleanup } = waitFor(3000);
+	const watcher = createWatcher({ templateRoot: templates, storeDirs: [stores], debounceMs: 50 }, callback);
+
+	try {
+		await new Promise((r) => setTimeout(r, 100));
+		await Deno.writeTextFile(`${stores}/notes.txt`, 'ignored');
+		await Deno.writeTextFile(`${stores}/widgets.js`, 'b');
+		const events = await promise;
+		assertEquals(events, ['store']);
+	} finally {
+		cleanup();
+		watcher.close();
+		await Deno.remove(dir, { recursive: true }).catch(() => {});
+	}
+});

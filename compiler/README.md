@@ -95,6 +95,10 @@ Orchestrates compilation of all HTML files in a directory. Manages cross-file pa
 
 Infers the types and usage patterns of template variables by analyzing how they appear in the AST. Tracks whether variables are used as iterables, booleans, printed values, attribute bindings, or passed to child partials. Used by the preview system to generate mock data.
 
+### Stores (`stores.ts`)
+
+Reads store files without running them: finds `*.js` files under the configured store dirs, parses each with acorn, checks its default export, and builds the store table (name → file, and the file's `@asset/subpath` when an asset dir serves it). `compileDirectory` reads the store files; `compileFiles` builds the table from `storeFiles` and checks every `b-store:` against it. See [`docs/data-stores.md`](../docs/data-stores.md).
+
 ### Configuration (`config.ts`)
 
 Loads and validates `backflip.json` project configuration files. See [`docs/configuration.md`](../docs/configuration.md).

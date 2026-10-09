@@ -5,12 +5,12 @@ import type { CompiledFile } from '../compiler/types.js';
 import { resolveDomPatchScriptUrl, type BackflipConfig } from '../compiler/config.js';
 import { resolveAssetRefs } from '../compiler/helpers.js';
 import { flattenCompiledFile } from '../compiler/flatten.js';
-import { applyDomPatch, moduleFileName, RUNTIME_FILES } from '../compiler/generate/dom-patch/nodes2patch.js';
+import { applyDomPatch, moduleFileName, RUNTIME_FILES, type DomPatchOptions } from '../compiler/generate/dom-patch/nodes2patch.js';
 import { fileToJsModule } from '../compiler/generate/js/nodes2js.js';
 import { renderRoot } from '../runtime/js/render.js';
 import type { RootRNode } from '../runtime/js/render.js';
 import { escapeHtml } from '../lib/html-escape.js';
-import { generateMockData } from './mock-data.js';
+import { generateMockData, generateStoreMocks } from './mock-data.js';
 import { generateSlotPlaceholders } from './slot-placeholders.js';
 import { wrapInChrome } from './preview-chrome.js';
 import { inferDataShape } from '../compiler/data-shape.js';
@@ -24,6 +24,8 @@ export interface PreviewOptions {
 	liveReload?: boolean;
 	nonce?: string;
 	dataOverrides?: Record<string, unknown>;
+	/** Deep-merged into the store mocks, by store name. */
+	storeOverrides?: Record<string, unknown>;
 	tmpDir?: string;
 	assetMap?: Map<string, string>;
 	/** Absolute dirs the build would write dom-patch JS to (see resolveDomPatchOutputDirs). */
@@ -43,6 +45,8 @@ export interface PreviewOptions {
 export interface PreviewResult {
 	html: string;
 	mockData: Record<string, unknown>;
+	/** The data passed as `stores`: a mock per store the previewed partial reaches. */
+	mockStores: Record<string, unknown>;
 	errors: string[];
 	/**
 	 * Map of build destination path -> actual saved path for dom-patch JS generated
@@ -56,7 +60,7 @@ export interface PreviewResult {
  * Preview a partial by compiling it, generating mock data, and rendering to HTML.
  */
 export async function previewPartial(options: PreviewOptions): Promise<PreviewResult> {
-	const { partialName, compiledFile, allFiles, fileName, cssHrefs, liveReload, nonce, dataOverrides, tmpDir, assetMap, domPatchOutputDirs, domPatchOutDir, config, configDir } = options;
+	const { partialName, compiledFile, allFiles, fileName, cssHrefs, liveReload, nonce, dataOverrides, storeOverrides, tmpDir, assetMap, domPatchOutputDirs, domPatchOutDir, config, configDir } = options;
 	const errors: string[] = [];
 
 	// Per-partial script URL for dom-patch auto-include (null/undefined → not stamped).
@@ -68,13 +72,16 @@ export async function previewPartial(options: PreviewOptions): Promise<PreviewRe
 	// 1. Find the partial
 	const root = compiledFile.partials.get(partialName);
 	if (!root) {
-		return { html: `<p>Partial "${partialName}" not found</p>`, mockData: {}, errors: [`Partial "${partialName}" not found`] };
+		return { html: `<p>Partial "${partialName}" not found</p>`, mockData: {}, mockStores: {}, errors: [`Partial "${partialName}" not found`] };
 	}
 
-	// 2. Generate mock data from DataShape
+	// 2. Generate mock data from DataShape. The partial's own stores come from the
+	// store mocks, not its context.
 	const shapes = inferDataShape(root);
+	for (const s of root.stores ?? []) shapes.delete(s.name);
 	const lookup = { compiledFile, allFiles, fileName };
 	const mockData = generateMockData(shapes, lookup, dataOverrides);
+	const mockStores = generateStoreMocks(root, lookup, storeOverrides);
 
 	// 3. Generate slot placeholders for the top-level partial's own slots
 	const slotMap = generateSlotPlaceholders(root.tnodes);
@@ -86,17 +93,17 @@ export async function previewPartial(options: PreviewOptions): Promise<PreviewRe
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		errors.push(`Eval error: ${msg}`);
-		return { html: `<p>Error evaluating partial: ${escapeHtml(msg)}</p>`, mockData, errors };
+		return { html: `<p>Error evaluating partial: ${escapeHtml(msg)}</p>`, mockData, mockStores, errors };
 	}
 
 	// 5. Render
 	let rendered: string;
 	try {
-		rendered = renderRoot(rnode, mockData, slotMap);
+		rendered = renderRoot(rnode, mockData, slotMap, mockStores);
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		errors.push(`Render error: ${msg}`);
-		return { html: `<p>Error rendering partial: ${escapeHtml(msg)}</p>`, mockData, errors };
+		return { html: `<p>Error rendering partial: ${escapeHtml(msg)}</p>`, mockData, mockStores, errors };
 	}
 
 	// 6. Wrap in chrome
@@ -109,10 +116,10 @@ export async function previewPartial(options: PreviewOptions): Promise<PreviewRe
 	if (domPatchOutDir && domPatchOutputDirs && domPatchOutputDirs.length > 0) {
 		const files = new Map(allFiles ?? []);
 		files.set(fileName ?? 'preview.html', compiledFile);
-		domPatchAssets = await writeDomPatchAssets(files, domPatchOutputDirs, domPatchOutDir, scriptUrlFor);
+		domPatchAssets = await writeDomPatchAssets(files, domPatchOutputDirs, domPatchOutDir, { scriptUrlFor, assetMap });
 	}
 
-	return { html, mockData, errors, domPatchAssets };
+	return { html, mockData, mockStores, errors, domPatchAssets };
 }
 
 /**
@@ -125,12 +132,12 @@ async function writeDomPatchAssets(
 	files: Map<string, CompiledFile>,
 	outputDirs: string[],
 	outDir: string,
-	scriptUrlFor?: (tagName: string) => string | undefined,
+	domPatchOpts: DomPatchOptions,
 ): Promise<Record<string, string>> {
 	const assets: Record<string, string> = {};
 	let anyModule = false;
 	for (const [, file] of files) {
-		const { modules } = applyDomPatch(file, { ...(scriptUrlFor ? { scriptUrlFor } : {}) });
+		const { modules } = applyDomPatch(file, domPatchOpts);
 		for (const mod of modules) {
 			anyModule = true;
 			const jsRel = moduleFileName(mod.tagName);
@@ -170,7 +177,8 @@ async function evalPartial(
 	// Mirror the CLI build: dom-patch mutates the AST in place (appending
 	// data-bfid markers to reactive elements) and must run before flatten + js
 	// codegen so the previewed HTML carries the ids the runtime queries on.
-	applyDomPatch(compiledFile, { ...(scriptUrlFor ? { scriptUrlFor } : {}) });
+	const domPatchOpts: DomPatchOptions = { scriptUrlFor, assetMap };
+	applyDomPatch(compiledFile, domPatchOpts);
 	const resolvedFile = assetMap ? resolveAssetRefs(compiledFile, assetMap) : compiledFile;
 	const flattenedFile = flattenCompiledFile(resolvedFile);
 	const js = fileToJsModule(flattenedFile, fileName, assetMap);
@@ -199,7 +207,7 @@ async function evalPartial(
 		for (const [filePath, file] of allFiles) {
 			const jsPath = path.join(workDir, filePath.replace('.html', '.js'));
 			await fs.mkdir(path.dirname(jsPath), { recursive: true });
-			applyDomPatch(file, { ...(scriptUrlFor ? { scriptUrlFor } : {}) });
+			applyDomPatch(file, domPatchOpts);
 			const resolvedCrossFile = assetMap ? resolveAssetRefs(file, assetMap) : file;
 			const flatCrossFile = flattenCompiledFile(resolvedCrossFile);
 			await fs.writeFile(jsPath, fileToJsModule(flatCrossFile, filePath, assetMap), 'utf-8');

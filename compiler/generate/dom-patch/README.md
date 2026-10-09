@@ -36,7 +36,7 @@ A partial with no `b-generate` (and no `b-script` implying one) is skipped entir
 
 Sites whose ancestor chain contains a `ForTNode` are skipped (attrs, prints and if-sets alike). The bfid mechanism relies on `querySelector`, which returns only the first match — so a site on a `b-for`'d element would only update one of N rendered copies. This is documented rather than worked around; an explicit error is not raised (it's a silent skip, as for any non-qualifying site).
 
-No `b-for` can currently reach here from valid source: a loop needs an iterable, a generating partial reads only its declared attributes, and a `b-attr` used as an iterable is a compile error. The loop handling — the skip, the subtree walk, and the value-name scoping in `computeSubtreeVars` — is kept because a declared input that is a collection is what makes `b-for` meaningful, and the `querySelector` problem above is what will then need solving.
+A `b-for` reaches here over a store's data (`b-for="t in tags.data.list"`), the only declared input that can be a collection. Its loop is rendered on the server and left alone in the browser; the store it reads is not shipped unless a patched site also reads it.
 
 Other deliberate limitations, all covered above: patch sites inside an inactive branch of a **non-qualifying** nested set log `console.error` on every update (only qualifying sets get the patch-branch treatment that avoids this); and `<script>` tags inside a branch do not execute when inserted via a fragment. Nested `b-if` **is** supported — see [patch-branches](#patch-branches).
 
@@ -86,11 +86,13 @@ For a partial `my-element` with live vars `title` and `flag`:
 
 ```js
 import { BackflipShell, BackflipElement } from './runtime/dom-patch/patch.js';   // BackflipElement for base/full
+import bfstore_widgets from "/static/stores/widgets.js";                        // each store the patching reads
 
 const bfif_<setId> = { type:'if', branches: [ ... ] };   // one snapshot per if-set, innermost first
 
 export class BackflipMyElement extends BackflipShell {
     static bfAttrs = { title: 'string', flag: 'bool' };   // every declared b-attr
+    static bfStores = { widgets: bfstore_widgets };       // each store the patching reads
     static bfRoot = {                                     // the root patch-branch
         sites: [
             { bfid: 'bf0', attr: 'title', expr: { fn: function ( title ) { return title; }, vars: ['title'] } },
@@ -151,18 +153,21 @@ Patching targets server-rendered DOM, so an element created with `document.creat
 
 ## Entry point
 
-Every var reaching codegen must be one of the partial's declared attributes; the generator asserts this before emitting a module, since a name that slipped through would compile into a patch writing `undefined` into the page.
+Every var reaching codegen must be one of the partial's declared inputs, a `b-attr` or a `b-store`; the generator asserts this before emitting a module, since a name that slipped through would compile into a patch writing `undefined` into the page.
 
-`applyDomPatch(file, opts?)` mutates the CompiledFile in place and returns `{ modules }` — one `{ tagName, js }` per partial in the file that generates client JS. `moduleFileName(tagName)` names its file. `opts` is `{ bfidGen?, scriptUrlFor? }`:
+`applyDomPatch(file, opts?)` mutates the CompiledFile in place and returns `{ modules }` — one `{ tagName, js }` per partial in the file that generates client JS. `moduleFileName(tagName)` names its file. It also marks each store a module's patching reads as `shipped` on the partial's root, which tells the renderers to send it to the browser. `opts` is `{ bfidGen?, scriptUrlFor?, assetMap? }`:
 
 - `bfidGen` — deterministic id generator (`makeSequentialBfidGen()`) in tests; production uses the default crypto-random generator. One generator is shared across a file's partials, so ids stay distinct across its modules.
 - `scriptUrlFor(tagName)` — public URL of that partial's module. When it returns a URL, the partial's root is stamped with a script the renderer auto-includes: an `'entry'` for `b-generate="full"` (the module registers the element itself), a `'dependency'` otherwise. Partials that produce no module are left untouched. When the option is absent, generation is unchanged and nothing is stamped.
+- `assetMap` — `@name` → URL prefix, which turns a store file's `@name/subpath` into the URL a module imports.
 
 ## Runtime
 
 Every generated module runs on the same browser runtime, `runtime/dom-patch/patch.ts`: `BackflipShell`, the generic `PatchBranch` that interprets the descriptors, and `BackflipElement`. It imports the JS runtime (`runtime/js/render.ts`) for `render`, `activeBranchIndex` and `execFn`, so a swapped-in branch is rendered, chosen and evaluated exactly as the server does it.
 
-`RUNTIME_FILES` lists both as paths relative to the package's `dist/`. When a build generates any module, the CLI copies each into the dom-patch output dir at that same relative path, so the modules' `./runtime/dom-patch/patch.js` import and patch.js's own import of `../js/render.js` both resolve. If a `dist` file is missing the build **errors and stops**, since a silent skip would ship a page that 404s on import. The preview server maps `<domPatchOutputDir>/<file>` to the same `dist` file.
+Store files import `BackflipStore` from `runtime/dom-patch/stores.ts`; `BackflipShell` hands the stores a shell declares to patching next to its attributes.
+
+`RUNTIME_FILES` lists the three as paths relative to the package's `dist/`. When a build generates any module, the CLI copies each into the dom-patch output dir at that same relative path, so the modules' `./runtime/dom-patch/patch.js` import and patch.js's own import of `../js/render.js` both resolve. If a `dist` file is missing the build **errors and stops**, since a silent skip would ship a page that 404s on import. The preview server maps `<domPatchOutputDir>/<file>` to the same `dist` file.
 
 ## Script auto-include
 

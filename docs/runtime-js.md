@@ -49,14 +49,24 @@ for (const chunk of streamRenderRoot(greetingModule.greeting, { name: "Alice" })
 
 ### dom-patch script auto-include
 
-`renderRoot` and `streamRenderRoot` include the [client-side patching](dom-patch.md) scripts of the custom elements a page renders, just before `</body>`, with identical output. The single-node `render(...)` entry never injects. See [Script auto-include](dom-patch.md#script-auto-include).
+`renderRoot` and `streamRenderRoot` include the [client-side patching](dom-patch.md) scripts and shipped [stores](data-stores.md) of the custom elements a page renders, just before `</body>`, with identical output. The single-node `render(...)` entry never injects. See [Script auto-include](dom-patch.md#script-auto-include).
+
+### Stores
+
+Pass the data of the page's [stores](data-stores.md) by store name, after `slots`:
+
+```ts
+renderRoot(page, { title: "Shop" }, undefined, { widgets: { "42": { name: "Gizmo" } } });
+```
 
 ## Signatures
 
 ```ts
-renderRoot(n: RootRNode, ctx: object, slots?: SlotMap): string
+renderRoot(n: RootRNode, ctx: object, slots?: SlotMap, stores?: Record<string, unknown>): string
 
-streamRenderRoot(n: RootRNode, ctx: object, slots?: SlotMap): Generator<string>
+streamRenderRoot(n: RootRNode, ctx: object, slots?: SlotMap, stores?: Record<string, unknown>): Generator<string>
+
+render(n: RNode, ctx: object, slots?: SlotMap, stores?: Record<string, unknown>): string
 ```
 
 | Parameter | Description |
@@ -64,6 +74,13 @@ streamRenderRoot(n: RootRNode, ctx: object, slots?: SlotMap): Generator<string>
 | `n` | The `RootRNode` exported from a generated module |
 | `ctx` | Plain object; keys match the template variable names |
 | `slots` | Optional. Only needed when rendering a partial that declares `<b-slot>` |
+| `stores` | Optional. Store data by store name; must be JSON-serializable. Stores no rendered partial declares are ignored. |
+
+Render errors:
+
+- a rendered partial declares a store that `stores` does not hold;
+- the root partial declares a store whose name is also a key of `ctx`;
+- a shipped store's data cannot be serialized to JSON (`JSON.stringify` throws, e.g. on a cycle).
 
 ## Key types
 

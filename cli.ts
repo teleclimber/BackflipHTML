@@ -2,7 +2,7 @@ import { parseArgs } from '@std/cli/parse-args';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compileDirectory } from './compiler/partials.ts';
-import { loadConfig, resolveConfigRoot, resolveAssetDirs, resolveDomPatchOutputDirs, resolveDomPatchScriptUrl, type OutputConfig } from './compiler/config.ts';
+import { loadConfig, resolveConfigRoot, resolveAssetDirs, resolveStoreDirs, resolveDomPatchOutputDirs, resolveDomPatchScriptUrl, type OutputConfig } from './compiler/config.ts';
 import { fileToJsModule } from './compiler/generate/js/nodes2js.ts';
 import { fileToPhpFile } from './compiler/generate/php/nodes2php.ts';
 import { applyDomPatch, moduleFileName, RUNTIME_FILES } from './compiler/generate/dom-patch/nodes2patch.ts';
@@ -63,13 +63,16 @@ let outputsFromConfig = false;
 const { config, errors: configErrors } = await loadConfig(Deno.cwd());
 let assetMap: Map<string, string> | undefined;
 let assetDirs: Map<string, string> | undefined;
+let storeDirs: string[] = [];
 if (config) {
     if (!inputDir) inputDir = resolveConfigRoot(Deno.cwd(), config);
     if (config.assets && config.assets.length > 0) {
         assetMap = new Map(config.assets.map(a => [a.name, a.prefix]));
         assetDirs = resolveAssetDirs(Deno.cwd(), config);
     }
+    storeDirs = resolveStoreDirs(Deno.cwd(), config);
 }
+const compileOpts = { assetMap, assetDirs, storeDirs };
 if (cliOutputDir || cliLang) {
     if (!cliOutputDir || !cliLang) {
         // partial CLI override — handled below in generate-mode validation
@@ -95,7 +98,7 @@ if (args.check) {
         printUsageAndExit('--check mode does not accept <output-dir> or --lang');
     }
 
-    const { directory, errors } = await compileDirectory(inputDir, assetMap || assetDirs ? { assetMap, assetDirs } : undefined);
+    const { directory, errors } = await compileDirectory(inputDir, compileOpts);
 
     if (assetDirs) {
         const refs = collectAllAssetReferences(directory.files, assetDirs);
@@ -119,7 +122,6 @@ if (args.check) {
         console.error('No asset directories configured in backflip.json');
         Deno.exit(1);
     }
-    const compileOpts = assetMap || assetDirs ? { assetMap, assetDirs } : undefined;
     const { directory, errors } = await compileDirectory(inputDir, compileOpts);
     const fatalErrors = errors.filter(e => e.severity === 'fatal');
     if (fatalErrors.length > 0) {
@@ -181,7 +183,6 @@ if (args.check) {
         }
     }
 
-    const compileOpts = assetMap || assetDirs ? { assetMap, assetDirs } : undefined;
     const { directory: result, errors } = await compileDirectory(inputDir, compileOpts);
 
     const fatalErrors = errors.filter(e => e.severity === 'fatal');
@@ -223,7 +224,7 @@ if (args.check) {
             ? (resolveDomPatchScriptUrl(Deno.cwd(), config, moduleFileName(tagName)) ?? undefined)
             : undefined;
         for (const [, compiledFile] of result.files) {
-            const { modules } = applyDomPatch(compiledFile, { scriptUrlFor });
+            const { modules } = applyDomPatch(compiledFile, { scriptUrlFor, assetMap });
             for (const mod of modules) {
                 domPatchJs.set(moduleFileName(mod.tagName), mod.js);
                 if (scriptUrlFor(mod.tagName) === undefined && domPatchDirs.length > 0 && !warnedUnservable) {

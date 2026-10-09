@@ -446,6 +446,19 @@ Deno.test("BackflipShell: reads each declared attr as a string or a boolean", ()
 	assertEquals(new Shell(el).collectData(), { title: 'T', missing: '', open: true, closed: false });
 });
 
+Deno.test("BackflipShell: puts each declared store next to the attributes", () => {
+	const { el } = host('');
+	el.setAttribute('id', '42');
+	const widgets = { data: { '42': 'Gizmo' } };
+	class Shell extends BackflipShell {
+		static override bfAttrs = { id: 'string' } as const;
+		static override bfStores = { widgets };
+	}
+	const data = new Shell(el).collectData();
+	assertEquals(data, { widgets, id: '42' });
+	assertEquals(data.widgets === widgets, true);
+});
+
 Deno.test("BackflipShell: update patches from the element's current attributes", () => {
 	const { el } = host(`<p data-bfid="p"><!--m0-->x<!--m1--></p>`);
 	el.setAttribute('name', 'World');

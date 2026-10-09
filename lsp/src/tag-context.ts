@@ -129,7 +129,24 @@ export function findEnclosingCallSiteTag(
 	doc: TextDocument, lineIdx: number, character: number,
 ): CallSiteTag | null {
 	const own = findEnclosingOpeningTag(doc, lineIdx, character);
-	const cutoff = own ? own.startOffset : doc.offsetAt({ line: lineIdx, character });
+	const parent = parentTag(doc, own ? own.startOffset : doc.offsetAt({ line: lineIdx, character }));
+	return parent ? asCallSiteTag(parent) : null;
+}
+
+/**
+ * True when `tag` defines a partial: a top-level tag (one no element encloses) that
+ * carries `b-name` or is a custom element tag.
+ */
+export function isDefinitionTag(doc: TextDocument, tag: OpeningTag): boolean {
+	if (parentTag(doc, tag.startOffset)) return false;
+	return /\sb-name\s*=/.test(maskQuoted(tag.openTagText)) || isCustomElementTagName(tag.tagName);
+}
+
+/**
+ * The element still open at `cutoff`, counting tags backwards from it, or null at the
+ * top level. Void and self-closing tags open nothing, so they are skipped.
+ */
+function parentTag(doc: TextDocument, cutoff: number): OpeningTag | null {
 	const before = doc.getText().substring(0, cutoff);
 	const masked = maskQuoted(before);
 
@@ -159,9 +176,8 @@ export function findEnclosingCallSiteTag(
 			depth--;
 			continue;
 		}
-		// An unclosed opening tag: the element the cursor's tag is a child of.
 		const openTagText = before.substring(tag.index, masked.indexOf('>', tag.index) + 1);
-		return asCallSiteTag({ tagName: tag.tagName, openTagText, startOffset: tag.index });
+		return { tagName: tag.tagName, openTagText, startOffset: tag.index };
 	}
 	return null;
 }

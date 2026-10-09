@@ -3,6 +3,8 @@ import type { ProjectIndex } from './index.js';
 import { visibleCustomElementDef } from './index.js';
 import * as path from 'node:path';
 import { assetRefAtCursor } from './asset-attr.js';
+import type { StoreAtCursor } from './stores.js';
+import type { SourceLoc } from '@backflip/html';
 
 /**
  * Given a partial reference (b-part), find the definition location (b-name).
@@ -89,5 +91,22 @@ export function findAssetDefinition(
 			start: { line: 0, character: 0 },
 			end: { line: 0, character: 0 },
 		},
+	};
+}
+
+/**
+ * Where a store under the cursor is defined: a store variable goes to its partial's
+ * `b-store:` attribute in `docUri`, a `b-store:` attribute to the store file.
+ */
+export function findStoreDefinition(at: StoreAtCursor, docUri: string): Location | null {
+	if (at.kind === 'variable') return { uri: docUri, range: locRange(at.declaration.loc) };
+	if (!at.store) return null;
+	return { uri: `file://${at.store.file}`, range: locRange(at.store.nameLoc) };
+}
+
+function locRange(loc: SourceLoc): Location['range'] {
+	return {
+		start: { line: loc.startLine - 1, character: loc.startCol - 1 },
+		end: { line: loc.endLine - 1, character: loc.endCol - 1 },
 	};
 }

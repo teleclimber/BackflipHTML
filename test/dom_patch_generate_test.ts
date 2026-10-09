@@ -15,6 +15,7 @@ import * as fs from "node:fs/promises";
 import { JSDOM } from "npm:jsdom";
 
 import { renderRoot, type RootRNode } from "../runtime/js/render.ts";
+import { linkAsScript } from "./link-as-script.ts";
 
 const TMPDIR = "/tmp/claude-1000/dom-patch-generate";
 const CLI_PATH = new URL("../cli.ts", import.meta.url).pathname;
@@ -51,31 +52,6 @@ async function buildProject(): Promise<string> {
 	assertEquals(out.code, 0, `cli failed: ${stderr}`);
 	assertEquals(stderr.includes("warning:"), false, `unexpected warning: ${stderr}`);
 	return workDir;
-}
-
-/**
- * Link `entry` and every file it reaches through relative imports into one classic
- * script: each file becomes a block returning its exports, after the files it imports.
- */
-async function linkAsScript(entry: string): Promise<string> {
-	const order: string[] = [];
-	const sources = new Map<string, string>();
-	const importRe = /^import \{([^}]*)\} from '(\.[^']+)';$/gm;
-	async function visit(file: string): Promise<void> {
-		if (sources.has(file)) return;
-		const src = await fs.readFile(file, "utf-8");
-		sources.set(file, src);
-		for (const [, , spec] of src.matchAll(importRe)) await visit(path.resolve(path.dirname(file), spec));
-		order.push(file);
-	}
-	await visit(entry);
-	const moduleVar = (file: string) => `__module${order.indexOf(file)}`;
-	return order.map(file => {
-		const src = sources.get(file)!.replace(importRe, (_, names, spec) =>
-			`const {${names}} = ${moduleVar(path.resolve(path.dirname(file), spec))};`);
-		const exported = [...src.matchAll(/^export (?:function\*?|class|const|let) (\w+)/gm)].map(m => m[1]);
-		return `const ${moduleVar(file)} = (() => {\n${src.replace(/^export /gm, "")}\nreturn { ${exported.join(", ")} };\n})();`;
-	}).join("\n");
 }
 
 /**

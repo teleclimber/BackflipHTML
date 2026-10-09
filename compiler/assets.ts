@@ -9,6 +9,7 @@ import type {
 	RootTNode,
 	CustomElementPartialRoot,
 	CompiledFile,
+	PartialStore,
 } from './types.js';
 import type { SourceAttr } from './parse-tree.js';
 
@@ -149,6 +150,10 @@ export function validateStaticAssetAttr(
 
 // --- asset resolution (stage 2) ---
 
+function resolveStoreSrcs(stores: PartialStore[], assetMap: Map<string, string>): PartialStore[] {
+	return stores.map(s => s.src ? { ...s, src: replaceAssetRef(s.src, assetMap) } : s);
+}
+
 /**
  * Stage 2: Resolve `asset` AttrParts in a compiled AST using an asset map.
  * Returns a new CompiledFile with `asset` parts replaced by `static` parts
@@ -169,6 +174,7 @@ export function resolveAssetRefs(compiled: CompiledFile, assetMap: Map<string, s
 				// Rewrite each script's @name/... prefix (no-op for already-absolute dependency URLs).
 				...(root.scripts ? { scripts: root.scripts.map(s => ({ ...s, url: replaceAssetRef(s.url, assetMap) })) } : {}),
 				...(root.meta ? { meta: root.meta } : {}),
+				...(root.stores ? { stores: resolveStoreSrcs(root.stores, assetMap) } : {}),
 			}
 			: {
 				type: 'root',
@@ -177,6 +183,7 @@ export function resolveAssetRefs(compiled: CompiledFile, assetMap: Map<string, s
 				...(root.loc ? { loc: root.loc } : {}),
 				...(root.exported !== undefined ? { exported: root.exported } : {}),
 				...(root.meta ? { meta: root.meta } : {}),
+				...(root.stores ? { stores: resolveStoreSrcs(root.stores, assetMap) } : {}),
 			};
 		// Resolve asset AttrParts node-locally; mapTNodes handles the structural copy
 		// (and adjacent-raw coalescing) generically, so new TNode fields survive via spread.

@@ -1,4 +1,5 @@
-import type { CompiledFile, ElementTNode, IfTNode, TNode } from '../../types.js';
+import type { CompiledFile, ElementTNode, IfTNode, PartialStore, TNode } from '../../types.js';
+import { replaceAssetRef } from '../../assets.js';
 import type { Parsed } from '../../backcode.js';
 import { nodeToJS } from '../js/nodes2js.js';
 import { branchMarker, makeBfidGen, type BfidGen } from './bfid.js';
@@ -15,10 +16,10 @@ export type { RuntimeFile } from './codegen.js';
 
 /**
  * The runtime every generated module runs on: a module imports patch.js, which
- * imports render.js. A build copies each from the package's `dist/` into the
- * dom-patch output dir at the same relative path.
+ * imports render.js, and store files import stores.js. A build copies each from the
+ * package's `dist/` into the dom-patch output dir at the same relative path.
  */
-export const RUNTIME_FILES: RuntimeFile[] = ['runtime/js/render.js', 'runtime/dom-patch/patch.js'];
+export const RUNTIME_FILES: RuntimeFile[] = ['runtime/js/render.js', 'runtime/dom-patch/patch.js', 'runtime/dom-patch/stores.js'];
 
 /** The file a partial's module is written to, relative to the dom-patch output root. */
 export function moduleFileName(tagName: string): string {
@@ -47,6 +48,8 @@ export interface DomPatchOptions {
 	 * module are left untouched.
 	 */
 	scriptUrlFor?: (tagName: string) => string | undefined;
+	/** @name → URL prefix, which turns a store's "@name/subpath" src into the URL a shell imports. */
+	assetMap?: Map<string, string>;
 }
 
 export function applyDomPatch(file: CompiledFile, opts?: DomPatchOptions): DomPatchResult {
@@ -61,11 +64,12 @@ export function applyDomPatch(file: CompiledFile, opts?: DomPatchOptions): DomPa
 		if (mode === undefined) continue;
 
 		const bAttrs = root.bAttrs ?? [];
+		const stores = root.stores ?? [];
 
-		// With no declared attributes there is nothing to patch, but 'base' and 'full'
+		// With no declared inputs there is nothing to patch, but 'base' and 'full'
 		// still owe the author a class — an empty patch-branch gives them one.
 		let rootBranch: PatchBranch = { sites: [], sets: [], vars: [] };
-		if (bAttrs.length > 0) {
+		if (bAttrs.length > 0 || stores.length > 0) {
 			// Walk into a scope tree (qualification folded in — the tree's shape depends
 			// on which sets qualify).
 			const scope = collectPatchTree(root, qualifies);
@@ -78,13 +82,21 @@ export function applyDomPatch(file: CompiledFile, opts?: DomPatchOptions): DomPa
 			// Pass 2 — snapshots, now that every marker at every depth is in the tree.
 			fillSnapshots(rootBranch);
 
-			assertDeclared(rootBranch, new Set(bAttrs.map(b => b.name)), partialName);
+			assertDeclared(rootBranch, new Set([...bAttrs, ...stores].map(d => d.name)), partialName);
 		}
 
-		const cls = generateClassForPartial(partialName, bAttrs, rootBranch, mode);
-		if (!cls) continue;
+		// A store the generated code reads ships with every page that renders the partial,
+		// and the shell imports its file. One with no src is the compiler's unserved-store
+		// error; it is left out.
+		const read = new Set(allBranches(rootBranch).flatMap(b => b.vars));
+		const shipped = stores.filter((s): s is PartialStore & { src: string } => s.src !== undefined && read.has(s.name));
+		const storeImports = shipped.map(s => ({ name: s.name, url: replaceAssetRef(s.src, opts?.assetMap ?? new Map()) }));
 
-		modules.push({ tagName: partialName, js: generateFile([cls], runtimeImportsFor(mode)) });
+		const cls = generateClassForPartial(partialName, bAttrs, rootBranch, mode, shipped.map(s => s.name));
+		if (!cls) continue;
+		for (const store of shipped) store.shipped = true;
+
+		modules.push({ tagName: partialName, js: generateFile([cls], runtimeImportsFor(mode), storeImports) });
 
 		// Only partials that produce a module get a script. 'full' registers the element
 		// itself, so its module is an executed entry; otherwise an author module imports it.
@@ -179,7 +191,7 @@ function fillSnapshots(root: PatchBranch): void {
 function assertDeclared(branch: PatchBranch, declared: Set<string>, partialName: string): void {
 	for (const v of branch.vars) {
 		if (!declared.has(v)) {
-			throw new Error(`dom-patch: <${partialName}> patches on "${v}", which is not a declared b-attr`);
+			throw new Error(`dom-patch: <${partialName}> patches on "${v}", which is not a declared b-attr or b-store`);
 		}
 	}
 	for (const s of branch.sets) {

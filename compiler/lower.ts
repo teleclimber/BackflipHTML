@@ -17,8 +17,9 @@ import type {
 	SourceLoc, TNode, RawTNode, PrintTNode, ForTNode, IfTNode, IfBranch,
 	SlotTNode, PartialRefTNode, BPartCallTNode, CustomElementCallTNode, ParentTNode,
 	RootTNode, NamedPartialRoot, CustomElementPartialRoot, CompiledFile, CompileOptions, PartialDef, PartialBinding,
-	ElementTNode, AttrPart, GenerateMode,
+	ElementTNode, AttrPart, GenerateMode, PartialStore,
 } from './types.js';
+import type { StoreTable } from './stores.js';
 
 /**
  * The lowering is recursive and bottom-up: every `lower*` function *returns*
@@ -51,6 +52,7 @@ interface Ctx {
 	filename?: string;
 	includeLocs: boolean;
 	assetCtx: AssetAttrCtx;
+	stores: StoreTable;
 	errors: BackflipError[];
 	compiledFile: CompiledFile;
 }
@@ -77,6 +79,7 @@ export function lowerSlice(
 		filename,
 		includeLocs: options?.includeLocs ?? false,
 		assetCtx: { assetMap: options?.assetMap, assetDirs: options?.assetDirs, filename },
+		stores: options?.stores ?? new Map(),
 		errors: [],
 		compiledFile: { partials: new Map() },
 	};
@@ -226,11 +229,18 @@ function collectBDataBindings(el: SourceElement, ctx: Ctx): PartialBinding[] {
 }
 
 // b-attr:* / b-script / b-generate are only meaningful on a custom element partial
-// definition. Reported for every other element, inside a partial or not.
+// definition, and b-store:* on any partial definition. Reported for every other
+// element, inside a partial or not; `onNamedDefinition` allows b-store:*.
 const DEFINITION_ONLY_DIRECTIVES = ['b-script', 'b-generate'];
 
-function reportDirectiveMisplacement(el: SourceElement, ctx: Ctx): void {
+function reportDirectiveMisplacement(el: SourceElement, ctx: Ctx, onNamedDefinition = false): void {
 	for (const attr of el.attrs) {
+		if (attr.name.startsWith('b-store:')) {
+			if (!onNamedDefinition) {
+				ctx.errors.push(new BackflipError(`b-store is only allowed on partial definitions`, attrErrLoc(el, attr.name, ctx)));
+			}
+			continue;
+		}
 		// The reported name is the directive, not the attribute: `b-attr:foo` is `b-attr`.
 		const directive = attr.name.startsWith('b-attr:')
 			? 'b-attr'
@@ -241,6 +251,42 @@ function reportDirectiveMisplacement(el: SourceElement, ctx: Ctx): void {
 			attrErrLoc(el, attr.name, ctx)
 		));
 	}
+}
+
+/**
+ * The stores a partial definition declares with b-store:NAME. Each must name a
+ * declared store and carry no value. (A repeated b-store:NAME never arrives: HTML
+ * parsers drop duplicate attributes.)
+ */
+function parseStoreDecls(el: SourceElement, ctx: Ctx): PartialStore[] {
+	const stores: PartialStore[] = [];
+	for (const attr of el.attrs) {
+		if (!attr.name.startsWith('b-store:')) continue;
+		const name = attr.name.slice('b-store:'.length);
+		const loc = attrErrLoc(el, attr.name, ctx);
+		// HTML lowercases attribute names; parse-tree.ts keeps the original as `rawName`.
+		const rawName = attr.rawName?.slice('b-store:'.length);
+		if (rawName && /[A-Z]/.test(rawName)) {
+			ctx.errors.push(new BackflipError(
+				`b-store name "${rawName}" contains uppercase letters; HTML attribute names are lowercased, so this declares "${name}". Use a lowercase name to avoid confusion.`,
+				{ ...(loc ?? { filename: ctx.filename }), severity: 'warning' }
+			));
+		}
+		if (attr.value !== '') {
+			ctx.errors.push(new BackflipError(`b-store does not accept a value`, loc));
+			continue;
+		}
+		const decl = ctx.stores.get(name);
+		if (!decl) {
+			ctx.errors.push(new BackflipError(`b-store:${name} names no declared store`, loc));
+			continue;
+		}
+		const store: PartialStore = { name };
+		if (decl.src) store.src = decl.src;
+		if (attr.loc) store.loc = attr.loc;
+		stores.push(store);
+	}
+	return stores;
 }
 
 function reportFlowOnDefinition(el: SourceElement, ctx: Ctx): void {
@@ -482,7 +528,7 @@ function lowerNamedDefinition(el: SourceElement, bNameAttr: SourceAttr, ctx: Ctx
 
 	// b-attr is only allowed on custom element partial definitions (a hyphenated tag).
 	// b-name partials are NOT custom element partials — flag b-attr:* as an error here.
-	reportDirectiveMisplacement(el, ctx);
+	reportDirectiveMisplacement(el, ctx, true);
 
 	const partialName = bNameAttr.value;
 	const openLoc = el.openLoc;
@@ -495,6 +541,8 @@ function lowerNamedDefinition(el: SourceElement, bNameAttr: SourceAttr, ctx: Ctx
 	} };
 	partialRoot.loc = findAttrLoc(el, 'b-name');
 	partialRoot.exported = el.attrs.some(a => a.name === 'b-export');
+	const stores = parseStoreDecls(el, ctx);
+	if (stores.length > 0) partialRoot.stores = stores;
 	ctx.compiledFile.partials.set(partialName, partialRoot);
 
 	const pctx: PartialCtx = { ...ctx, root: partialRoot, name: partialName };
@@ -687,6 +735,22 @@ function lowerCustomElementDefinition(el: SourceElement, ctx: Ctx): void {
 			{ ...(attrErrLoc(el, 'b-script', ctx) ?? tagErrLoc(el, ctx) ?? { filename: ctx.filename }), severity: 'warning' }
 		));
 	}
+	const stores = parseStoreDecls(el, ctx);
+	for (const store of stores) {
+		const loc = store.loc ? attrErrLoc(el, `b-store:${store.name}`, ctx) : tagErrLoc(el, ctx);
+		if (bAttrNameSet.has(store.name)) {
+			ctx.errors.push(new BackflipError(`b-store:${store.name} conflicts with b-attr:${store.name}; a partial's variables need distinct names`, loc));
+		}
+		// The generated code imports the store file in the browser.
+		if (mode !== undefined && !store.src) {
+			ctx.errors.push(new BackflipError(
+				`<${partialName}> generates client JS, so it may only declare stores the browser can load; the file of store "${store.name}" (${ctx.stores.get(store.name)!.file}) is not inside an asset dir`,
+				loc
+			));
+		}
+	}
+	if (stores.length > 0) partialRoot.stores = stores;
+
 	if ((mode === 'base' || mode === 'full') && RESERVED_ELEMENT_NAMES.has(partialName)) {
 		ctx.errors.push(new BackflipError(
 			`<${partialName}> cannot be registered as a custom element: "${partialName}" is a reserved element name, so customElements.define() would throw`,
@@ -808,6 +872,7 @@ function buildCustomElementPartialRef(el: SourceElement, pctx: PartialCtx, exclu
 		if (n === 'b-part' || n === 'b-slot' || n === 'b-in') continue;
 		if (n.startsWith('b-data:')) continue;
 		if (n.startsWith('b-attr:')) continue;
+		if (n.startsWith('b-store:')) continue;
 		const aLoc = attr.loc;
 		if (n.startsWith('b-bind:') || n.startsWith(':')) {
 			const stripped = n.startsWith('b-bind:') ? n.slice('b-bind:'.length) : n.slice(1);

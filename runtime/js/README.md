@@ -6,8 +6,9 @@ See [`docs/runtime-js.md`](../../docs/runtime-js.md) for the full API reference,
 
 ## API
 
-- `renderRoot(node, ctx, slots?)` — returns the complete HTML as a single string. Defined as the collected chunks of `streamRenderRoot`, so it shares its auto-include behavior below.
-- `streamRenderRoot(node, ctx, slots?)` — returns a `Generator<string>` yielding HTML chunks incrementally. Auto-includes dom-patch scripts: it collects the `scriptUrl` of every reactive custom-element partial that actually rendered (deduped) and injects a `<script src="…" defer></script>` for each — before the first `</body>` if present, otherwise appended. To do this while streaming it withholds only the trailing `</body>…` tail and flushes the script block before `</body>` once the page is fully walked. Batch and streaming output are byte-identical. See [docs/runtime-js.md](../../docs/runtime-js.md#dom-patch-script-auto-include).
+- `renderRoot(node, ctx, slots?, stores?)` — returns the complete HTML as a single string. Defined as the collected chunks of `streamRenderRoot`, so it shares its auto-include behavior below.
+- `streamRenderRoot(node, ctx, slots?, stores?)` — returns a `Generator<string>` yielding HTML chunks incrementally. A page collector gathers the scripts and shipped stores of every reactive custom-element partial that actually rendered, and the auto-include block it builds goes before the first `</body>` if present, otherwise at the end. To do this while streaming it withholds only the trailing `</body>…` tail and flushes the block once the page is fully walked. Batch and streaming output are byte-identical. See [docs/runtime-js.md](../../docs/runtime-js.md#dom-patch-script-auto-include).
+- `stores` holds store data by name; each rendered partial gets a `{ data }` object for every store it declares. See [docs/data-stores.md](../../docs/data-stores.md).
 - `execFn(rfn, ctx)` — evaluates a compiled expression against a context. Rendering uses it, and so do dom-patch modules to compute a patched value.
 - `activeBranchIndex(ifNode, ctx)` — the index of the branch an `if` node renders, or `-1` when none does. Rendering uses it, and so do dom-patch modules that swap a branch client-side.
 

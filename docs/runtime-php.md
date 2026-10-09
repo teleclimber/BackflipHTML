@@ -49,14 +49,24 @@ foreach (backflip_streamRenderRoot($templates['greeting'], ['name' => 'Alice']) 
 
 ### dom-patch script auto-include
 
-`backflip_renderRoot` and `backflip_streamRenderRoot` include the [client-side patching](dom-patch.md) scripts of the custom elements a page renders, just before `</body>`, with identical output. See [Script auto-include](dom-patch.md#script-auto-include).
+`backflip_renderRoot` and `backflip_streamRenderRoot` include the [client-side patching](dom-patch.md) scripts and shipped [stores](data-stores.md) of the custom elements a page renders, just before `</body>`, with identical output. See [Script auto-include](dom-patch.md#script-auto-include).
+
+### Stores
+
+Pass the data of the page's [stores](data-stores.md) as an associative array by store name, after `$slots`:
+
+```php
+backflip_renderRoot($templates['page'], ['title' => 'Shop'], [], ['widgets' => ['42' => ['name' => 'Gizmo']]]);
+```
+
+Shipped stores are encoded with `json_encode(..., JSON_HEX_TAG | JSON_HEX_AMP | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)`. The output matches the JS runtime's except where the encoders differ: float formatting, and PHP arrays that encode as JSON arrays (an empty array, or one keyed `0..n-1`).
 
 ## Signatures
 
 ```php
-backflip_renderRoot(array $node, array $ctx, array $slots = []): string
+backflip_renderRoot(array $node, array $ctx, array $slots = [], array $stores = []): string
 
-backflip_streamRenderRoot(array $node, array $ctx, array $slots = []): Generator
+backflip_streamRenderRoot(array $node, array $ctx, array $slots = [], array $stores = []): Generator
 ```
 
 | Parameter | Description |
@@ -64,6 +74,13 @@ backflip_streamRenderRoot(array $node, array $ctx, array $slots = []): Generator
 | `$node` | Node tree from `backflip_require()` |
 | `$ctx` | Associative array; keys match the template variable names |
 | `$slots` | Optional. Only needed when rendering a partial that declares a slot |
+| `$stores` | Optional. Store data by store name; must be JSON-encodable. Stores no rendered partial declares are ignored. |
+
+Render errors (`RuntimeException`):
+
+- a rendered partial declares a store that `$stores` does not hold;
+- the root partial declares a store whose name is also a key of `$ctx`;
+- a shipped store's data cannot be encoded to JSON (e.g. `NAN`, invalid UTF-8).
 
 ## JS truthiness
 

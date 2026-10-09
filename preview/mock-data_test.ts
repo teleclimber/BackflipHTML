@@ -1,5 +1,5 @@
 import { assertEquals, assertNotEquals } from "jsr:@std/assert";
-import { generateMockData, type PartialLookup } from './mock-data.ts';
+import { generateMockData, generateStoreMocks, type PartialLookup } from './mock-data.ts';
 import type { DataShape } from '../compiler/data-shape.ts';
 import type { RootTNode, CompiledFile, PartialDef, CompileOptions } from '../compiler/types.ts';
 import { compilePartial } from '../compiler/compiler.ts';
@@ -312,4 +312,106 @@ Deno.test("variable with both printed and properties generates object", () => {
 	const result = generateMockData(shapes);
 	const user = result.user as Record<string, unknown>;
 	assertEquals(user.name, 'name');
+});
+
+// --- Keyed mocks for indexed shapes ---
+
+Deno.test("an indexed shape keyed by a variable mocks an object keyed by that variable's mock value", () => {
+	const shapes = new Map([
+		['widget_id', shape(['printed'])],
+		['widgets', shape([], { indexed: true, indexVars: ['widget_id'], properties: new Map([['name', shape(['printed'])]]) })],
+	]);
+	const result = generateMockData(shapes);
+	assertEquals(result.widgets, { widget_id: { name: 'name' } });
+});
+
+Deno.test("a keyed mock follows an override of its index variable", () => {
+	const shapes = new Map([
+		['id', shape(['printed'])],
+		['items', shape(['printed'], { indexed: true, indexVars: ['id'] })],
+	]);
+	assertEquals(generateMockData(shapes, undefined, { id: '42' }).items, { '42': 'items' });
+});
+
+Deno.test("a keyed mock has one entry per index variable", () => {
+	const shapes = new Map([
+		['a', shape(['printed'])],
+		['b', shape(['attribute'], { attributes: new Set(['href']) })],
+		['m', shape(['printed'], { indexed: true, indexVars: ['a', 'b'] })],
+	]);
+	assertEquals(generateMockData(shapes).m, { a: 'm', '#': 'm' });
+});
+
+Deno.test("an iterated shape stays an array even when also indexed by a variable", () => {
+	const shapes = new Map([
+		['i', shape(['printed'])],
+		['items', shape(['iterable'], { indexed: true, indexVars: ['i'] })],
+	]);
+	assertEquals(Array.isArray(generateMockData(shapes).items), true);
+});
+
+Deno.test("a nested keyed shape is found through its index variable", async () => {
+	const html = `<div b-name="row">{{ widgets.data[widget_id] ? widgets.data[widget_id].name : '' }}{{ widget_id }}</div>`;
+	const { compiled } = await compileFile(html);
+	const { inferDataShape } = await import('../compiler/data-shape.ts');
+	const result = generateMockData(inferDataShape(compiled.partials.get('row')!));
+	assertEquals(result, { widgets: { data: { widget_id: { name: 'name' } } }, widget_id: 'widget_id' });
+});
+
+Deno.test("a b-for over a member path mocks shaped elements at that path", async () => {
+	const html = `<div b-name="list"><p b-for="item in page.items">{{ item.name }}</p></div>`;
+	const { compiled } = await compileFile(html);
+	const { inferDataShape } = await import('../compiler/data-shape.ts');
+	const result = generateMockData(inferDataShape(compiled.partials.get('list')!));
+	assertEquals(result, { page: { items: [{ name: 'name' }, { name: 'name' }, { name: 'name' }] } });
+});
+
+// --- Store mocks ---
+
+async function compileWithStores(...htmls: string[]): Promise<CompiledFile> {
+	const stores = new Map(['widgets', 'tags'].map(name => [name, {
+		name, file: `/p/${name}.js`, src: `@s/${name}.js`,
+		nameLoc: { startLine: 1, startCol: 1, startOffset: 0, endLine: 1, endCol: 1, endOffset: 0 },
+	}]));
+	const partials: CompiledFile['partials'] = new Map();
+	for (const html of htmls) {
+		const { compiled, errors } = await compileFile(html, undefined, undefined, { stores });
+		const fatal = errors.filter(e => e.severity !== 'warning');
+		if (fatal.length > 0) throw new Error(fatal.map(e => e.message).join('\n'));
+		for (const [name, root] of compiled.partials) partials.set(name, root);
+	}
+	return { partials };
+}
+
+Deno.test("store mocks: the motivating example finds its entry", async () => {
+	const compiledFile = await compileWithStores(`<my-widget b-store:widgets b-attr:widget_id b-generate="full"><h3>{{ widgets.data[widget_id].name }}</h3></my-widget>`);
+	const root = compiledFile.partials.get('my-widget')!;
+	assertEquals(generateStoreMocks(root, { compiledFile }), { widgets: { widget_id: { name: 'name' } } });
+});
+
+Deno.test("store mocks: shapes merge across every reachable declaring partial", async () => {
+	const compiledFile = await compileWithStores(
+		`<b-unwrap b-name="page" b-store:widgets>{{ widgets.data.title }}<div b-part="#list"></div><my-tagger></my-tagger></b-unwrap>`,
+		`<b-unwrap b-name="list" b-store:widgets><p b-for="w in widgets.data.items">{{ w.name }}</p></b-unwrap>`,
+		`<my-tagger b-store:tags>{{ tags.data.label }}</my-tagger>`,
+		`<b-unwrap b-name="unreached" b-store:widgets>{{ widgets.data.unreached }}</b-unwrap>`,
+	);
+	const mocks = generateStoreMocks(compiledFile.partials.get('page')!, { compiledFile });
+	const widgets = mocks.widgets as Record<string, unknown>;
+	assertEquals(Object.keys(mocks).sort(), ['tags', 'widgets']);
+	assertEquals(widgets.title, 'title');
+	assertEquals(widgets.items, [{ name: 'name' }, { name: 'name' }, { name: 'name' }]);
+	assertEquals('unreached' in widgets, false);
+	assertEquals(mocks.tags, { label: 'label' });
+});
+
+Deno.test("store mocks: a store declared but not read under data is null", async () => {
+	const compiledFile = await compileWithStores(`<b-unwrap b-name="page" b-store:widgets>x</b-unwrap>`);
+	assertEquals(generateStoreMocks(compiledFile.partials.get('page')!, { compiledFile }), { widgets: null });
+});
+
+Deno.test("store mocks: overrides deep merge by store name", async () => {
+	const compiledFile = await compileWithStores(`<b-unwrap b-name="page" b-store:widgets>{{ widgets.data.title }}{{ widgets.data.sub }}</b-unwrap>`);
+	const mocks = generateStoreMocks(compiledFile.partials.get('page')!, { compiledFile }, { widgets: { title: 'Mine' } });
+	assertEquals(mocks.widgets, { title: 'Mine', sub: 'sub' });
 });

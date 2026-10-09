@@ -1,0 +1,9 @@
+<b-unwrap b-name="unknown" b-store:gadgets>x</b-unwrap>
+<b-unwrap b-name="nested"><div b-store:widgets>x</div></b-unwrap>
+<my-unserved b-store:users b-generate="full">{{ users.data.a }}</my-unserved>
+<my-clash b-store:widgets b-attr:widgets b-generate="full">{{ widgets }}</my-clash>
+<b-unwrap b-name="card" b-store:widgets>{{ widgets.data.a }}</b-unwrap>
+<b-unwrap b-name="bound"><div b-part="#card" b-data:widgets="x"></div></b-unwrap>
+<b-unwrap b-name="reader">{{ users.data.a }}</b-unwrap>
+<b-unwrap b-name="caller" b-store:users><div b-part="#reader"></div></b-unwrap>
+<my-undeclared b-generate="full">{{ widgets.data.a }}</my-undeclared>

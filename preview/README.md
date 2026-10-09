@@ -20,12 +20,14 @@ Use `--port` to change the port:
 npx tsx preview/server.ts --port 8080
 ```
 
-The server watches for changes to templates, CSS, and `backflip.json`. When a file changes, templates are recompiled and the browser reloads automatically via Server-Sent Events.
+The server watches for changes to templates, CSS, store files, and `backflip.json`. When a file changes, templates are recompiled and the browser reloads automatically via Server-Sent Events.
 
 ## Key features
 
 - **Mock data generation** — printed variables become their name as a string, booleans become `true`, iterables become arrays of 3 items, attributes get sensible defaults (`href` → `"#"`, `src` → placeholder image URL)
 - **Cross-partial data resolution** — when a partial passes data to a child via `b-data:`, the mock data is shaped to match the child partial's requirements
+- **Keyed mocks** — a value indexed by a variable (`prices[sku]`) is mocked as an object keyed by that variable's mock value, so the lookup finds an entry
+- **Store mocks** — every store declared by the previewed partial or a partial it reaches gets mock data from how those partials read it, passed to the renderer as its stores
 - **Slot placeholders** — unfilled slots render as grey placeholder blocks
 - **CSS inclusion** — automatically includes CSS files from configured asset directories
 - **Live reload** — file changes trigger recompilation and browser reload via SSE

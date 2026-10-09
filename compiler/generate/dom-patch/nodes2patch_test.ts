@@ -5,6 +5,7 @@ import type { CompiledFile, ElementTNode, PartialDef } from "../../types.ts";
 import { makeSequentialBfidGen } from "./bfid.ts";
 import { applyDomPatch, type DomPatchOptions } from "./nodes2patch.ts";
 import { evalModule, plain } from "./test-helpers.ts";
+import type { StoreTable } from "../../stores.ts";
 
 async function compileCustomElement(html: string): Promise<CompiledFile> {
 	const m = html.match(/<([a-z][a-z0-9-]*-[a-z0-9-]*)/);
@@ -634,4 +635,41 @@ Deno.test("end-to-end: a variable the partial does not declare fails loudly", as
 		Error,
 		'not a declared b-attr',
 	);
+});
+
+// --- stores ------------------------------------------------------------------
+
+const STORES: StoreTable = new Map([
+	['widgets', { name: 'widgets', file: '/p/static/stores/widgets.js', src: '@static/stores/widgets.js', nameLoc: { startLine: 1, startCol: 1, startOffset: 0, endLine: 1, endCol: 1, endOffset: 0 } }],
+	['tags', { name: 'tags', file: '/p/static/stores/tags.js', src: '@static/stores/tags.js', nameLoc: { startLine: 1, startCol: 1, startOffset: 0, endLine: 1, endCol: 1, endOffset: 0 } }],
+]);
+
+async function compileWithStores(html: string): Promise<CompiledFile> {
+	const def: PartialDef = { name: 'my-widget', exported: false, customElement: true, loc: { filename: '', from: 1, to: 1 } };
+	const { compiled, errors } = await compilePartial(html, def, { stores: STORES });
+	const fatal = errors.filter(e => e.severity !== 'warning');
+	if (fatal.length > 0) throw new Error('compile errors: ' + fatal.map(e => e.message).join(', '));
+	return { partials: new Map([[def.name, compiled]]) };
+}
+
+Deno.test("stores: the shell imports each store its code reads, by its resolved URL", async () => {
+	const file = await compileWithStores(`<my-widget b-store:widgets b-store:tags b-attr:id b-generate="full"><h3>{{ widgets.data[id].name }}</h3><p b-for="t in tags.data.list">{{ t }}</p></my-widget>`);
+	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen(), assetMap: new Map([['static', '/static/']]) });
+	assertEquals(js!.includes(`import bfstore_widgets from "/static/stores/widgets.js";`), true, js!);
+	assertEquals(js!.includes('\tstatic bfStores = { widgets: bfstore_widgets };'), true, js!);
+	// tags is read only inside a b-for, which is not patched.
+	assertEquals(js!.includes('tags'), false, js!);
+	assertEquals(file.partials.get('my-widget')!.stores!.map(s => [s.name, !!s.shipped]), [['widgets', true], ['tags', false]]);
+});
+
+Deno.test("stores: a store-only site is patchable in a partial with no b-attr", async () => {
+	const file = await compileWithStores(`<my-widget b-store:widgets b-generate="render"><h3>{{ widgets.data.title }}</h3></my-widget>`);
+	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen(), assetMap: new Map([['static', '/static/']]) });
+	assertEquals(rootOf(js!, 'my-widget', { widgets: { data: { title: 'T' } } }).sites.map((s: any) => s.expr), [{ vars: ['widgets'], value: 'T' }]);
+});
+
+Deno.test("stores: a store driving a b-if makes a reactive set", async () => {
+	const file = await compileWithStores(`<my-widget b-store:widgets b-generate="render"><b-unwrap b-if="widgets.data.on"><p>on</p></b-unwrap><b-unwrap b-else><p>off</p></b-unwrap></my-widget>`);
+	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen(), assetMap: new Map([['static', '/static/']]) });
+	assertEquals(rootOf(js!, 'my-widget').sets.length, 1);
 });

@@ -15,7 +15,9 @@ With a `dom-patch` [output](#build-output) configured, a page that renders `<my-
 
 ## What updates in the browser
 
-Inside a partial that generates client JS, anything that depends on a `b-attr` variable updates when that attribute changes:
+Inside a partial that generates client JS, anything that depends on a `b-attr` or a [store](data-stores.md) updates when it changes. Only attributes change in the browser today, so in practice a value updates when one of its attributes does, reading the store's current data: `{{ widgets.data[widget_id].name }}` updates when `widget_id` changes. A value that depends on stores alone is checked against the server's HTML when the element starts up, and left alone after.
+
+What updates:
 
 - **Dynamic attributes** (`:name` / `b-bind:name`) on elements in the body, and on the partial's own tag.
 - **Interpolations** (`{{ expr }}`). The value is written as text, never parsed as HTML.
@@ -39,7 +41,7 @@ A `b-if` set re-renders in the browser when the winning branch changes: the new 
 A set is reactive when it is:
 
 - not inside a `b-for`;
-- driven by variables in each of its branch conditions (`b-else` excepted);
+- driven by variables (attributes or stores) in each of its branch conditions (`b-else` excepted);
 - free of partial references (`b-part` calls and custom-element calls), slots, and asset references anywhere in its subtree.
 
 Any failure makes the whole set non-reactive, and a disqualifier inside a nested set makes the enclosing set non-reactive too. A non-reactive set still renders correctly on the server — it just stays as rendered. A `b-for` inside a reactive set is fine: it is rendered as part of its branch.
@@ -103,7 +105,8 @@ Your module is the page's **entry** for this element and the generated module is
 ### Rules and errors
 
 - `b-generate` and `b-script` are allowed only on a custom element partial **definition** tag. `b-generate` takes one of the three values above and cannot be bare. `b-script` is an asset path (`@name/subpath`) to an existing file in a configured asset directory, at most one per definition.
-- **Data comes in through `b-attr` only.** The browser patches from the values it can read off the element, so anything else could go stale the moment an attribute changes. A variable the partial body uses must be declared with `b-attr:NAME`, and `b-data:NAME` on a call to such a partial is an error. The partial therefore takes strings and booleans only.
+- **Data comes in through `b-attr` and `b-store`.** The browser patches from the values it can read: the element's attributes and the page's [stores](data-stores.md). Anything else could go stale the moment an attribute changes. A variable the partial body uses must be declared with `b-attr:NAME` (a string or boolean) or `b-store:NAME` (any JSON), and `b-data:NAME` on a call to such a partial is an error.
+- A store such a partial declares must be served: its store file has to sit inside an asset directory, since the generated module imports it.
 - A partial that generates JS must have a project-unique tag name, since its module and its registration are named after the tag.
 
 The build warns, against the definition tag, when:
@@ -142,18 +145,20 @@ Enable generation with a `dom-patch` [output entry](configuration.md) (or `--lan
 ```
 
 - Each module is written flat at the output root, named after its partial's tag, wherever the defining template sits. Its URL stays stable when the template moves, which is what a hand-written `import` depends on.
-- The browser runtime the modules import is copied into the output dir under `runtime/`.
+- The browser runtime the modules import is copied into the output dir under `runtime/`, including `runtime/dom-patch/stores.js`, which store files import.
+- A module imports the store files its patching reads, by their served URLs.
 - The dom-patch pass adds `data-bfid` attributes and marker comments to the server-rendered HTML of generating partials, so the browser can find what to patch. These markers come from the same build as the modules: always deploy the server output and the dom-patch output together.
 
 ---
 
 ## Script auto-include
 
-The [JS](runtime-js.md) and [PHP](runtime-php.md) renderers include the scripts of the custom elements a page actually renders; there is no manual `<script>` step.
+The [JS](runtime-js.md) and [PHP](runtime-php.md) renderers include the scripts and stores of the custom elements a page actually renders; there is no manual `<script>` step.
 
 - An **entry** is injected as `<script src="…" type="module"></script>`: the generated module for `full`, your `b-script` module otherwise.
 - A **dependency** — the generated module for `base` and `render` — is injected as `<link rel="modulepreload" href="…">`, so the browser fetches it in parallel with the entry that imports it.
-- Scripts are deduplicated by URL, in first-encounter order, dependencies first, then entries. The block goes immediately before the first `</body>` (case-insensitive), or at the end of the output when there is none. Streaming and non-streaming renders produce identical output.
+- A store the generated code reads is **shipped**: its data as a JSON tag, and its store file as a dependency. See [Data stores → Shipping](data-stores.md#shipping-data-to-the-browser).
+- The block holds the store tags, then the dependencies, then the entries. Store tags are deduplicated by store name, scripts by URL, each in first-encounter order. The block goes immediately before the first `</body>` (case-insensitive), or at the end of the output when there is none. Streaming and non-streaming renders produce identical output.
 - Only rendered elements count: a custom element in an untaken `b-if` branch, or in a `b-for` over an empty list, contributes nothing. A page with none gets no block.
 - Only a page render (`renderRoot` / `streamRenderRoot` and their PHP equivalents) injects; a nested partial never emits its own block.
 

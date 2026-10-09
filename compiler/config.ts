@@ -18,6 +18,7 @@ export interface BackflipConfig {
 	root: string;
 	output?: OutputConfig[];
 	assets?: AssetDirConfig[];
+	stores?: string[];    // dirs holding store files, relative to the config dir
 }
 
 export interface LoadConfigResult {
@@ -152,6 +153,29 @@ export async function loadConfig(dir: string): Promise<LoadConfigResult> {
 		}
 	}
 
+	const stores: string[] = [];
+	if (obj.stores !== undefined) {
+		const list = typeof obj.stores === 'string' ? [obj.stores] : obj.stores;
+		if (!Array.isArray(list) || list.some(d => typeof d !== 'string')) {
+			throw new Error(`${CONFIG_FILENAME}: "stores" must be a string or an array of strings`);
+		}
+		const resolvedDir = path.resolve(dir);
+		for (const d of list as string[]) {
+			const resolvedPath = path.resolve(dir, d);
+			if (!resolvedPath.startsWith(resolvedDir + path.sep) && resolvedPath !== resolvedDir) {
+				throw new Error(`${CONFIG_FILENAME}: stores path "${d}" must not escape the project directory`);
+			}
+			try {
+				const stat = await fs.stat(resolvedPath);
+				if (!stat.isDirectory()) configErrors.push(`${CONFIG_FILENAME}: stores path is not a directory: ${d}`);
+			} catch (err: any) {
+				if (err.code === 'ENOENT') configErrors.push(`${CONFIG_FILENAME}: stores directory not found: ${d}`);
+				else throw err;
+			}
+			stores.push(d);
+		}
+	}
+
 	const config: BackflipConfig = { root: obj.root };
 	if (outputs.length > 0) config.output = outputs;
 	if (validAssets.length > 0) {
@@ -161,6 +185,8 @@ export async function loadConfig(dir: string): Promise<LoadConfigResult> {
 			prefix: e.prefix as string,
 		}));
 	}
+
+	if (stores.length > 0) config.stores = stores;
 
 	return { config, errors: configErrors };
 }
@@ -177,6 +203,10 @@ export function resolveAssetDirs(configDir: string, config: BackflipConfig): Map
 		}
 	}
 	return result;
+}
+
+export function resolveStoreDirs(configDir: string, config: BackflipConfig): string[] {
+	return (config.stores ?? []).map(d => path.resolve(configDir, d));
 }
 
 /**

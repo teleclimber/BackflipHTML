@@ -24,8 +24,17 @@ Create a `backflip.json` file at the root of your project:
 | `root`   | Yes      | Relative path to the directory containing `.html` templates |
 | `output` | No       | Array of output entries; each entry has `lang` (`"js"`, `"php"`, or `"dom-patch"`) and `path` (relative output directory). The CLI compiles for every entry. |
 | `assets` | No       | Array of asset directory configurations (see [Assets](assets.md)) |
+| `stores` | No       | A directory, or an array of directories, holding store files (see [Data stores](data-stores.md)). A store directory inside an asset directory is served, so the browser can load its store files. |
 
 Each output entry produces a separate set of files in its own directory. You can target a single language or multiple at once. Output paths must be unique within the array.
+
+### `stores`
+
+```json
+{ "stores": ["static/scripts/stores", "server/stores"] }
+```
+
+Every `*.js` file under a store directory is a store file. See [Data stores](data-stores.md).
 
 ### `lang: "dom-patch"`
 

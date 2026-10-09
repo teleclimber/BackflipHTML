@@ -61,7 +61,7 @@ The element is repeated once per item in `collection`. `item` is a new variable 
 
 All three directives compile to a single `IfTNode`. They can be nested freely inside `b-for` blocks and other `b-if` blocks.
 
-**Client-side reactivity.** Inside a custom element partial that uses [`b-generate`](#b-generate--client-side-patching), a `b-if` set driven by its declared attributes re-renders in the browser when they change. See [Reactive `b-if`](dom-patch.md#reactive-b-if) for which sets qualify.
+**Client-side reactivity.** Inside a custom element partial that uses [`b-generate`](#b-generate--client-side-patching), a `b-if` set driven by its declared attributes and stores re-renders in the browser when they change. See [Reactive `b-if`](dom-patch.md#reactive-b-if) for which sets qualify.
 
 **Errors:**
 - `b-else` or `b-else-if` without a preceding `b-if` element
@@ -162,6 +162,20 @@ On a [custom element partial](partials.md#custom-element-partials) definition ta
 ```
 
 See [Client-side patching](dom-patch.md) for the modes, the companion `b-script` directive, and what updates.
+
+---
+
+## `b-store:` — data stores
+
+On a partial definition tag, `b-store:NAME` binds the store `NAME` in the partial. Its data is read as `NAME.data`, and can be any JSON the server passes to the renderer. Several are allowed on one tag. Like `b-attr:`, it is never rendered as an attribute.
+
+```html
+<my-widget b-store:widgets b-attr:widget_id b-generate="full">
+    <h3>{{ widgets.data[widget_id].name }}</h3>
+</my-widget>
+```
+
+See [Data stores](data-stores.md).
 
 ---
 

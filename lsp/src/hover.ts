@@ -5,8 +5,9 @@ import type { ProjectIndex, PartialDef, PartialRef } from './index.js';
 import { resolvePartialDef, resolveCallTarget, visibleCustomElementDef } from './index.js';
 import { matchingPartialRefs } from './references.js';
 import type { CssAnalysisResult, StrippedPseudo } from '@backflip/css';
-import type { CompiledFile } from '@backflip/html';
+import type { CompiledFile, StoreTable } from '@backflip/html';
 import { resolveAt } from './resolve.js';
+import { storeAtCursor } from './stores.js';
 import type { DataShape } from '@backflip/html';
 import { parseBPartValue, isCustomElementTagName } from '@backflip/html';
 import * as path from 'node:path';
@@ -26,6 +27,7 @@ export function getHover(
 	templateRoot?: string | null,
 	assetDirs?: Map<string, string> | null,
 	compiledFile?: CompiledFile | null,
+	stores?: StoreTable | null,
 ): Hover | null {
 	const line = doc.getText({
 		start: { line: position.line, character: 0 },
@@ -34,6 +36,7 @@ export function getHover(
 	const offset = compiledFile ? doc.offsetAt(position) : undefined;
 
 	return hoverCssSelector(line, position, filePath, cssAnalysis, cssPaths, templateRoot)
+		?? hoverStore(doc, position, compiledFile, stores)
 		?? hoverAssetRef(line, position, assetDirs)
 		?? hoverBGenerate(line, position)
 		?? hoverBPart(line, position, filePath, index)
@@ -291,6 +294,34 @@ function hoverAssetRef(
 		`**Directory:** \`${dirPath}\``,
 		`**File:** \`${path.join(dirPath, ref.subpath)}\``,
 	]);
+}
+
+// --- store hover ---
+
+// A `b-store:NAME` attribute, or the store's variable in a partial that declares it.
+function hoverStore(
+	doc: TextDocument, position: Position, compiledFile?: CompiledFile | null, stores?: StoreTable | null,
+): Hover | null {
+	if (!compiledFile || !stores) return null;
+	const at = storeAtCursor(doc, position, compiledFile, stores);
+	if (!at) return null;
+	const file = at.store
+		? `**Store file:** ${fileLink(path.basename(at.store.file), at.store.file, at.store.nameLoc.startLine, at.store.nameLoc.startCol)}`
+		: '';
+	const served = at.store
+		? (at.store.src ? `Served as \`${at.store.src}\`.` : 'Not served: only server-rendered partials can read it.')
+		: '';
+	return mkHover(at.kind === 'variable'
+		? [
+			`**Store** \`${at.name}\` — declared with \`b-store:${at.name}\` on \`${at.partialName}\``,
+			`Read its data as \`${at.name}.data\`.`,
+			file,
+		]
+		: [
+			`**\`b-store:${at.name}\`** — binds the store \`${at.name}\` in this partial; read its data as \`${at.name}.data\``,
+			file,
+			served,
+		]);
 }
 
 // --- b-generate hover ---

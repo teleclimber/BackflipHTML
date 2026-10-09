@@ -46,6 +46,13 @@ export interface DataShape {
 	indexed?: boolean;
 
 	/**
+	 * The free variables this value is indexed by, when an index is one plain
+	 * variable (`widgets[widget_id]`). A literal, a loop variable or a compound
+	 * expression as the index records nothing.
+	 */
+	indexVars?: string[];
+
+	/**
 	 * The shape of each element when this value is iterated in a `b-for`. Built by
 	 * re-walking the loop body with the loop variable unscoped and lifting that
 	 * variable's inferred shape onto the iterable.
@@ -122,7 +129,15 @@ function getOrCreateShape(shapes: Map<string, DataShape>, name: string): DataSha
 	return shape;
 }
 
-function mergeShapeInto(target: DataShape, source: DataShape): void {
+/** A deep copy of `shape`. */
+export function cloneShape(shape: DataShape): DataShape {
+	const clone: DataShape = { usages: new Set() };
+	mergeShapeInto(clone, shape);
+	return clone;
+}
+
+/** Merge `source` into `target`; `source` is copied, never shared. */
+export function mergeShapeInto(target: DataShape, source: DataShape): void {
 	for (const u of source.usages) target.usages.add(u);
 
 	if (source.attributes) {
@@ -132,10 +147,17 @@ function mergeShapeInto(target: DataShape, source: DataShape): void {
 
 	if (source.indexed) target.indexed = true;
 
+	if (source.indexVars) {
+		if (!target.indexVars) target.indexVars = [];
+		for (const v of source.indexVars) if (!target.indexVars.includes(v)) target.indexVars.push(v);
+	}
+
 	if (source.passedTo) {
 		if (!target.passedTo) target.passedTo = [];
 		target.passedTo.push(...source.passedTo);
 	}
+
+	if (source.scalar) target.scalar = source.scalar;
 
 	if (source.properties) {
 		if (!target.properties) target.properties = new Map();
@@ -144,18 +166,20 @@ function mergeShapeInto(target: DataShape, source: DataShape): void {
 			if (existing) {
 				mergeShapeInto(existing, srcProp);
 			} else {
-				target.properties.set(key, srcProp);
+				target.properties.set(key, cloneShape(srcProp));
 			}
 		}
 	}
 
 	if (source.elementShape) {
-		if (target.elementShape) {
-			mergeShapeInto(target.elementShape, source.elementShape);
-		} else {
-			target.elementShape = source.elementShape;
-		}
+		if (!target.elementShape) target.elementShape = { usages: new Set() };
+		mergeShapeInto(target.elementShape, source.elementShape);
 	}
+}
+
+// The variable a computed member is indexed by, when its index is one free variable.
+function indexVarsOf(property: acorn.AnyNode, scoped: Set<string>): string[] | undefined {
+	return property.type === 'Identifier' && !scoped.has(property.name) ? [property.name] : undefined;
 }
 
 // --- Acorn AST expression walking ---
@@ -196,8 +220,8 @@ function collectFromExpr(
 			const mem = node as acorn.MemberExpression;
 			if (mem.computed) {
 				// items[idx] — mark the object as indexed, walk both sides
-				collectFromExprIndexed(mem.object, context, attrName, scoped, shapes, passedInfo);
-				collectFromExpr(mem.property, context, attrName, scoped, shapes, undefined);
+				collectFromExprIndexed(mem.object, indexVarsOf(mem.property, scoped), context, attrName, scoped, shapes, passedInfo);
+				collectFromIndex(mem.property, scoped, shapes);
 			} else {
 				// user.name — build property chain
 				const propName = (mem.property as acorn.Identifier).name;
@@ -261,6 +285,11 @@ function collectFromExprProperty(
 	applyShapeToObject(objectNode, propShape, scoped, shapes);
 }
 
+// An index expression is used as a key: converted to a string, like a printed value.
+function collectFromIndex(property: acorn.AnyNode, scoped: Set<string>, shapes: Map<string, DataShape>): void {
+	collectFromExpr(property, 'printed', undefined, scoped, shapes, undefined);
+}
+
 /**
  * Apply a shape (with properties/usages) to the object expression, handling
  * nested member expressions by wrapping in additional property layers.
@@ -287,8 +316,11 @@ function applyShapeToObject(
 					usages: new Set(),
 					indexed: true,
 				};
+				const indexVars = indexVarsOf(mem.property, scoped);
+				if (indexVars) wrapper.indexVars = indexVars;
 				mergeShapeInto(wrapper, shapeToApply);
 				applyShapeToObject(mem.object, wrapper, scoped, shapes);
+				collectFromIndex(mem.property, scoped, shapes);
 			} else {
 				const parentPropName = (mem.property as acorn.Identifier).name;
 				const wrapper: DataShape = {
@@ -307,6 +339,7 @@ function applyShapeToObject(
  */
 function collectFromExprIndexed(
 	objectNode: acorn.AnyNode,
+	indexVars: string[] | undefined,
 	context: UsageKind,
 	attrName: string | undefined,
 	scoped: Set<string>,
@@ -314,6 +347,7 @@ function collectFromExprIndexed(
 	passedInfo?: { partial: string; as: string },
 ): void {
 	const indexedShape: DataShape = { usages: new Set([context]), indexed: true };
+	if (indexVars) indexedShape.indexVars = indexVars;
 	if (context === 'attribute' && attrName) {
 		indexedShape.attributes = new Set([attrName]);
 	}
@@ -353,6 +387,35 @@ function collectFromParsed(
 	collectFromExpr(parsed.expr.expression, context, attrName, scoped, shapes, passedInfo);
 }
 
+/**
+ * Record `elementShape` on the value a b-for iterates: the path the iterable
+ * expression reads (`a.b` → a.properties.b), or each branch of a ternary.
+ */
+function applyElementShape(
+	iterable: Parsed,
+	elementShape: DataShape,
+	scoped: Set<string>,
+	shapes: Map<string, DataShape>,
+): void {
+	const withElement = (): DataShape => ({ usages: new Set(), elementShape });
+	if (!iterable.expr) {
+		// No AST available — fall back to vars list
+		for (const v of iterable.vars) {
+			if (!scoped.has(v)) mergeShapeInto(getOrCreateShape(shapes, v), withElement());
+		}
+		return;
+	}
+	const apply = (node: acorn.AnyNode): void => {
+		if (node.type === 'ConditionalExpression') {
+			apply(node.consequent);
+			apply(node.alternate);
+		} else {
+			applyShapeToObject(node, withElement(), scoped, shapes);
+		}
+	};
+	apply(iterable.expr.expression);
+}
+
 // --- TNode tree walking ---
 
 function walkNodesForShape(
@@ -381,18 +444,7 @@ function walkNodesForShape(
 				const tempShapes = new Map<string, DataShape>();
 				walkNodesForShape(n.tnodes, scoped, tempShapes);
 				const valShape = tempShapes.get(n.valName);
-				if (valShape) {
-					// Apply as elementShape on the iterable variable(s)
-					for (const v of n.iterable.vars) {
-						if (scoped.has(v)) continue;
-						const iterShape = getOrCreateShape(shapes, v);
-						if (iterShape.elementShape) {
-							mergeShapeInto(iterShape.elementShape, valShape);
-						} else {
-							iterShape.elementShape = valShape;
-						}
-					}
-				}
+				if (valShape) applyElementShape(n.iterable, valShape, scoped, shapes);
 				break;
 			}
 			case 'if': {
@@ -464,8 +516,8 @@ function walkNodesForShape(
  * partial's context holds what the call site binds, and such a call may bind only
  * declared inputs. The variable would render empty on the server and stay empty.
  *
- * `b-attr:` is the one declaration today. `b-prop:` will be the other, and the names
- * it declares join `declared` below.
+ * `b-attr:` and `b-store:` are the declarations today. `b-prop:` will be another,
+ * and the names it declares join `declared` below.
  */
 export function validateGeneratedPartialInputs(
 	root: RootTNode,
@@ -475,14 +527,14 @@ export function validateGeneratedPartialInputs(
 	const errors: BackflipError[] = [];
 	if (root.kind !== 'custom-element' || root.generate === undefined) return errors;
 
-	const declared = new Set((root.bAttrs ?? []).map(a => a.name));
+	const declared = new Set([...(root.bAttrs ?? []), ...(root.stores ?? [])].map(d => d.name));
 	const undeclared = [...inferDataShape(root).keys()].filter(v => !declared.has(v)).sort();
 	if (undeclared.length === 0) return errors;
 
 	const loc = root.loc;
 	const subject = undeclared.length === 1 ? 'variable' : 'variables';
 	errors.push(new BackflipError(
-		`${subject} ${undeclared.join(', ')} cannot be supplied to <${partialName}>: a partial that generates client JS reads only its declared attributes. Declare b-attr:NAME on the definition tag for a string or boolean value.`,
+		`${subject} ${undeclared.join(', ')} cannot be supplied to <${partialName}>: a partial that generates client JS reads only its declared attributes and stores. Declare b-attr:NAME on the definition tag for a string or boolean value, or b-store:NAME for a store.`,
 		{
 			filename: sourceRelPath,
 			line: loc?.startLine,

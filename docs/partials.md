@@ -256,7 +256,7 @@ A partial's context holds what the call site binds and nothing else. Variables t
 <b-unwrap b-name="badge">{{ label }}</b-unwrap>
 ```
 
-That is a compilation error: a call must pass every variable the target partial uses. Here the call needs `b-data:label="..."`. Declared `b-attr`s are the exception — they arrive as attributes on the call tag, not as bindings.
+That is a compilation error: a call must pass every variable the target partial uses. Here the call needs `b-data:label="..."`. There are two exceptions: declared `b-attr`s arrive as attributes on the call tag, not as bindings, and stores declared with [`b-store:NAME`](data-stores.md) come from the renderer.
 
 Bindings travel no further than the call they are written on: they are not visible in the caller, and a partial that the callee itself calls sees only what *that* call binds.
 
@@ -280,7 +280,8 @@ The compiler reports errors for:
 - A required `b-attr` not provided at the call site, or `b-data:NAME` colliding with a declared `b-attr:NAME`
 - `b-data:NAME` at a call site where `NAME` does not appear in the target partial's data shape (i.e. the partial does not use a variable of that name and does not declare a `b-attr:NAME`). This catches typos and stale bindings that would otherwise be silently discarded.
 - A call site that does not pass a variable the target partial uses. The partial's context holds only what the call binds, so an unbound variable could only render empty (see [Partial scope](#partial-scope)).
-- `b-data:NAME` at a call site whose target generates client JS, or a variable used in such a partial that it does not declare (see [Client-side patching → Rules and errors](dom-patch.md#rules-and-errors)). Declare the value with `b-attr:NAME` instead.
+- `b-data:NAME` at a call site whose target generates client JS, or a variable used in such a partial that it does not declare (see [Client-side patching → Rules and errors](dom-patch.md#rules-and-errors)). Declare the value with `b-attr:NAME` or `b-store:NAME` instead.
+- `b-store` errors: on anything but a partial definition, naming no declared store, with a value, colliding with a `b-attr:` of the same name, or with `b-data:NAME` at a call to a partial that declares `b-store:NAME` (see [Data stores → Errors](data-stores.md#errors))
 
 ---
 
@@ -430,7 +431,7 @@ For `b-attr:NAME.bool` (boolean):
 
 ### Client-side patching (`b-generate`, `b-script`)
 
-A custom element partial can have Backflip generate the JavaScript that keeps it live in the browser, re-patching its rendered HTML when a declared attribute changes. `b-generate` says how much is generated and `b-script` names your own module. Partials that use them take data through `b-attr` only. See [Client-side patching](dom-patch.md).
+A custom element partial can have Backflip generate the JavaScript that keeps it live in the browser, re-patching its rendered HTML when a declared attribute changes. `b-generate` says how much is generated and `b-script` names your own module. Partials that use them take data through `b-attr` and [`b-store`](data-stores.md) only. See [Client-side patching](dom-patch.md).
 
 ### Conflicting attributes
 

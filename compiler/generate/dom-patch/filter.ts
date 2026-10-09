@@ -5,7 +5,7 @@ import { isIfSetSite, type IfSetSite, type Site } from './collect.js';
 /**
  * Predicate: true when a site should drive dom-patch codegen.
  *
- * Every variable a qualifying partial can name is one of its declared attributes —
+ * Every variable a qualifying partial can name is one of its declared inputs —
  * the compiler rejects a partial that generates client JS and reads anything else —
  * so there is no live/non-live split to test here. What remains are the rules about
  * *where* a site sits and what its subtree contains.
@@ -54,7 +54,7 @@ function ifSetQualifies(s: IfSetSite): boolean {
 }
 
 // An expression is usable when it parsed. Its variables need no check: they are
-// the partial's declared attributes, which collectData() hands the browser.
+// the partial's declared inputs, which collectData() hands the browser.
 function exprOk(parsed: Parsed): boolean {
 	return !!parsed.expr;
 }

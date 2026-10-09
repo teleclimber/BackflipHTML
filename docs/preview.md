@@ -28,6 +28,8 @@ The preview system infers what data each partial needs by examining how variable
 | `b-bind:href="url"` (attribute) | Sensible defaults: `href` → `"#"`, `class` → `"sample-class"`, `src` → placeholder image URL |
 | `b-data:user="currentUser"` (passed) | Shape resolved from the called partial's data requirements |
 | `user.name` (property chain) | Nested object: `{ name: "name" }` |
+| `prices[sku].amount` (indexed by a variable) | Object keyed by the variable's mock value: `{ sku: { amount: "amount" } }`, so the lookup finds an entry |
+| `items[0]` (indexed by a literal) | Array of 3 items |
 
 ### Cross-partial data resolution
 
@@ -44,9 +46,13 @@ When a partial passes data to a child partial via `b-data:`, the preview system 
 
 The mock data for `currentUser` is generated as `{ name: "name", active: true }` because the `card` partial requires `user.name` (printed) and `user.active` (boolean).
 
+### Store mocks
+
+Every [store](data-stores.md) declared by the previewed partial, or by a partial it reaches through calls, gets mock data, generated from how the declaring partials read `NAME.data`. The mocks are passed to the renderer as its stores, so shipped stores reach the previewed page like on a real one.
+
 ### Data overrides
 
-You can provide custom data overrides via the `dataOverrides` option in the preview API to replace specific mock values with real ones.
+You can provide custom data overrides via the `dataOverrides` option in the preview API to replace specific mock values with real ones, and `storeOverrides` to do the same for store mocks, by store name.
 
 ---
 
@@ -144,12 +150,14 @@ const result = await previewPartial({
     fileName: 'components.html',
     cssHrefs: ['/assets/styles.css'],    // optional CSS links for fragment preview
     dataOverrides: { title: 'Custom' }, // optional overrides
+    storeOverrides: { widgets: { '42': { name: 'Gizmo' } } }, // optional store mock overrides
     domPatchOutputDirs: ['/abs/server/static-bfdom'], // optional: absolute dom-patch build dirs
     domPatchOutDir: '/tmp/bfdom',        // optional: where to write freshly generated dom-patch JS
 });
 
 console.log(result.html);           // complete HTML document
 console.log(result.mockData);       // generated mock data
+console.log(result.mockStores);     // generated store mocks, by store name
 console.log(result.errors);         // any non-fatal issues
 console.log(result.domPatchAssets); // { buildDestPath: savedPath } for dom-patch JS this render
 ```
