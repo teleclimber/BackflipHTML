@@ -38,7 +38,9 @@ An optional second name, after the value, is bound to the 0-based position of th
 
 The index counts positions in both runtimes: in PHP, an associative array gives `0, 1, 2…`, not its keys.
 
-**Errors:** the attribute value must match one of the forms above; each name must be an identifier made of letters, digits and `_` (not starting with a digit); the value and index must have different names.
+Write `_` for a name you don't need. It binds nothing, so `b-for="_, i in widgets"` binds only `i`, and `b-for="_ in widgets"` repeats the element without binding anything.
+
+**Errors:** the attribute value must match one of the forms above; each name must be an identifier made of letters, digits and `_` (not starting with a digit); the value and index must have different names (unless both are `_`).
 
 ---
 

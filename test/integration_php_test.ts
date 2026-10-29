@@ -172,6 +172,13 @@ Deno.test("php: nested-index: inner loop sees the outer index and its own", asyn
     );
 });
 
+Deno.test("php: index-only: `_` binds no value, so an outer `_` stays visible", async () => {
+    assertEquals(
+        normalize(await renderPhp("blog.html", "index_only", { widgets: ["a", "b"], _: "-" })),
+        "0-,1-,"
+    );
+});
+
 Deno.test("php: conditional: b-if true branch", async () => {
     assertEquals(
         normalize(await renderPhp("blog.html", "conditional", { show: true })),

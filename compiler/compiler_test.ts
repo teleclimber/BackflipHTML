@@ -127,6 +127,14 @@ Deno.test("b-for: without an index name, indexName is absent", async () => {
 	assertEquals('indexName' in findForNode(root), false);
 });
 
+Deno.test("b-for: `_` value leaves valName absent", async () => {
+	const { root, errors } = await compileSnippet('<div b-for="_, i in widgets">{{ i }}</div>');
+	assertEquals(errors, []);
+	const for_node = findForNode(root);
+	assertEquals('valName' in for_node, false);
+	assertEquals(for_node.indexName, 'i');
+});
+
 Deno.test("b-for: value and index with the same name reports error", async () => {
 	const { errors } = await compileSnippet('<div b-for="x, x in xs">hello</div>');
 	assertEquals(errors.length, 1);

@@ -126,7 +126,7 @@ export interface PrintRNode {	// for outputing {{ foo }} into HTML (do escaping)
 export interface ForRNode {
 	type: 'for',
 	iterable: rfn,
-	valName: string,
+	valName?: string,	// bound to the item
 	indexName?: string,	// bound to the 0-based iteration count
 	nodes: RNode[]
 }
@@ -252,7 +252,7 @@ function* streamRenderFor(for_node: ForRNode, ctx:any, slots: SlotMap | undefine
 	let index = 0;
 	for( const it of iterable ) {
 		const val_ctx :any = {};
-		val_ctx[for_node.valName] = it;
+		if (for_node.valName) val_ctx[for_node.valName] = it;
 		if (for_node.indexName) val_ctx[for_node.indexName] = index;
 		index++;
 		const inner_ctx = Object.assign({}, ctx, val_ctx);

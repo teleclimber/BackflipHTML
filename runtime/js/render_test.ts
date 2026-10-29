@@ -63,6 +63,19 @@ Deno.test("for node index counts positions of a non-array iterable", () => {
 	assertEquals(render(node, { items: new Set(['x', 'y']) }), '01');
 });
 
+Deno.test("for node without valName binds only the index and leaves an outer `_` alone", () => {
+	const node: ForRNode = {
+		type: 'for',
+		iterable: makeFn('items', ['items']),
+		indexName: 'i',
+		nodes: [
+			{ type: 'print', data: makeFn('i', ['i']) },
+			{ type: 'print', data: makeFn('_', ['_']) },
+		]
+	};
+	assertEquals(render(node, { items: ['a', 'b'], _: '-' }), '0-1-');
+});
+
 Deno.test("for node with non-iterable throws", () => {
 	const node: ForRNode = {
 		type: 'for',

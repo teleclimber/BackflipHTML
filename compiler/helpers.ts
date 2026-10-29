@@ -42,18 +42,21 @@ export function parseBPartValue(value: string): { partialName: string; file: str
 const B_FOR_RE = /^\s*(?:\(([^()]*)\)|([^()]*?))\s+in\s+(\S.*)$/s;
 // No `$`: names become PHP closure parameters.
 const LOOP_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+// A loop name that binds nothing.
+const SKIP_NAME = '_';
 
 /**
  * Parse a `b-for` attribute value of the form `"item in items"`, `"item, i in items"`
- * or `"(item, i) in items"` into `{ valName, indexName?, iterable }` (where
+ * or `"(item, i) in items"` into `{ valName?, indexName?, iterable }` (where
  * `iterable` is the interpreted expression), or return `{ error }` with a
- * human-readable message describing what's wrong.
+ * human-readable message describing what's wrong. A name written as `_` is
+ * left out of the result.
  *
  * Shared by the regular flow handler and the custom-element-call-with-flow
  * handler (lower.ts) so the two stay in sync.
  */
 export function parseBForValue(value: string):
-	| { valName: string; indexName?: string; iterable: Parsed }
+	| { valName?: string; indexName?: string; iterable: Parsed }
 	| { error: string }
 {
 	const m = B_FOR_RE.exec(value);
@@ -65,16 +68,20 @@ export function parseBForValue(value: string):
 	if (bad !== undefined) {
 		return { error: `b-for: "${bad}" is not a valid loop variable name` };
 	}
-	const [valName, indexName] = names;
-	if (valName === indexName) {
+	const [valName, indexName] = names.map(n => n === SKIP_NAME ? undefined : n);
+	if (valName !== undefined && valName === indexName) {
 		return { error: `b-for: value and index can't have the same name "${valName}"` };
 	}
-	return { valName, ...(indexName ? { indexName } : {}), iterable: interpretBackcode(m[3].trim()) };
+	return {
+		...(valName ? { valName } : {}),
+		...(indexName ? { indexName } : {}),
+		iterable: interpretBackcode(m[3].trim()),
+	};
 }
 
 /** The names a `b-for` binds within its body. */
 export function forBoundNames(n: ForTNode): string[] {
-	return n.indexName ? [n.valName, n.indexName] : [n.valName];
+	return [n.valName, n.indexName].filter((v): v is string => v !== undefined);
 }
 
 /**

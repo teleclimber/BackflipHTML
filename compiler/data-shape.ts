@@ -441,10 +441,12 @@ function walkNodesForShape(
 				walkNodesForShape(n.tnodes, childScope, shapes);
 
 				// Walk again into temp map with valName NOT scoped to extract its shape
-				const tempShapes = new Map<string, DataShape>();
-				walkNodesForShape(n.tnodes, scoped, tempShapes);
-				const valShape = tempShapes.get(n.valName);
-				if (valShape) applyElementShape(n.iterable, valShape, scoped, shapes);
+				if (n.valName) {
+					const tempShapes = new Map<string, DataShape>();
+					walkNodesForShape(n.tnodes, scoped, tempShapes);
+					const valShape = tempShapes.get(n.valName);
+					if (valShape) applyElementShape(n.iterable, valShape, scoped, shapes);
+				}
 				break;
 			}
 			case 'if': {

@@ -153,6 +153,16 @@ Deno.test("nested-index: inner loop sees the outer index and its own", () => {
     );
 });
 
+// Template (index-only):
+//   <b-unwrap b-for="_, i in widgets">{{ i }}{{ _ }},</b-unwrap>
+
+Deno.test("index-only: `_` binds no value, so an outer `_` stays visible", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("blog.html")["index_only"], { widgets: ["a", "b"], _: "-" })),
+        "0-,1-,"
+    );
+});
+
 // Template (conditional):
 //   <b-unwrap b-name="conditional">
 //       <p b-if="show">Shown</p>

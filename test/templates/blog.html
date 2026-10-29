@@ -27,3 +27,7 @@
 <b-unwrap b-name="nested-index">
     <b-unwrap b-for="row, r in rows"><b-unwrap b-for="cell, c in row">[{{ r }}{{ c }}{{ cell }}]</b-unwrap></b-unwrap>
 </b-unwrap>
+
+<b-unwrap b-name="index-only">
+    <b-unwrap b-for="_, i in widgets">{{ i }}{{ _ }},</b-unwrap>
+</b-unwrap>

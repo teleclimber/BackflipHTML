@@ -92,7 +92,7 @@ export interface PrintTNode {	// for outputing {{ foo }} into HTML (do escaping)
 export interface ForTNode {
 	type: 'for',
 	iterable: Parsed,
-	valName: string,
+	valName?: string,	// bound to the item; absent when written as `_`
 	indexName?: string,	// bound to the 0-based iteration count
 	tnodes: TNode[],
 	loc?: SourceLoc

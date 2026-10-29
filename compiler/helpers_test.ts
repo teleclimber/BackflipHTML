@@ -124,6 +124,25 @@ Deno.test("parseBForValue: invalid names are reported", () => {
 	}
 });
 
+Deno.test("parseBForValue: `_` as the value binds only the index", () => {
+	assertEquals(bfor('_, i in widgets'), { valName: undefined, indexName: 'i', vars: ['widgets'] });
+	assertEquals(bfor('(_, i) in widgets'), { valName: undefined, indexName: 'i', vars: ['widgets'] });
+});
+
+Deno.test("parseBForValue: `_` as the index binds only the value", () => {
+	assertEquals(bfor('w, _ in widgets'), { valName: 'w', indexName: undefined, vars: ['widgets'] });
+});
+
+Deno.test("parseBForValue: `_` alone or twice binds nothing", () => {
+	assertEquals(bfor('_ in widgets'), { valName: undefined, indexName: undefined, vars: ['widgets'] });
+	assertEquals(bfor('_, _ in widgets'), { valName: undefined, indexName: undefined, vars: ['widgets'] });
+});
+
+Deno.test("parseBForValue: an omitted value is an invalid name, not a skip", () => {
+	const r = parseBForValue(', i in widgets');
+	assertEquals('error' in r && r.error.includes('is not a valid loop variable name'), true);
+});
+
 Deno.test("parseBForValue: value and index with the same name is an error", () => {
 	const r = parseBForValue('x, x in xs');
 	assertEquals('error' in r && r.error.includes('"x"'), true);

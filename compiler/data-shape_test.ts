@@ -29,8 +29,8 @@ function makePrint(vars: string[]): PrintTNode {
 	return { type: 'print', data: parsed(vars) };
 }
 
-function makeFor(valName: string, iterableVars: string[], children: TNode[], indexName?: string): ForTNode {
-	return { type: 'for', iterable: parsed(iterableVars), valName, ...(indexName ? { indexName } : {}), tnodes: children };
+function makeFor(valName: string | undefined, iterableVars: string[], children: TNode[], indexName?: string): ForTNode {
+	return { type: 'for', iterable: parsed(iterableVars), ...(valName ? { valName } : {}), ...(indexName ? { indexName } : {}), tnodes: children };
 }
 
 function makeIf(branches: { conditionVars?: string[], children: TNode[] }[]): IfTNode {
@@ -124,6 +124,16 @@ Deno.test("inferFreeVars: b-for index variable is scoped to the loop body only",
 		makePrint(['i']),
 	]);
 	assertEquals(inferFreeVars(root), ['i', 'items']);
+});
+
+Deno.test("inferFreeVars: a loop with no value name scopes only the index; `_` stays free", () => {
+	const root = makeRoot([
+		makeFor(undefined, ['widgets'], [
+			makePrint(['i']),
+			makePrint(['_']),
+		], 'i'),
+	]);
+	assertEquals(inferFreeVars(root), ['_', 'widgets']);
 });
 
 Deno.test("inferFreeVars: collects iterable var from b-for", () => {
@@ -234,8 +244,8 @@ function makePrintReal(code: string): PrintTNode {
 	return { type: 'print', data: realParsed(code) };
 }
 
-function makeForReal(valName: string, iterableCode: string, children: TNode[], indexName?: string): ForTNode {
-	return { type: 'for', iterable: realParsed(iterableCode), valName, ...(indexName ? { indexName } : {}), tnodes: children };
+function makeForReal(valName: string | undefined, iterableCode: string, children: TNode[], indexName?: string): ForTNode {
+	return { type: 'for', iterable: realParsed(iterableCode), ...(valName ? { valName } : {}), ...(indexName ? { indexName } : {}), tnodes: children };
 }
 
 function makeIfReal(branches: { conditionCode?: string, children: TNode[] }[]): IfTNode {
@@ -592,6 +602,15 @@ Deno.test("inferDataShape: index variable excluded from result and from elementS
 	const shapes = inferDataShape(root);
 	assertEquals([...shapes.keys()], ['items']);
 	assertEquals([...shapes.get('items')!.elementShape!.properties!.keys()], ['name']);
+});
+
+Deno.test("inferDataShape: a loop with no value name records no elementShape", () => {
+	const root = makeRoot([
+		makeForReal(undefined, 'widgets', [makePrintReal('i')], 'i'),
+	]);
+	const shapes = inferDataShape(root);
+	assertEquals([...shapes.keys()], ['widgets']);
+	assertEquals(shapes.get('widgets')!.elementShape, undefined);
 });
 
 Deno.test("inferDataShape: nested for scoping", () => {
