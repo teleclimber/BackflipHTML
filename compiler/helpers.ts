@@ -1,7 +1,7 @@
 import { interpretBackcode } from './backcode.js';
 import type { Parsed } from './backcode.js';
 import { visitTNodes } from './walk.js';
-import type { TNode } from './types.js';
+import type { ForTNode, TNode } from './types.js';
 
 // Re-export the domain modules helpers.ts was split into, so existing import
 // sites (partials.ts, mod.ts, tests) that reach for these names via
@@ -37,27 +37,44 @@ export function parseBPartValue(value: string): { partialName: string; file: str
 	return { partialName: value, file: null };
 }
 
+// `names in iterable`, where names is optionally parenthesized. Names can't contain
+// `in`, so the first ` in ` ends them and the iterable keeps any later ones.
+const B_FOR_RE = /^\s*(?:\(([^()]*)\)|([^()]*?))\s+in\s+(\S.*)$/s;
+// No `$`: names become PHP closure parameters.
+const LOOP_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
 /**
- * Parse a `b-for` attribute value of the form `"item in items"` into
- * `{ valName, iterable }` (where `iterable` is the interpreted expression),
- * or return `{ error }` with a human-readable message describing what's wrong.
+ * Parse a `b-for` attribute value of the form `"item in items"`, `"item, i in items"`
+ * or `"(item, i) in items"` into `{ valName, indexName?, iterable }` (where
+ * `iterable` is the interpreted expression), or return `{ error }` with a
+ * human-readable message describing what's wrong.
  *
  * Shared by the regular flow handler and the custom-element-call-with-flow
  * handler (lower.ts) so the two stay in sync.
  */
 export function parseBForValue(value: string):
-	| { valName: string; iterable: Parsed }
+	| { valName: string; indexName?: string; iterable: Parsed }
 	| { error: string }
 {
-	const pieces = value.split(" in ");
-	if (pieces.length !== 2) {
-		return { error: `b-for value must be in the form "item in items", got: "${value}"` };
+	const m = B_FOR_RE.exec(value);
+	const names = m ? (m[1] ?? m[2]).split(',').map(s => s.trim()) : [];
+	if (!m || names.length > 2) {
+		return { error: `b-for value must be in the form "item in items" or "(item, index) in items", got: "${value}"` };
 	}
-	const valName = pieces[0].trim();
-	if (!valName) {
-		return { error: `got bad iter value name: ${valName}` };
+	const bad = names.find(n => !LOOP_NAME_RE.test(n));
+	if (bad !== undefined) {
+		return { error: `b-for: "${bad}" is not a valid loop variable name` };
 	}
-	return { valName, iterable: interpretBackcode(pieces[1].trim()) };
+	const [valName, indexName] = names;
+	if (valName === indexName) {
+		return { error: `b-for: value and index can't have the same name "${valName}"` };
+	}
+	return { valName, ...(indexName ? { indexName } : {}), iterable: interpretBackcode(m[3].trim()) };
+}
+
+/** The names a `b-for` binds within its body. */
+export function forBoundNames(n: ForTNode): string[] {
+	return n.indexName ? [n.valName, n.indexName] : [n.valName];
 }
 
 /**

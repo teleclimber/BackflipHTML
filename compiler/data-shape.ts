@@ -2,6 +2,7 @@ import * as acorn from 'acorn';
 import type { RootTNode, TNode, ForTNode, IfTNode, PrintTNode, ElementTNode, PartialRefTNode } from './types.js';
 import type { Parsed } from './backcode.js';
 import { BackflipError } from './errors.js';
+import { forBoundNames } from './helpers.js';
 
 // --- DataShape types ---
 
@@ -435,9 +436,8 @@ function walkNodesForShape(
 				// Mark the iterable variable(s) with 'iterable' usage
 				collectFromParsed(n.iterable, 'iterable', undefined, scoped, shapes);
 
-				// Walk loop body with valName scoped — collects free var shapes
-				const childScope = new Set(scoped);
-				childScope.add(n.valName);
+				// Walk loop body with the loop's names scoped — collects free var shapes
+				const childScope = new Set([...scoped, ...forBoundNames(n)]);
 				walkNodesForShape(n.tnodes, childScope, shapes);
 
 				// Walk again into temp map with valName NOT scoped to extract its shape

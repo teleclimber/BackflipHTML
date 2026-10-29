@@ -17,3 +17,13 @@
 <b-unwrap b-name="unwrap-for">
     <b-unwrap b-for="item in items">{{ item }},</b-unwrap>
 </b-unwrap>
+
+<b-unwrap b-name="indexed-list">
+    <ul>
+        <li b-for="(post, i) in posts">{{ i + 1 }}. {{ post }}</li>
+    </ul>
+</b-unwrap>
+
+<b-unwrap b-name="nested-index">
+    <b-unwrap b-for="row, r in rows"><b-unwrap b-for="cell, c in row">[{{ r }}{{ c }}{{ cell }}]</b-unwrap></b-unwrap>
+</b-unwrap>

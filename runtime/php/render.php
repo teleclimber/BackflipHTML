@@ -489,8 +489,13 @@ function backflip_streamRenderFor(array $node, array $ctx, array $slots, Backfli
         );
     }
 
+    // The index counts positions, not keys, so associative arrays match JS.
+    $index = 0;
     foreach ($iterable as $item) {
-        $innerCtx = array_merge($ctx, [$node['valName'] => $item]);
+        $bound = [$node['valName'] => $item];
+        if (isset($node['indexName'])) $bound[$node['indexName']] = $index;
+        $index++;
+        $innerCtx = array_merge($ctx, $bound);
         foreach ($node['nodes'] as $child) {
             yield from backflip_streamRender($child, $innerCtx, $slots, $rs);
         }

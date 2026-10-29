@@ -151,6 +151,27 @@ Deno.test("php: post-list: renders empty list", async () => {
     );
 });
 
+Deno.test("php: indexed-list: b-for binds a 0-based index", async () => {
+    assertEquals(
+        normalize(await renderPhp("blog.html", "indexed_list", { posts: ["Alpha", "Beta"] })),
+        "<ul><li>1. Alpha</li><li>2. Beta</li></ul>"
+    );
+});
+
+Deno.test("php: indexed-list: index counts positions, not keys, of an associative array", async () => {
+    assertEquals(
+        normalize(await renderPhp("blog.html", "indexed_list", { posts: { a: "Alpha", b: "Beta" } })),
+        "<ul><li>1. Alpha</li><li>2. Beta</li></ul>"
+    );
+});
+
+Deno.test("php: nested-index: inner loop sees the outer index and its own", async () => {
+    assertEquals(
+        normalize(await renderPhp("blog.html", "nested_index", { rows: [["a", "b"], ["c"]] })),
+        "[00a][01b][10c]"
+    );
+});
+
 Deno.test("php: conditional: b-if true branch", async () => {
     assertEquals(
         normalize(await renderPhp("blog.html", "conditional", { show: true })),

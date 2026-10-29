@@ -411,6 +411,15 @@ Deno.test("end-to-end: an if-set is bracketed by markers and its parent gets a b
 	assertEquals(set.snapshot, defined.bfif_bf1);
 });
 
+Deno.test("end-to-end: b-for value and index names are not if-set subtree vars", async () => {
+	const file = await compileCustomElement(
+		`<my-widget b-attr:show b-attr:xs><div b-if="show"><p b-for="(x, i) in xs">{{ i }}{{ x }}</p></div></my-widget>`
+	);
+	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
+	if (!js) throw new Error('expected js');
+	assertEquals(evalModule(js, 'my-widget').bfRoot.sets[0].subtreeVars, ['xs']);
+});
+
 // The module-level `bfif_*` consts, in emitted order, each with its literal text.
 // Each runs from its `const` line to the blank line or next `const` that follows it.
 function snapshotConsts(js: string): { name: string, text: string }[] {

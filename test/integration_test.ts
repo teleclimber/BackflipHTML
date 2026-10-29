@@ -133,6 +133,26 @@ Deno.test("post-list: renders empty list", () => {
     );
 });
 
+// Template (indexed-list):
+//   <li b-for="(post, i) in posts">{{ i + 1 }}. {{ post }}</li>
+
+Deno.test("indexed-list: b-for binds a 0-based index", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("blog.html")["indexed_list"], { posts: ["Alpha", "Beta"] })),
+        "<ul><li>1. Alpha</li><li>2. Beta</li></ul>"
+    );
+});
+
+// Template (nested-index):
+//   <b-unwrap b-for="row, r in rows"><b-unwrap b-for="cell, c in row">[{{ r }}{{ c }}{{ cell }}]</b-unwrap></b-unwrap>
+
+Deno.test("nested-index: inner loop sees the outer index and its own", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("blog.html")["nested_index"], { rows: [["a", "b"], ["c"]] })),
+        "[00a][01b][10c]"
+    );
+});
+
 // Template (conditional):
 //   <b-unwrap b-name="conditional">
 //       <p b-if="show">Shown</p>

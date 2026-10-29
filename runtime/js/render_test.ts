@@ -38,6 +38,31 @@ Deno.test("for node", () => {
 	assertEquals(render(node, { items: ['a', 'b'] }), '<li>a</li><li>b</li>');
 });
 
+Deno.test("for node binds a 0-based index", () => {
+	const node: ForRNode = {
+		type: 'for',
+		iterable: makeFn('items', ['items']),
+		valName: 'item',
+		indexName: 'i',
+		nodes: [
+			{ type: 'print', data: makeFn('i', ['i']) },
+			{ type: 'print', data: makeFn('item', ['item']) },
+		]
+	};
+	assertEquals(render(node, { items: ['a', 'b', 'c'] }), '0a1b2c');
+});
+
+Deno.test("for node index counts positions of a non-array iterable", () => {
+	const node: ForRNode = {
+		type: 'for',
+		iterable: makeFn('items', ['items']),
+		valName: 'item',
+		indexName: 'i',
+		nodes: [{ type: 'print', data: makeFn('i', ['i']) }]
+	};
+	assertEquals(render(node, { items: new Set(['x', 'y']) }), '01');
+});
+
 Deno.test("for node with non-iterable throws", () => {
 	const node: ForRNode = {
 		type: 'for',

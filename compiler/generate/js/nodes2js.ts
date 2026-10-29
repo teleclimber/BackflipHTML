@@ -86,7 +86,7 @@ function storeToJS(s: PartialStore): string {
 function forToJS(for_node: ForTNode, opts: NodeToJsOptions = {}) :string {
 	return `{ type:'for',
 	iterable: ${backcodeToJS(for_node.iterable)},
-	valName: '${for_node.valName}',
+	valName: '${for_node.valName}',${for_node.indexName ? `\n\tindexName: '${for_node.indexName}',` : ''}
 	nodes: [\n ${for_node.tnodes?.map( n => nodeToJS(n, opts)).join(',\n')} ]
 }`;
 }

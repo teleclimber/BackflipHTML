@@ -115,6 +115,24 @@ Deno.test("b-for: without 'in' keyword reports error", async () => {
 	assertEquals(errors.length > 0, true);
 });
 
+Deno.test("b-for: index name is recorded on the ForTNode", async () => {
+	const { root, errors } = await compileSnippet('<div b-for="(m, i) in meters">{{ i }}</div>');
+	assertEquals(errors, []);
+	const for_node = findForNode(root);
+	assertEquals([for_node.valName, for_node.indexName], ['m', 'i']);
+});
+
+Deno.test("b-for: without an index name, indexName is absent", async () => {
+	const { root } = await compileSnippet('<div b-for="m in meters">{{ m }}</div>');
+	assertEquals('indexName' in findForNode(root), false);
+});
+
+Deno.test("b-for: value and index with the same name reports error", async () => {
+	const { errors } = await compileSnippet('<div b-for="x, x in xs">hello</div>');
+	assertEquals(errors.length, 1);
+	assertStringIncludes(errors[0].message, 'same name');
+});
+
 // ---- compileSnippet: b-if ----
 
 Deno.test("b-if: simple", async () => {

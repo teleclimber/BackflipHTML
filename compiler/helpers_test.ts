@@ -2,7 +2,7 @@ import { assertEquals } from "jsr:@std/assert";
 
 import type { RawTNode, TNode, PartialDef } from "./types.ts";
 import type { SourceNode, SourceText } from "./parse-tree.ts";
-import { collectSlots, isCustomElementTagName, parseBPartValue } from "./helpers.ts";
+import { collectSlots, isCustomElementTagName, parseBForValue, parseBPartValue } from "./helpers.ts";
 import { lowerSlice } from "./lower.ts";
 import { interpretBackcode } from "./backcode.ts";
 
@@ -65,6 +65,69 @@ Deno.test("parseBPartValue: bare name is same-file reference", () => {
 
 Deno.test("parseBPartValue: empty string", () => {
 	assertEquals(parseBPartValue(''), { partialName: '', file: null });
+});
+
+// ---- parseBForValue unit tests ----
+
+function bfor(value: string) {
+	const r = parseBForValue(value);
+	return 'error' in r ? r : { valName: r.valName, indexName: r.indexName, vars: r.iterable.vars };
+}
+
+Deno.test("parseBForValue: value only", () => {
+	assertEquals(bfor('item in items'), { valName: 'item', indexName: undefined, vars: ['items'] });
+});
+
+Deno.test("parseBForValue: value and index", () => {
+	assertEquals(bfor('m, i in meters'), { valName: 'm', indexName: 'i', vars: ['meters'] });
+});
+
+Deno.test("parseBForValue: value and index in parentheses", () => {
+	assertEquals(bfor('(m, i) in meters'), { valName: 'm', indexName: 'i', vars: ['meters'] });
+});
+
+Deno.test("parseBForValue: value alone in parentheses", () => {
+	assertEquals(bfor('(m) in meters'), { valName: 'm', indexName: undefined, vars: ['meters'] });
+});
+
+Deno.test("parseBForValue: extra whitespace is allowed", () => {
+	assertEquals(bfor('  ( m ,  i )   in   meters  '), { valName: 'm', indexName: 'i', vars: ['meters'] });
+	assertEquals(bfor('m,i in meters'), { valName: 'm', indexName: 'i', vars: ['meters'] });
+});
+
+Deno.test("parseBForValue: ' in ' inside the iterable expression stays in the iterable", () => {
+	const r = parseBForValue("x in flag ? a : 'b in c'");
+	if ('error' in r) throw new Error(r.error);
+	assertEquals(r.valName, 'x');
+	assertEquals(r.iterable.errs, []);
+	assertEquals(r.iterable.vars, ['flag', 'a']);
+});
+
+Deno.test("parseBForValue: missing 'in' or too many names is a form error", () => {
+	for (const v of ['items', 'm, i of meters', 'item in', 'item in   ', 'm, i, j in items']) {
+		const r = parseBForValue(v);
+		assertEquals('error' in r && r.error.startsWith('b-for value must be in the form'), true, v);
+	}
+});
+
+Deno.test("parseBForValue: unbalanced or misplaced parentheses are form errors", () => {
+	for (const v of ['(m, i in meters', 'm, i) in meters', '(m)(i) in meters']) {
+		const r = parseBForValue(v);
+		assertEquals('error' in r && r.error.startsWith('b-for value must be in the form'), true, v);
+	}
+});
+
+Deno.test("parseBForValue: invalid names are reported", () => {
+	for (const v of [' in items', '1x in items', 'a.b in items', 'm, in items', ', i in items', 'a b in items', '$x in items', '() in items']) {
+		const r = parseBForValue(v);
+		assertEquals('error' in r && r.error.includes('is not a valid loop variable name'), true, v);
+	}
+});
+
+Deno.test("parseBForValue: value and index with the same name is an error", () => {
+	const r = parseBForValue('x, x in xs');
+	assertEquals('error' in r && r.error.includes('"x"'), true);
+	assertEquals('error' in r && r.error.includes('same name'), true);
 });
 
 // ---- text lowering ({{ }} splitting) unit tests ----

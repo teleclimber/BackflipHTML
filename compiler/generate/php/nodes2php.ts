@@ -76,7 +76,7 @@ function storeToPhp(s: PartialStore): string {
 function forToPhp(for_node: ForTNode, assetMap?: Map<string, string>): string {
 	return `['type' => 'for',
     'iterable' => ${backcodeToPhp(for_node.iterable)},
-    'valName' => '${for_node.valName}',
+    'valName' => '${for_node.valName}',${for_node.indexName ? `\n    'indexName' => '${for_node.indexName}',` : ''}
     'nodes' => [
         ${for_node.tnodes?.map(n => nodeToPhp(n, assetMap)).join(',\n        ')}
     ]

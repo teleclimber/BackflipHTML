@@ -20,7 +20,7 @@ See [Expression language](#expression-language) below for what expressions are a
 
 ## `b-for` — loop
 
-Syntax: `b-for="item in collection"`
+Syntax: `b-for="item in collection"` or `b-for="item, index in collection"`
 
 The element is repeated once per item in `collection`. `item` is a new variable scoped to the element's subtree.
 
@@ -30,7 +30,15 @@ The element is repeated once per item in `collection`. `item` is a new variable 
 
 `collection` is an expression evaluated in the current context. `item` is the name bound to each element of the collection during iteration.
 
-**Error:** the attribute value must match the `item in collection` form exactly.
+An optional second name, after the value, is bound to the 0-based position of the item. The names may be wrapped in parentheses:
+
+```html
+<li b-for="(post, i) in posts">{{ i + 1 }}. {{ post.title }}</li>
+```
+
+The index counts positions in both runtimes: in PHP, an associative array gives `0, 1, 2…`, not its keys.
+
+**Errors:** the attribute value must match one of the forms above; each name must be an identifier made of letters, digits and `_` (not starting with a digit); the value and index must have different names.
 
 ---
 
@@ -209,7 +217,7 @@ The `+` operator works for both numeric addition and string concatenation. Relat
 
 The compiler reports errors for:
 
-- `b-for` value not in `item in collection` form
+- `b-for` value not in `item in collection` or `(item, index) in collection` form, an invalid loop variable name, or a value and index with the same name
 - `b-else` or `b-else-if` without a preceding `b-if` element
 - `b-else` given a value
 - Multiple `b-*` directives on the same element

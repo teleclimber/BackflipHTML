@@ -93,6 +93,7 @@ export interface ForTNode {
 	type: 'for',
 	iterable: Parsed,
 	valName: string,
+	indexName?: string,	// bound to the 0-based iteration count
 	tnodes: TNode[],
 	loc?: SourceLoc
 }

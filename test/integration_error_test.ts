@@ -37,10 +37,11 @@ function findError(filename: string, messagePart: string): BackflipError {
 // for-errors.html
 //   line 2: <p b-for="bad format">       — bad b-for syntax
 //   line 3: <p b-for=" in items">        — empty iter variable
+//   line 4: <p b-for="x, x in xs">       — value and index share a name
 // ---------------------------------------------------------------------------
 
-Deno.test("for-errors.html: reports 2 errors", () => {
-    assertEquals(errorsFor("for-errors.html").length, 2);
+Deno.test("for-errors.html: reports 3 errors", () => {
+    assertEquals(errorsFor("for-errors.html").length, 3);
 });
 
 Deno.test("for-errors.html: bad b-for syntax at line 2", () => {
@@ -49,8 +50,13 @@ Deno.test("for-errors.html: bad b-for syntax at line 2", () => {
 });
 
 Deno.test("for-errors.html: empty iter variable at line 3", () => {
-    const err = findError("for-errors.html", "bad iter value name");
+    const err = findError("for-errors.html", "is not a valid loop variable name");
     assertEquals(err.line, 3);
+});
+
+Deno.test("for-errors.html: value and index with the same name at line 4", () => {
+    const err = findError("for-errors.html", "same name");
+    assertEquals(err.line, 4);
 });
 
 // ---------------------------------------------------------------------------
@@ -141,5 +147,5 @@ Deno.test("data-errors.html: b-data on a generating partial at line 16", () => {
 // ---------------------------------------------------------------------------
 
 Deno.test("total errors across all files", () => {
-    assertEquals(errors.length, 11);
+    assertEquals(errors.length, 12);
 });

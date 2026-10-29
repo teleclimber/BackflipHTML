@@ -1,5 +1,6 @@
 import type { CompiledFile, ElementTNode, IfTNode, PartialStore, TNode } from '../../types.js';
 import { replaceAssetRef } from '../../assets.js';
+import { forBoundNames } from '../../helpers.js';
 import type { Parsed } from '../../backcode.js';
 import { nodeToJS } from '../js/nodes2js.js';
 import { branchMarker, makeBfidGen, type BfidGen } from './bfid.js';
@@ -215,7 +216,7 @@ function computeVars(sites: BfidSite[], sets: IfSetPatchSite[]): string[] {
 }
 
 // Vars referenced anywhere in the set's branch content (nested conditions and
-// b-for iterables included), minus b-for-bound value names — those are bound by the
+// b-for iterables included), minus b-for-bound value and index names — those are bound by the
 // loop, not supplied by the element. Deliberately over-broad per the spec: a var in
 // a non-patchable position still yields a no-op mutate.
 function computeSubtreeVars(node: IfTNode): string[] {
@@ -248,8 +249,7 @@ function walkSubtreeVars(
 				break;
 			case 'for': {
 				add(n.iterable);
-				const inner = new Set(scope);
-				inner.add(n.valName);
+				const inner = new Set([...scope, ...forBoundNames(n)]);
 				walkSubtreeVars(n.tnodes, inner, out);
 				break;
 			}

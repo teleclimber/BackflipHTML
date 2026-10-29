@@ -796,6 +796,7 @@ function setupFlow(el: SourceElement, flowAttr: SourceAttr, pctx: PartialCtx, si
 			ctx_error(pctx, err, attrErrLoc(el, 'b-for', pctx));
 		}
 		const for_node: ForTNode = { type: 'for', iterable: parsed.iterable, valName: parsed.valName, tnodes: [] };
+		if (parsed.indexName) for_node.indexName = parsed.indexName;
 		for_node.loc = findAttrLoc(el, 'b-for');
 		return { container: for_node, emit: [for_node] };
 	}
