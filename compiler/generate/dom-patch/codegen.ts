@@ -167,7 +167,8 @@ function genShell(
 ): string {
 	const lines = [`export class ${classNameFor(partialName)} extends BackflipShell {`];
 	if (bAttrs.length > 0) {
-		const attrs = bAttrs.map(b => `${b.name}: '${b.isBool ? 'bool' : 'string'}'`).join(', ');
+		// Quoted: an attribute name may hold a hyphen.
+		const attrs = bAttrs.map(b => `${JSON.stringify(b.name)}: '${b.isBool ? 'bool' : 'string'}'`).join(', ');
 		lines.push(`\tstatic bfAttrs = { ${attrs} };`);
 	}
 	if (stores.length > 0) {

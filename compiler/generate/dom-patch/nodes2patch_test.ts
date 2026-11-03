@@ -54,6 +54,15 @@ async function compileCustomElements(...htmls: string[]): Promise<CompiledFile> 
 	return { partials };
 }
 
+Deno.test("end-to-end: a hyphenated b-attr produces a module that loads", async () => {
+	const file = await compileCustomElement(
+		`<my-widget b-attr:data-id b-attr:is-open.bool b-attr:title><span :data-x="title">hi</span></my-widget>`
+	);
+	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
+	if (!js) throw new Error('expected js');
+	assertEquals(evalModule(js, 'my-widget').bfAttrs, { 'data-id': 'string', 'is-open': 'bool', title: 'string' });
+});
+
 Deno.test("end-to-end: simple custom element with one live attr", async () => {
 	const file = await compileCustomElement(
 		`<my-widget b-attr:title><span :data-x="title">hi</span></my-widget>`

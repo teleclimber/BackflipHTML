@@ -619,6 +619,22 @@ Deno.test("b-attr: expression label is cast to string in childCtx", () => {
     assertStringIncludes(html, "<em>42</em>");
 });
 
+for (const [label, answer] of [["null", null], ["undefined", undefined], ["false", false]] as const) {
+    Deno.test(`b-attr: an expression label that is ${label} is omitted from the tag and empty in childCtx`, () => {
+        const html = normalize(renderRoot(getModule("battr.html").caller_label_expr, { answer }));
+        assertStringIncludes(html, "<em></em>");
+        assertEquals(html.includes(" label"), false);
+    });
+}
+
+for (const [answer, text] of [[0, "0"], ["", ""], [true, "true"]] as const) {
+    Deno.test(`b-attr: an expression label of ${JSON.stringify(answer)} keeps its attribute and text`, () => {
+        const html = normalize(renderRoot(getModule("battr.html").caller_label_expr, { answer }));
+        assertStringIncludes(html, `<em>${text}</em>`);
+        assertStringIncludes(html, ` label="${text}"`);
+    });
+}
+
 Deno.test("b-attr: bare premium attribute synthesizes literal=true binding", () => {
     const html = normalize(renderRoot(getModule("battr.html").caller_premium_bare, {}));
     // The childCtx should receive premium=true (literal) so PRO renders.

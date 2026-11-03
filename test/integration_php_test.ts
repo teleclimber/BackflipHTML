@@ -389,6 +389,14 @@ Deno.test("php: b-attr: expression label is cast to string in childCtx", async (
     assertStringIncludes(html, "<em>42</em>");
 });
 
+for (const [label, answer] of [["null", null], ["false", false]] as const) {
+    Deno.test(`php: b-attr: an expression label that is ${label} is omitted from the tag and empty in childCtx`, async () => {
+        const html = normalize(await renderPhp("battr.html", "caller_label_expr", { answer }));
+        assertStringIncludes(html, "<em></em>");
+        assertEquals(html.includes(" label"), false);
+    });
+}
+
 Deno.test("php: b-attr: bare premium attribute synthesizes literal=true binding", async () => {
     const html = normalize(await renderPhp("battr.html", "caller_premium_bare", {}));
     assertStringIncludes(html, "<span>PRO</span>");

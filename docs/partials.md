@@ -403,6 +403,7 @@ For `b-attr:NAME` (string):
 | `<my-widget premium>` (bare) | — *compile error* | — |
 | `<my-widget premium="hello">` | `"hello"` | `premium="hello"` |
 | `<my-widget :premium="expr">` | `String(expr)` | `premium="<value>"` |
+| `<my-widget :premium="expr">`, where `expr` is `null`, `undefined` or `false` | `""` | omitted |
 
 For `b-attr:NAME.bool` (boolean):
 

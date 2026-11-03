@@ -337,7 +337,8 @@ function evalBinding(binding: PartialBindingR, ctx: any): any {
 	}
 	let value = execFn(binding.data!, ctx);
 	if (binding.cast === 'bool') value = Boolean(value);
-	else if (binding.cast === 'string') value = String(value);
+	// An omitted attribute reads as empty, which is all the browser can see of it.
+	else if (binding.cast === 'string') value = attrIsRendered(value) ? String(value) : '';
 	return value;
 }
 
@@ -423,6 +424,11 @@ function replaceAssetPaths(value: string, assetMap: Record<string, string>): str
 	return value;
 }
 
+/** Whether a non-boolean dynamic attribute with this value is rendered at all. */
+export function attrIsRendered(val: unknown): boolean {
+	return val !== null && val !== undefined && val !== false;
+}
+
 function renderAttrBind(n: AttrBindRNode, ctx: any): string {
 	let out = n.attrsOnly ? '' : n.tagOpen;
 	for (const p of n.parts) {
@@ -430,13 +436,13 @@ function renderAttrBind(n: AttrBindRNode, ctx: any): string {
 			out += p.raw;
 		} else {
 			let val = execFn(p.expr, ctx);
-			if (p.isAsset && n.assetMap && val !== null && val !== undefined && val !== false) {
+			if (p.isAsset && n.assetMap && attrIsRendered(val)) {
 				val = replaceAssetPaths(String(val), n.assetMap);
 			}
 			if (p.isBoolean) {
 				if (val) out += ` ${p.name}`;
 			} else {
-				if (val !== null && val !== undefined && val !== false) {
+				if (attrIsRendered(val)) {
 					out += ` ${p.name}="${escapeHtml(String(val))}"`;
 				}
 			}

@@ -506,6 +506,49 @@ for (const c of SITE_CASES) {
 	});
 }
 
+// The values the server renders no attribute for.
+for (const [label, omitted] of [['null', null], ['undefined', undefined], ['false', false]] as const) {
+	const site = { bfid: 'p', attr: 'title', expr: expr('v', ['v']) };
+
+	Deno.test(`PatchBranch: an absent attr stays absent for ${label}, with no write`, () => {
+		const { el } = host(`<p data-bfid="p"></p>`);
+		const pb = new PatchBranch({ sites: [site], sets: [] }, el, {});
+		assertEquals(mutations(el, () => pb.update({ v: omitted })), []);
+		assertEquals(el.innerHTML, `<p data-bfid="p"></p>`);
+		pb.update({ v: 'y' });
+		assertEquals(el.innerHTML, `<p data-bfid="p" title="y"></p>`);
+	});
+
+	Deno.test(`PatchBranch: an attr is removed when its value becomes ${label}, and can come back`, () => {
+		const { el } = host(`<p data-bfid="p" title="x"></p>`);
+		const pb = new PatchBranch({ sites: [site], sets: [] }, el, {});
+		pb.update({ v: omitted });
+		assertEquals(el.innerHTML, `<p data-bfid="p"></p>`);
+		assertEquals(mutations(el, () => pb.update({ v: omitted })), []);
+		pb.update({ v: 'x' });
+		assertEquals(el.innerHTML, `<p data-bfid="p" title="x"></p>`);
+	});
+}
+
+// Only null, undefined and false omit the attribute; the rest print as the server prints them.
+for (const [value, text] of [[0, '0'], ['', ''], [true, 'true']] as const) {
+	Deno.test(`PatchBranch: an attr with the value ${JSON.stringify(value)} is written as "${text}"`, () => {
+		const { el } = host(`<p data-bfid="p"></p>`);
+		const pb = new PatchBranch({ sites: [{ bfid: 'p', attr: 'title', expr: expr('v', ['v']) }], sets: [] }, el, {});
+		pb.update({ v: value });
+		assertEquals(el.querySelector('p')!.getAttribute('title'), text);
+	});
+}
+
+Deno.test("PatchBranch: a print still shows null and false as text", () => {
+	const { el } = host(`<p data-bfid="p"><!--m0-->x<!--m1--></p>`);
+	const pb = new PatchBranch({ sites: [{ bfid: 'p', markers: ['m0', 'm1'], expr: expr('v', ['v']) }], sets: [] }, el, {});
+	pb.update({ v: null });
+	assertEquals(el.textContent, 'null');
+	pb.update({ v: false });
+	assertEquals(el.textContent, 'false');
+});
+
 Deno.test("PatchBranch: a swapped-in branch reads its rendered DOM, so an unchanged value writes nothing", () => {
 	const { el } = host(SERVER_ELSE);
 	const pb = new PatchBranch({ sites: [], sets: [SET] }, el, { mode: 'b', name: 'World' });

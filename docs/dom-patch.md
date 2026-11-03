@@ -21,7 +21,7 @@ Changes wait for the next microtask, so several of them become one update showin
 
 What updates:
 
-- **Dynamic attributes** (`:name` / `b-bind:name`) on elements in the body, and on the partial's own tag.
+- **Dynamic attributes** (`:name` / `b-bind:name`) on elements in the body, and on the partial's own tag. As on the server, `null`, `undefined` and `false` leave the attribute off.
 - **Interpolations** (`{{ expr }}`). The value is written as text, never parsed as HTML.
 - **Attributes on nested custom elements** (`<child-el :show="show">`). The child sees a normal attribute change, so a child that generates JS patches its own content in turn. This is how a value flows from a parent element down into a child.
 - **`b-if` / `b-else-if` / `b-else` sets** — see [Reactive `b-if`](#reactive-b-if).

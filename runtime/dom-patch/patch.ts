@@ -2,7 +2,7 @@
 // Browser-side runtime imported by generated dom-patch modules. A module describes
 // its partial's patchable sites as data; this file does the patching.
 
-import { render, activeBranchIndex, execFn, type rfn, type IfRNode } from '../js/render.js';
+import { render, activeBranchIndex, attrIsRendered, execFn, type rfn, type IfRNode } from '../js/render.js';
 import { enqueue, FLUSH_EVENT, register } from './flush.js';
 
 /**
@@ -111,7 +111,7 @@ export interface BranchDesc {
 
 type Data = Record<string, unknown>;
 
-/** What a site shows in the DOM: presence for a bool attr, else text. */
+/** What a site shows in the DOM: its text, or for an attr `false` when absent and, for a bool attr, `true` when present. */
 type Shown = string | boolean;
 
 interface SetState {
@@ -177,7 +177,9 @@ export class PatchBranch {
 		} catch (e) {
 			console.error('BackflipHTML: expression failed; showing an empty value', e, this.refElem);
 		}
-		return 'attr' in site && site.bool ? Boolean(value) : String(value);
+		if (!('attr' in site)) return String(value);
+		if (site.bool) return Boolean(value);
+		return attrIsRendered(value) ? String(value) : false;
 	}
 
 	// Swap in the winning branch if it changed; returns whether it did. An expression
@@ -226,7 +228,7 @@ export class PatchBranch {
 // undefined. Returns what the site shows afterwards.
 function writeSite(elem: Element, site: SiteDesc, next: Shown, shown: Shown | undefined): Shown | undefined {
 	if ('attr' in site) {
-		const current = shown ?? (site.bool ? elem.hasAttribute(site.attr) : elem.getAttribute(site.attr));
+		const current = shown ?? (site.bool ? elem.hasAttribute(site.attr) : elem.getAttribute(site.attr) ?? false);
 		if (next === current) return next;
 		if (next === false) elem.removeAttribute(site.attr);
 		else elem.setAttribute(site.attr, next === true ? '' : next);

@@ -81,7 +81,7 @@ import bfstore_widgets from "/static/stores/widgets.js";                        
 const bfif_<setId> = { type:'if', branches: [ ... ] };   // one snapshot per if-set, innermost first
 
 export class BackflipMyElement extends BackflipShell {
-    static bfAttrs = { title: 'string', flag: 'bool' };   // every declared b-attr
+    static bfAttrs = { "title": 'string', "flag": 'bool' };   // every declared b-attr
     static bfStores = { widgets: bfstore_widgets };       // each store the patching reads
     static bfRoot = {                                     // the root patch-branch
         sites: [
@@ -103,7 +103,7 @@ export class BackflipMyElement extends BackflipShell {
 The descriptors (the runtime's `BranchDesc`, `SetDesc` and `SiteDesc`):
 
 - **`bfid`** locates the element a site or set is anchored to: a descendant of the patch-branch's ref element with that `data-bfid`, or the ref element itself when `null`.
-- **An attr site** (`attr`, caller attr, definition-root attr) names the attribute as written, and `bool: true` for a boolean one. Its expression's value is set with `setAttribute(name, String(value))`, or a boolean one is present (`''`) or removed, matching the server-rendered HTML.
+- **An attr site** (`attr`, caller attr, definition-root attr) names the attribute as written, and `bool: true` for a boolean one. Its expression's value is set with `setAttribute(name, String(value))`, or the attribute is removed for `null`, `undefined` and `false`; a boolean one is present (`''`) or removed. Both match the server-rendered HTML, and the omit rule is the renderer's `attrIsRendered`.
 - **A print site** names its marker comments. The range between them is replaced with a text node (never markup), so siblings are preserved and the value is never parsed.
 - **A set** names its markers, its module-level snapshot, each branch's marker (`branchMarkers`), and one descriptor per branch — `null` for a branch with nothing to patch.
 - **Expressions** are the same `rfn` literals the JS generator emits, evaluated by the renderer's own `execFn`. An expression's `vars` are how `execFn` passes its arguments; nothing generated links a var to the sites that use it, since a var name is too coarse once vars hold complex data.

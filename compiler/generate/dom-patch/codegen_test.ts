@@ -118,7 +118,7 @@ Deno.test("single attr site: exact module body", () => {
 	const site = attrBfidSite('bf0', dynAttr('title', 'foo'), ['foo']);
 	const js = generateClassForPartial('my-element', [{ name: 'foo', isBool: false }], branch([site]), 'render');
 	assertEquals(js, `export class BackflipMyElement extends BackflipShell {
-\tstatic bfAttrs = { foo: 'string' };
+\tstatic bfAttrs = { "foo": 'string' };
 \tstatic bfRoot = {
 \t\tsites: [
 \t\t\t{ bfid: 'bf0', attr: 'title', expr: { fn: function ( foo ) { return foo; }, vars: ['foo'] } },
@@ -141,6 +141,12 @@ Deno.test("shell: bfAttrs types every b-attr, used or not; the shell extends Bac
 	const { shell, bfAttrs, BackflipShell } = evalModule(js);
 	assertEquals(bfAttrs, { used: 'string', unused: 'string', flag: 'bool' });
 	assertEquals(Object.getPrototypeOf(shell), BackflipShell);
+});
+
+Deno.test("shell: bfAttrs keeps a hyphenated b-attr name, string or bool", () => {
+	const js = generateClassForPartial('my-element',
+		[{ name: 'data-id', isBool: false }, { name: 'is-open', isBool: true }, { name: 'plain', isBool: false }], branch(), 'base')!;
+	assertEquals(evalModule(js).bfAttrs, { 'data-id': 'string', 'is-open': 'bool', plain: 'string' });
 });
 
 Deno.test("shell: the only class exported is the shell (render mode)", () => {
