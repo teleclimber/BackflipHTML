@@ -1,6 +1,6 @@
 # DOM-patch generator
 
-Produces one JavaScript module per custom-element partial that asks for client JS with `b-generate` (author docs: [Client-side patching](../../../docs/dom-patch.md)). The module describes, as data, the specific attributes, prints and `b-if` branches of the rendered subtree that depend on the custom element's own attributes; a shared browser [runtime](#runtime) patches exactly those when an attribute changes — without re-rendering the whole thing. Its exported `BackflipMyElement` shell carries the description as a tree of **patch-branch** descriptors; see [patch-branches](#patch-branches). For `b-generate="base"` and `"full"` the module also carries the [custom element class](#the-custom-element-class) that drives the shell.
+Produces one JavaScript module per custom-element partial that asks for client JS with `b-generate` (author docs: [Client-side patching](../../../docs/dom-patch.md)). The module describes, as data, the specific attributes, prints and `b-if` branches of the rendered subtree that depend on the custom element's own attributes; a shared browser [runtime](#runtime) patches exactly those when an attribute or store changes — without re-rendering the whole thing. Its exported `BackflipMyElement` shell carries the description as a tree of **patch-branch** descriptors; see [patch-branches](#patch-branches). For `b-generate="base"` and `"full"` the module also carries the [custom element class](#the-custom-element-class) that drives the shell.
 
 Modules are written flat at the dom-patch output root, named after the partial's tag (`my-widget.js`). One partial per module keeps the auto-include kind unambiguous — a `full` partial's module is executed, a `base` partial's is preloaded — and means a page only loads the elements it rendered. It is also why a partial that generates JS must have a project-unique tag name.
 
@@ -50,19 +50,9 @@ Three consequences shape the design:
 - **Snapshots are taken after all AST mutation, recursively.** `applyDomPatch` runs two passes per partial over the patch-branch tree (see [patch-branches](#patch-branches)): pass 1 mutates the AST at every depth (`data-bfid`s, print markers, and every set's marker pair and branch markers), pass 2 snapshots each set's `IfTNode`. Taking a snapshot before every nested marker exists would produce a client-rendered branch missing markers the server-rendered HTML has, and every patch site inside it — including a nested set's anchors — would stop working.
 - **The HTML becomes DOM via `range.createContextualFragment()`**, with the range's contents set to the target element, so a branch is parsed in its real parent context (a `<tr>` under a `<tbody>` survives).
 
-### Trigger variables
-
-An if-set is re-rendered (its branch swapped) **only by the live vars in its own branch conditions**. But a var referenced deeper — in a nested set's condition, or in branch content — still needs to reach that content. A patch-branch therefore also tracks the live vars anywhere in its subtree and **forwards** a change down to the active child patch-branch, which either re-renders its own nested set or patches its own sites. So a nested `b-if` whose condition changes while the outer condition is unchanged **does** re-render (via forwarding):
-
-```html
-<div b-if="a">
-  <p b-if="b">…</p>   <!-- changing `b` re-renders just this inner branch -->
-</div>
-```
-
 ### Active-branch tracking
 
-When a patch-branch is constructed it reads every owned set's active branch index **from the DOM**: the branch marker between the set's markers names the branch the server rendered. It does not compute the index from data, since an attribute may have changed between the render and init; the next update that recomputes the index then swaps in the branch the data now picks. Construction **does not render**. It also constructs the patch-branch for the active branch; branches swapped in later get theirs when they are rendered. The index is `0…n-1` for the winning branch, `-1` when nothing matches (a set with no `b-else` whose conditions are all falsy), which the DOM shows as no branch marker. A client-rendered branch carries its marker too, since the snapshot includes it.
+When a patch-branch is constructed it reads every owned set's active branch index **from the DOM**: the branch marker between the set's markers names the branch the server rendered. It does not compute the index from data, since an attribute may have changed between the render and init; the next update then swaps in the branch the data now picks. Construction **does not render**. It also constructs the patch-branch for the active branch; branches swapped in later get theirs when they are rendered. The index is `0…n-1` for the winning branch, `-1` when nothing matches (a set with no `b-else` whose conditions are all falsy), which the DOM shows as no branch marker. A client-rendered branch carries its marker too, since the snapshot includes it.
 
 ### Additional qualification rules
 
@@ -100,7 +90,7 @@ export class BackflipMyElement extends BackflipShell {
         ],
         sets: [
             { bfid: 'bf3', markers: ['bfid:bf4', 'bfid:bf5'],
-                snapshot: bfif_bf4, subtreeVars: ['title'],
+                snapshot: bfif_bf4,
                 branchMarkers: ['bfid:bf4:0', 'bfid:bf4:1'],
                 branches: [ { sites: [ ... ], sets: [ ... ] }, null ] },
         ],
@@ -115,8 +105,8 @@ The descriptors (the runtime's `BranchDesc`, `SetDesc` and `SiteDesc`):
 - **`bfid`** locates the element a site or set is anchored to: a descendant of the patch-branch's ref element with that `data-bfid`, or the ref element itself when `null`.
 - **An attr site** (`attr`, caller attr, definition-root attr) names the attribute as written, and `bool: true` for a boolean one. Its expression's value is set with `setAttribute(name, String(value))`, or a boolean one is present (`''`) or removed, matching the server-rendered HTML.
 - **A print site** names its marker comments. The range between them is replaced with a text node (never markup), so siblings are preserved and the value is never parsed.
-- **A set** names its markers, its module-level snapshot, the vars used anywhere in its branch content (`subtreeVars`), each branch's marker (`branchMarkers`), and one descriptor per branch — `null` for a branch with nothing to patch.
-- **Expressions** are the same `rfn` literals the JS generator emits, evaluated by the renderer's own `execFn`.
+- **A set** names its markers, its module-level snapshot, each branch's marker (`branchMarkers`), and one descriptor per branch — `null` for a branch with nothing to patch.
+- **Expressions** are the same `rfn` literals the JS generator emits, evaluated by the renderer's own `execFn`. An expression's `vars` are how `execFn` passes its arguments; nothing generated links a var to the sites that use it, since a var name is too coarse once vars hold complex data.
 
 ## Patch-branches
 
@@ -124,15 +114,16 @@ A **patch-branch** owns patching for a DOM subtree that is either wholly present
 
 - **Ownership.** A site belongs to the innermost patch-branch containing it. A set belongs to the parent (which owns its anchor and marker pair), while its branches' content sites belong to their own patch-branches. A non-qualifying nested set is inert client-side, so its content stays owned by the enclosing patch-branch.
 - **Ref element.** Each patch-branch patches against one element — the custom element for the root, and the element a set is anchored to for each of that set's branches — so every site it owns resolves to that element or a descendant of it.
-- **Forwarding.** A change enters through the shell's `update(name)`, which reads the element's attributes and hands them to the root. Each patch-branch re-renders the sets it directly owns whose branch conditions use the var, and forwards the change to the active branch of those whose `subtreeVars` include it — one or the other, never both — so the change reaches whichever patch-branch owns the affected content. Then it patches its own sites that use the var, looking each anchor element up once. `update()` with no name does all of this for every var.
-- **Writes only on change.** Each site remembers the value it shows, in DOM form: an attribute's text or presence, or a print's text. It is read from the DOM the first time the site is patched, so the server render (or, for a swapped-in branch, the client render) is the starting point rather than the data. A recomputed value equal to it writes nothing; a set likewise re-renders only when its winning branch changes. Where the server and the JS runtime turn a value into different text (PHP prints a boolean `true` as `1`), the site is rewritten once, at init.
+- **Updating.** A patch-branch does not know what changed. `update(data)` evaluates everything it owns: each set works out its winning branch and either swaps it in or updates the live branch's patch-branch, then each site compares its value with what it shows.
+- **Errors.** An expression that throws is reported with `console.error` and stays local: a site shows an empty value, a set keeps its current branch. Each is evaluated again on the next update.
+- **Writes only on change.** Each site remembers the value it shows, in DOM form: an attribute's text or presence, or a print's text. It is read from the DOM the first time the site is patched, so the server render (or, for a swapped-in branch, the client render) is the starting point rather than the data. A recomputed value equal to it writes nothing and does not look up the element; a set likewise re-renders only when its winning branch changes. Where the server and the JS runtime turn a value into different text (PHP prints a boolean `true` as `1`), the site is rewritten once, at init.
 - **Snapshots.** Every set — nested included — gets its own module-level `bfif_<setId>` snapshot, which a swap renders. A snapshot refers to each qualifying set nested in it by that set's `bfif_` name rather than repeating its content (the `ifRef` option of `nodeToJS`), so the consts are emitted innermost-first. A var-free nested `b-if` has no const and stays inline. Snapshots are taken only after pass 1 has spliced every marker at every depth, so a re-rendered parent branch still carries the anchors its nested patch-branches need.
 
 A missing anchor or marker pair means the rendered DOM diverged from the compiled template; it is reported with `console.error` and that patch is skipped.
 
 ## The custom element class
 
-`b-generate="base"` and `"full"` add `export class BackflipMyWidgetElement` below the shell; `"full"` also adds a guarded `customElements.define('my-widget', BackflipMyWidgetElement)`. The element class is the lifecycle half and does nothing else — it constructs the shell and forwards attribute changes to it. The lifecycle is the same for every partial, so it lives in the runtime's `BackflipElement` (an `HTMLElement` subclass), and the generated class only names its shell:
+`b-generate="base"` and `"full"` add `export class BackflipMyWidgetElement` below the shell; `"full"` also adds a guarded `customElements.define('my-widget', BackflipMyWidgetElement)`. The element class is the lifecycle half and does nothing else — it constructs the shell and tells it about attribute changes and reconnects. The lifecycle is the same for every partial, so it lives in the runtime's `BackflipElement` (an `HTMLElement` subclass), and the generated class only names its shell:
 
 ```js
 export class BackflipMyWidgetElement extends BackflipElement {
@@ -143,8 +134,8 @@ export class BackflipMyWidgetElement extends BackflipElement {
 `BackflipElement` observes the shell's declared attributes (`bfShell.bfAttrs`) and, on init, constructs the shell with the element. Each rule it is built around comes from the custom elements spec, not from preference:
 
 - **Nothing happens in the constructor.** A custom element constructor may not inspect its attributes or children, which is exactly what the shell does. There is no constructor at all; `bfInit()` runs from `connectedCallback`.
-- **`connectedCallback` can run mid-parse**, when the element's children do not exist yet. `bfInit` checks `ownerDocument.readyState === 'loading'` and, in that case, waits for `DOMContentLoaded` instead of patching into a half-built subtree. It is also idempotent, since moving an element re-fires `connectedCallback`.
-- **`attributeChangedCallback` fires before `connectedCallback`**, once per observed attribute, during upgrade, and it reports nothing for an attribute removed before upgrade. So calls before init are ignored, and `bfInit` instead runs one full update: every site and set is recomputed and compared against the DOM, which fixes whatever changed since the server render and writes nothing where the DOM already matches. A change with `oldValue === newValue` is skipped, since `setAttribute` fires the callback either way.
+- **`connectedCallback` can run mid-parse**, when the element's children do not exist yet. `bfInit` checks `ownerDocument.readyState === 'loading'` and, in that case, waits for `DOMContentLoaded` instead of patching into a half-built subtree. It is also idempotent, since the element can be moved before the document finishes. Once initialized, a later `connectedCallback` schedules a sync, which catches up on what changed while the element was out and finds nothing for a plain move.
+- **`attributeChangedCallback` fires before `connectedCallback`**, once per observed attribute, during upgrade, and it reports nothing for an attribute removed before upgrade. So calls before init are ignored, and constructing the shell runs one update: every site and set is compared against the DOM, which fixes whatever changed since the server render and writes nothing where the DOM already matches. A change with `oldValue === newValue` is skipped, since `setAttribute` fires the callback either way.
 - **`observedAttributes` and the lifecycle callbacks are read once**, at `define()` time, off the registered class. A `base` subclass that overrides `observedAttributes` without spreading `super.observedAttributes` silently loses all reactivity, so `bfInit` compares the two and `console.error`s the missing names. A forgotten `super.connectedCallback()` is documented, not detectable.
 - **Everything the class owns is `bf`-prefixed** (`bfPatch`, `bfInit`, `bfCheckObserved`, and the static `bfShell`), leaving the plain namespace to a subclass.
 - **The define is guarded** with `customElements.get`: a name may be registered once, and an unguarded throw would take the rest of the module with it.
@@ -167,7 +158,9 @@ Every generated module runs on the same browser runtime, `runtime/dom-patch/patc
 
 Store files import `BackflipStore` from `runtime/dom-patch/stores.ts`; `BackflipShell` hands the stores a shell declares to patching next to its attributes.
 
-`RUNTIME_FILES` lists the three as paths relative to the package's `dist/`. When a build generates any module, the CLI copies each into the dom-patch output dir at that same relative path, so the modules' `./runtime/dom-patch/patch.js` import and patch.js's own import of `../js/render.js` both resolve. If a `dist` file is missing the build **errors and stops**, since a silent skip would ship a page that 404s on import. The preview server maps `<domPatchOutputDir>/<file>` to the same `dist` file.
+Both import `runtime/dom-patch/flush.ts`, which holds the list of elements to sync and each store's registered elements. A change only adds to the list. A microtask, or `flush()`, then dispatches a `bf-store-flush` event on each element in it. Each shell listens on its own element in the capture phase, so ancestors sync first whatever the list's order, and a patch can only add to the list, so dispatches never nest. On the event a shell compares its attributes and each store's `data` with what it last rendered, and updates its root patch-branch if any differ.
+
+`RUNTIME_FILES` lists these as paths relative to the package's `dist/`. When a build generates any module, the CLI copies each into the dom-patch output dir at that same relative path, so the modules' `./runtime/dom-patch/patch.js` import and patch.js's own imports both resolve. If a `dist` file is missing the build **errors and stops**, since a silent skip would ship a page that 404s on import. The preview server maps `<domPatchOutputDir>/<file>` to the same `dist` file.
 
 ## Script auto-include
 

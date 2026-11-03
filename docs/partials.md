@@ -431,7 +431,7 @@ For `b-attr:NAME.bool` (boolean):
 
 ### Client-side patching (`b-generate`, `b-script`)
 
-A custom element partial can have Backflip generate the JavaScript that keeps it live in the browser, re-patching its rendered HTML when a declared attribute changes. `b-generate` says how much is generated and `b-script` names your own module. Partials that use them take data through `b-attr` and [`b-store`](data-stores.md) only. See [Client-side patching](dom-patch.md).
+A custom element partial can have Backflip generate the JavaScript that keeps it live in the browser, re-patching its rendered HTML when a declared attribute or store changes. `b-generate` says how much is generated and `b-script` names your own module. Partials that use them take data through `b-attr` and [`b-store`](data-stores.md) only. See [Client-side patching](dom-patch.md).
 
 ### Conflicting attributes
 

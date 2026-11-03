@@ -126,8 +126,8 @@ Deno.test("integration CLI: a nested b-if compiles to nested set descriptors", a
 		// Two set snapshots (outer + inner), each referenced by its own set descriptor.
 		assertEquals((generated.match(/^const bfif_/gm) ?? []).length, 2);
 		assertEquals((generated.match(/snapshot: bfif_/g) ?? []).length, 2);
-		// The inner set is reached by forwarding `level` from the outer set down.
-		assertStringIncludes(generated, "subtreeVars: ['level']");
+		// Nothing links a var's name to the sites that use it.
+		assertEquals(generated.includes("subtreeVars"), false);
 
 		// Server render emitted the taken branches with both marker pairs.
 		const html = await fs.readFile(path.join(workDir, "dist", "app.js"), "utf-8");

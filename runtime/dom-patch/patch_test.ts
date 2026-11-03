@@ -2,6 +2,7 @@ import { assertEquals } from "jsr:@std/assert";
 import { JSDOM } from "npm:jsdom";
 
 import { BackflipElement, BackflipShell, PatchBranch, replaceBetween, type BranchDesc, type SetDesc } from "./patch.ts";
+import { enqueue, flush, storeChanged } from "./flush.ts";
 import type { IfRNode, rfn } from "../js/render.ts";
 
 function parentWith(innerHtml: string) {
@@ -108,29 +109,26 @@ function captureErrors<T>(f: () => T): { result: T, errors: unknown[][] } {
 	}
 }
 
-Deno.test("PatchBranch: an attr site is set from its expression when one of its vars changes", () => {
+Deno.test("PatchBranch: an attr site is set from its expression", () => {
 	const { el } = host(`<p data-bfid="p">x</p>`);
 	const pb = new PatchBranch({ sites: [{ bfid: 'p', attr: 'title', expr: expr('a + "-" + b', ['a', 'b']) }], sets: [] }, el, {});
-	pb.update({ a: 1, b: 2 }, 'b');
-	assertEquals(el.querySelector('p')!.getAttribute('title'), '1-2');
-	// A var the site does not use leaves it alone.
-	pb.update({ a: 9, b: 9 }, 'z');
+	pb.update({ a: 1, b: 2 });
 	assertEquals(el.querySelector('p')!.getAttribute('title'), '1-2');
 });
 
 Deno.test("PatchBranch: a bool attr site is present or absent", () => {
 	const { el } = host(`<p data-bfid="p">x</p>`);
 	const pb = new PatchBranch({ sites: [{ bfid: 'p', attr: 'hidden', bool: true, expr: expr('on', ['on']) }], sets: [] }, el, {});
-	pb.update({ on: true }, 'on');
+	pb.update({ on: true });
 	assertEquals(el.querySelector('p')!.getAttribute('hidden'), '');
-	pb.update({ on: false }, 'on');
+	pb.update({ on: false });
 	assertEquals(el.querySelector('p')!.hasAttribute('hidden'), false);
 });
 
 Deno.test("PatchBranch: a print site replaces its marker range with text, never markup", () => {
 	const { el } = host(`<p data-bfid="p">Hi <!--m0-->x<!--m1-->!</p>`);
 	const pb = new PatchBranch({ sites: [{ bfid: 'p', markers: ['m0', 'm1'], expr: expr('name', ['name']) }], sets: [] }, el, {});
-	pb.update({ name: '<b>Mars</b>' }, 'name');
+	pb.update({ name: '<b>Mars</b>' });
 	const p = el.querySelector('p')!;
 	assertEquals(p.textContent, 'Hi <b>Mars</b>!');
 	assertEquals(p.querySelector('b'), null);
@@ -143,23 +141,40 @@ Deno.test("PatchBranch: a null bfid targets the ref element itself", () => {
 		{ bfid: null, attr: 'class', expr: expr('c', ['c']) },
 		{ bfid: null, markers: ['m0', 'm1'], expr: expr('c', ['c']) },
 	], sets: [] }, el, {});
-	pb.update({ c: 'on' }, 'c');
+	pb.update({ c: 'on' });
 	assertEquals(el.getAttribute('class'), 'on');
 	assertEquals(el.textContent, 'on');
 });
 
-Deno.test("PatchBranch: sites sharing an element look it up once per update", () => {
+Deno.test("PatchBranch: a site whose value is unchanged does not look up its element", () => {
 	const { el } = host(`<p data-bfid="p">x</p>`);
-	const pb = new PatchBranch({ sites: [
-		{ bfid: 'p', attr: 'title', expr: expr('v', ['v']) },
-		{ bfid: 'p', attr: 'aria-label', expr: expr('v', ['v']) },
-	], sets: [] }, el, {});
+	const pb = new PatchBranch({ sites: [{ bfid: 'p', attr: 'title', expr: expr('v', ['v']) }], sets: [] }, el, {});
+	pb.update({ v: 'x' });
 	let lookups = 0;
 	const orig = el.querySelector.bind(el);
 	(el as any).querySelector = (sel: string) => { lookups++; return orig(sel); };
-	pb.update({ v: 'x' }, 'v');
-	assertEquals(lookups, 1);
-	assertEquals(el.querySelector('p')!.getAttribute('aria-label'), 'x');
+	pb.update({ v: 'x' });
+	assertEquals(lookups, 0);
+});
+
+Deno.test("PatchBranch: only the sites whose value changed are written", () => {
+	const { el } = host(`<p data-bfid="p" title="T"><!--m0-->N<!--m1--></p>`);
+	const pb = new PatchBranch({ sites: [
+		{ bfid: 'p', attr: 'title', expr: expr('w.title', ['w']) },
+		{ bfid: 'p', markers: ['m0', 'm1'], expr: expr('w.name', ['w']) },
+	], sets: [] }, el, {});
+	pb.update({ w: { title: 'T', name: 'N' } });
+	const records = mutations(el, () => pb.update({ w: { title: 'U', name: 'N' } }));
+	assertEquals(records.map(r => r.type), ['attributes']);
+});
+
+Deno.test("PatchBranch: a set that keeps its branch updates that branch, without re-rendering", () => {
+	const { el } = host(SERVER_A);
+	const pb = new PatchBranch({ sites: [], sets: [SET] }, el, { mode: 'a', name: 'World' });
+	const p = el.querySelector('p');
+	pb.update({ mode: 'a', name: 'Mars' });
+	assertEquals(el.querySelector('p'), p);
+	assertEquals(p!.textContent, 'Hi Mars');
 });
 
 Deno.test("PatchBranch: a missing element is reported and the other sites still patch", () => {
@@ -168,7 +183,7 @@ Deno.test("PatchBranch: a missing element is reported and the other sites still 
 		{ bfid: 'gone', attr: 'title', expr: expr('v', ['v']) },
 		{ bfid: 'p', attr: 'title', expr: expr('v', ['v']) },
 	], sets: [] }, el, {});
-	const { errors } = captureErrors(() => pb.update({ v: 'x' }, 'v'));
+	const { errors } = captureErrors(() => pb.update({ v: 'x' }));
 	assertEquals(errors.length, 1);
 	assertEquals(String(errors[0][0]).includes('[data-bfid="gone"] not found'), true);
 	assertEquals(el.querySelector('p')!.getAttribute('title'), 'x');
@@ -190,7 +205,7 @@ const SET_SNAPSHOT: IfRNode = { type: 'if', branches: [
 ] };
 const BRANCH_A: BranchDesc = { sites: [{ bfid: 'p', markers: ['n0', 'n1'], expr: expr('name', ['name']) }], sets: [] };
 const SET: SetDesc = {
-	bfid: null, markers: ['s0', 's1'], snapshot: SET_SNAPSHOT, subtreeVars: ['name'],
+	bfid: null, markers: ['s0', 's1'], snapshot: SET_SNAPSHOT,
 	branches: [BRANCH_A, null], branchMarkers: ['b0', 'b1'],
 };
 const SERVER_A = `<!--s0--><!--b0--><p data-bfid="p">Hi <!--n0-->World<!--n1--></p><!--s1-->`;
@@ -207,13 +222,13 @@ Deno.test("PatchBranch: constructing does not touch the DOM", () => {
 	assertEquals(el.innerHTML, SERVER_A);
 });
 
-Deno.test("PatchBranch: a condition var swaps the branch, and back, keeping the markers", () => {
+Deno.test("PatchBranch: a change of winning branch swaps it, and back, keeping the markers", () => {
 	const { el } = host(SERVER_A);
 	const pb = new PatchBranch({ sites: [], sets: [SET] }, el, { mode: 'a', name: 'World' });
-	pb.update({ mode: 'b', name: 'World' }, 'mode');
+	pb.update({ mode: 'b', name: 'World' });
 	assertEquals(el.querySelector('p'), null);
 	assertEquals(el.querySelector('em')!.textContent, 'none');
-	pb.update({ mode: 'a', name: 'World' }, 'mode');
+	pb.update({ mode: 'a', name: 'World' });
 	assertEquals(el.querySelector('p')!.textContent, 'Hi World');
 	const comments = [...el.childNodes].filter(n => n.nodeType === 8).map(n => n.nodeValue);
 	assertEquals(comments, ['s0', 'b0', 's1']);
@@ -223,39 +238,30 @@ Deno.test("PatchBranch: an unchanged winning branch is not re-rendered", () => {
 	const { el } = host(SERVER_A);
 	const pb = new PatchBranch({ sites: [], sets: [SET] }, el, { mode: 'a', name: 'World' });
 	const p = el.querySelector('p');
-	pb.update({ mode: 'a', name: 'World' }, 'mode');
+	pb.update({ mode: 'a', name: 'World' });
 	assertEquals(el.querySelector('p'), p);
 });
 
 Deno.test("PatchBranch: with no b-else and no match, the set renders nothing", () => {
 	const { el } = host(SERVER_A);
 	const pb = new PatchBranch({ sites: [], sets: [SET_NO_ELSE] }, el, { mode: 'a', name: 'W' });
-	pb.update({ mode: 'z', name: 'W' }, 'mode');
+	pb.update({ mode: 'z', name: 'W' });
 	assertEquals(el.innerHTML, SERVER_NONE);
-});
-
-Deno.test("PatchBranch: a subtree var is forwarded to the active branch", () => {
-	const { el } = host(SERVER_A);
-	const pb = new PatchBranch({ sites: [], sets: [SET] }, el, { mode: 'a', name: 'World' });
-	const p = el.querySelector('p');
-	pb.update({ mode: 'a', name: 'Mars' }, 'name');
-	assertEquals(el.querySelector('p'), p);   // patched in place, not re-rendered
-	assertEquals(p!.textContent, 'Hi Mars');
 });
 
 Deno.test("PatchBranch: a swapped-in branch gets a fresh patch-branch that keeps patching", () => {
 	const { el } = host(SERVER_A);
 	const pb = new PatchBranch({ sites: [], sets: [SET] }, el, { mode: 'a', name: 'World' });
-	pb.update({ mode: 'b', name: 'World' }, 'mode');
-	// Changed while its branch is out: nothing to forward to.
-	pb.update({ mode: 'b', name: 'Mars' }, 'name');
-	pb.update({ mode: 'a', name: 'Mars' }, 'mode');
+	pb.update({ mode: 'b', name: 'World' });
+	// Changed while its branch is out: nothing to update.
+	pb.update({ mode: 'b', name: 'Mars' });
+	pb.update({ mode: 'a', name: 'Mars' });
 	assertEquals(el.querySelector('p')!.textContent, 'Hi Mars');
-	pb.update({ mode: 'a', name: 'Venus' }, 'name');
+	pb.update({ mode: 'a', name: 'Venus' });
 	assertEquals(el.querySelector('p')!.textContent, 'Hi Venus');
 });
 
-Deno.test("PatchBranch: a var in both the conditions and the subtree re-renders or forwards", () => {
+Deno.test("PatchBranch: a var in both the conditions and the subtree re-renders or patches in place", () => {
 	// `mode` picks the branch and is also printed inside it.
 	const snapshot: IfRNode = { type: 'if', branches: [
 		{ condition: expr("mode != 'off'", ['mode']), nodes: [
@@ -269,16 +275,16 @@ Deno.test("PatchBranch: a var in both the conditions and the subtree re-renders 
 		{ nodes: [{ type: 'comment', text: 'b1' }, { type: 'raw', raw: '<em>off</em>' }] },
 	] };
 	const branch: BranchDesc = { sites: [{ bfid: 'p', markers: ['n0', 'n1'], expr: expr('mode', ['mode']) }], sets: [] };
-	const set: SetDesc = { bfid: null, markers: ['s0', 's1'], snapshot, subtreeVars: ['mode'], branches: [branch, null], branchMarkers: ['b0', 'b1'] };
+	const set: SetDesc = { bfid: null, markers: ['s0', 's1'], snapshot, branches: [branch, null], branchMarkers: ['b0', 'b1'] };
 	const { el } = host(`<!--s0--><!--b0--><p data-bfid="p"><!--n0-->x<!--n1--></p><!--s1-->`);
 	const pb = new PatchBranch({ sites: [], sets: [set] }, el, { mode: 'x' });
 	const p = el.querySelector('p');
-	// Same branch: forwarded, patched in place.
-	pb.update({ mode: 'y' }, 'mode');
+	// Same branch: patched in place.
+	pb.update({ mode: 'y' });
 	assertEquals(el.querySelector('p'), p);
 	assertEquals(p!.textContent, 'y');
 	// Different branch: re-rendered.
-	pb.update({ mode: 'off' }, 'mode');
+	pb.update({ mode: 'off' });
 	assertEquals(el.querySelector('em')!.textContent, 'off');
 });
 
@@ -294,9 +300,9 @@ const OUTER: IfRNode = { type: 'if', branches: [
 	] },
 	{ nodes: [{ type: 'comment', text: 'ob1' }] },
 ] };
-const INNER_SET: SetDesc = { bfid: 'd', markers: ['i0', 'i1'], snapshot: INNER, subtreeVars: [], branches: [null, null], branchMarkers: ['ib0', 'ib1'] };
+const INNER_SET: SetDesc = { bfid: 'd', markers: ['i0', 'i1'], snapshot: INNER, branches: [null, null], branchMarkers: ['ib0', 'ib1'] };
 const OUTER_SET: SetDesc = {
-	bfid: null, markers: ['o0', 'o1'], snapshot: OUTER, subtreeVars: ['sub'],
+	bfid: null, markers: ['o0', 'o1'], snapshot: OUTER,
 	branches: [{ sites: [], sets: [INNER_SET] }, null], branchMarkers: ['ob0', 'ob1'],
 };
 
@@ -304,9 +310,82 @@ Deno.test("PatchBranch: a nested set swaps only its own range", () => {
 	const { el } = host(`<!--o0--><!--ob0--><div data-bfid="d"><!--i0--><!--ib0--><b>X</b><!--i1--></div><!--o1-->`);
 	const pb = new PatchBranch({ sites: [], sets: [OUTER_SET] }, el, { on: true, sub: 'x' });
 	const div = el.querySelector('div');
-	pb.update({ on: true, sub: 'y' }, 'sub');
+	pb.update({ on: true, sub: 'y' });
 	assertEquals(el.querySelector('div'), div);   // the outer branch stayed
 	assertEquals(div!.innerHTML, '<!--i0--><!--ib1--><i>Y</i><!--i1-->');
+});
+
+// --- PatchBranch: an expression that throws stays local ---------------------
+//
+// `w.name` throws when `w` is undefined, as a lookup of a removed entry does.
+
+const THROWING_SITES: { label: string, html: string, site: BranchDesc['sites'][number], good: string, empty: string }[] = [
+	{ label: 'a print goes empty', html: `<p data-bfid="p"><!--m0-->A<!--m1--></p>`,
+		site: { bfid: 'p', markers: ['m0', 'm1'], expr: expr('w.name', ['w']) },
+		good: `<p data-bfid="p"><!--m0-->B<!--m1--></p>`, empty: `<p data-bfid="p"><!--m0--><!--m1--></p>` },
+	{ label: 'an attr goes empty', html: `<p data-bfid="p" title="A"></p>`,
+		site: { bfid: 'p', attr: 'title', expr: expr('w.name', ['w']) },
+		good: `<p data-bfid="p" title="B"></p>`, empty: `<p data-bfid="p" title=""></p>` },
+	{ label: 'a bool attr is removed', html: `<p data-bfid="p" hidden=""></p>`,
+		site: { bfid: 'p', attr: 'hidden', bool: true, expr: expr('w.name', ['w']) },
+		good: `<p data-bfid="p" hidden=""></p>`, empty: `<p data-bfid="p"></p>` },
+];
+for (const c of THROWING_SITES) {
+	Deno.test(`PatchBranch: when its expression throws, ${c.label}, is reported, and recovers`, () => {
+		const { el } = host(c.html);
+		const pb = new PatchBranch({ sites: [c.site], sets: [] }, el, {});
+		const { errors } = captureErrors(() => pb.update({ w: undefined }));
+		assertEquals(errors.length, 1);
+		assertEquals(el.innerHTML, c.empty);
+		pb.update({ w: { name: 'B' } });
+		assertEquals(el.innerHTML, c.good);
+	});
+}
+
+Deno.test("PatchBranch: a throwing site does not stop the sites after it", () => {
+	const { el } = host(`<p data-bfid="p"><!--m0-->A<!--m1--><!--m2-->A<!--m3--></p>`);
+	const pb = new PatchBranch({ sites: [
+		{ bfid: 'p', markers: ['m0', 'm1'], expr: expr('w.name', ['w']) },
+		{ bfid: 'p', markers: ['m2', 'm3'], expr: expr('v', ['v']) },
+	], sets: [] }, el, {});
+	captureErrors(() => pb.update({ w: undefined, v: 'B' }));
+	assertEquals(el.querySelector('p')!.textContent, 'B');
+});
+
+// SET with its condition reading through `w`: it throws when `w` is undefined.
+const THROWING_COND: SetDesc = {
+	...SET,
+	snapshot: { ...SET_SNAPSHOT, branches: [{ ...SET_SNAPSHOT.branches[0], condition: expr("w.mode == 'a'", ['w']) }, SET_SNAPSHOT.branches[1]] },
+};
+// SET with branch 1's content reading through `w`: rendering it throws when `w` is undefined.
+const THROWING_BRANCH: SetDesc = {
+	...SET,
+	snapshot: { ...SET_SNAPSHOT, branches: [SET_SNAPSHOT.branches[0], { nodes: [{ type: 'comment', text: 'b1' }, { type: 'print', data: expr('w.name', ['w']) }] }] },
+};
+
+Deno.test("PatchBranch: a throwing condition keeps the branch and updates it, then recovers", () => {
+	const { el } = host(SERVER_A);
+	const pb = new PatchBranch({ sites: [], sets: [THROWING_COND] }, el, {});
+	const p = el.querySelector('p');
+	const { errors } = captureErrors(() => pb.update({ w: undefined, name: 'Mars' }));
+	assertEquals(errors.length, 1);
+	assertEquals(el.querySelector('p'), p);
+	assertEquals(p!.textContent, 'Hi Mars');
+	pb.update({ w: { mode: 'b' }, name: 'Mars' });
+	assertEquals(el.querySelector('em')!.textContent, 'none');
+});
+
+Deno.test("PatchBranch: a throwing branch render keeps the branch and updates it, then recovers", () => {
+	const { el } = host(SERVER_A);
+	const pb = new PatchBranch({ sites: [], sets: [THROWING_BRANCH] }, el, {});
+	const p = el.querySelector('p');
+	const { errors } = captureErrors(() => pb.update({ mode: 'b', w: undefined, name: 'Mars' }));
+	assertEquals(errors.length, 1);
+	assertEquals(el.querySelector('p'), p);
+	assertEquals(p!.textContent, 'Hi Mars');
+	pb.update({ mode: 'b', w: { name: 'Shown' }, name: 'Mars' });
+	assertEquals(el.querySelector('p'), null);
+	assertEquals(el.textContent, 'Shown');
 });
 
 // --- PatchBranch: the rendered branch is read from the DOM ------------------
@@ -317,7 +396,7 @@ Deno.test("PatchBranch: a nested set swaps only its own range", () => {
 Deno.test("PatchBranch: DOM on branch 0, data on branch 1: the update renders branch 1", () => {
 	const { el } = host(SERVER_A);
 	const pb = new PatchBranch({ sites: [], sets: [SET] }, el, { mode: 'b', name: 'World' });
-	pb.update({ mode: 'b', name: 'World' }, 'mode');
+	pb.update({ mode: 'b', name: 'World' });
 	assertEquals(el.innerHTML, SERVER_ELSE);
 });
 
@@ -325,8 +404,8 @@ Deno.test("PatchBranch: DOM on branch 1, data on branch 0: the update renders br
 	const { el } = host(SERVER_ELSE);
 	const { errors } = captureErrors(() => {
 		const pb = new PatchBranch({ sites: [], sets: [SET] }, el, { mode: 'a', name: 'World' });
-		pb.update({ mode: 'a', name: 'World' }, 'mode');
-		pb.update({ mode: 'a', name: 'Mars' }, 'name');
+		pb.update({ mode: 'a', name: 'World' });
+		pb.update({ mode: 'a', name: 'Mars' });
 	});
 	assertEquals(errors, []);
 	assertEquals(el.querySelector('p')!.textContent, 'Hi Mars');
@@ -335,21 +414,21 @@ Deno.test("PatchBranch: DOM on branch 1, data on branch 0: the update renders br
 Deno.test("PatchBranch: DOM with no branch, data on branch 0: the update renders branch 0", () => {
 	const { el } = host(SERVER_NONE);
 	const pb = new PatchBranch({ sites: [], sets: [SET_NO_ELSE] }, el, { mode: 'a', name: 'World' });
-	pb.update({ mode: 'a', name: 'World' }, 'mode');
+	pb.update({ mode: 'a', name: 'World' });
 	assertEquals(el.querySelector('p')!.textContent, 'Hi World');
 });
 
 Deno.test("PatchBranch: DOM on branch 0, data on no branch: the update empties the set", () => {
 	const { el } = host(SERVER_A);
 	const pb = new PatchBranch({ sites: [], sets: [SET_NO_ELSE] }, el, { mode: 'z', name: 'World' });
-	pb.update({ mode: 'z', name: 'World' }, 'mode');
+	pb.update({ mode: 'z', name: 'World' });
 	assertEquals(el.innerHTML, SERVER_NONE);
 });
 
 Deno.test("PatchBranch: a nested set reads its own rendered branch from the DOM", () => {
 	const { el } = host(`<!--o0--><!--ob0--><div data-bfid="d"><!--i0--><!--ib0--><b>X</b><!--i1--></div><!--o1-->`);
 	const pb = new PatchBranch({ sites: [], sets: [OUTER_SET] }, el, { on: true, sub: 'y' });
-	pb.update({ on: true, sub: 'y' }, 'sub');
+	pb.update({ on: true, sub: 'y' });
 	assertEquals(el.querySelector('div')!.innerHTML, '<!--i0--><!--ib1--><i>Y</i><!--i1-->');
 });
 
@@ -398,8 +477,8 @@ Deno.test("PatchBranch: a full update fixes whatever differs from the data", () 
 Deno.test("PatchBranch: a recomputed value equal to the rendered one writes nothing", () => {
 	const { el } = host(`<p data-bfid="p"><!--m0-->true<!--m1--></p>`);
 	const pb = new PatchBranch({ sites: [{ bfid: 'p', markers: ['m0', 'm1'], expr: expr('a.length > 3', ['a']) }], sets: [] }, el, {});
-	assertEquals(mutations(el, () => pb.update({ a: 'world' }, 'a')), []);
-	pb.update({ a: 'hi' }, 'a');
+	assertEquals(mutations(el, () => pb.update({ a: 'world' })), []);
+	pb.update({ a: 'hi' });
 	assertEquals(el.textContent, 'false');
 });
 
@@ -420,18 +499,18 @@ for (const c of SITE_CASES) {
 	Deno.test(`PatchBranch: ${c.label} is read from the DOM and written only when it changes`, () => {
 		const { el } = host(c.html);
 		const pb = new PatchBranch({ sites: [c.site], sets: [] }, el, {});
-		assertEquals(mutations(el, () => pb.update({ v: c.same }, 'v')), []);
-		pb.update({ v: c.changed }, 'v');
+		assertEquals(mutations(el, () => pb.update({ v: c.same })), []);
+		pb.update({ v: c.changed });
 		assertEquals(el.innerHTML, c.after);
-		assertEquals(mutations(el, () => pb.update({ v: c.changed }, 'v')), []);
+		assertEquals(mutations(el, () => pb.update({ v: c.changed })), []);
 	});
 }
 
 Deno.test("PatchBranch: a swapped-in branch reads its rendered DOM, so an unchanged value writes nothing", () => {
 	const { el } = host(SERVER_ELSE);
 	const pb = new PatchBranch({ sites: [], sets: [SET] }, el, { mode: 'b', name: 'World' });
-	pb.update({ mode: 'a', name: 'World' }, 'mode');
-	assertEquals(mutations(el, () => pb.update({ mode: 'a', name: 'World' }, 'name')), []);
+	pb.update({ mode: 'a', name: 'World' });
+	assertEquals(mutations(el, () => pb.update({ mode: 'a', name: 'World' })), []);
 });
 
 // --- BackflipShell -----------------------------------------------------------
@@ -459,16 +538,160 @@ Deno.test("BackflipShell: puts each declared store next to the attributes", () =
 	assertEquals(data.widgets === widgets, true);
 });
 
-Deno.test("BackflipShell: update patches from the element's current attributes", () => {
+const PRINT_NAME: BranchDesc = { sites: [{ bfid: 'p', markers: ['m0', 'm1'], expr: expr('name', ['name']) }], sets: [] };
+
+Deno.test("BackflipShell: constructing patches from the current attributes", () => {
 	const { el } = host(`<p data-bfid="p"><!--m0-->x<!--m1--></p>`);
 	el.setAttribute('name', 'World');
 	class Shell extends BackflipShell {
 		static override bfAttrs = { name: 'string' } as const;
-		static override bfRoot: BranchDesc = { sites: [{ bfid: 'p', markers: ['m0', 'm1'], expr: expr('name', ['name']) }], sets: [] };
+		static override bfRoot = PRINT_NAME;
+	}
+	new Shell(el);
+	assertEquals(el.querySelector('p')!.textContent, 'World');
+});
+
+Deno.test("BackflipShell: update takes effect on the flush, reading the current attributes", () => {
+	const { el } = host(`<p data-bfid="p"><!--m0-->x<!--m1--></p>`);
+	el.setAttribute('name', 'x');
+	class Shell extends BackflipShell {
+		static override bfAttrs = { name: 'string' } as const;
+		static override bfRoot = PRINT_NAME;
 	}
 	const shell = new Shell(el);
 	el.setAttribute('name', 'Mars');
-	shell.update('name');
+	shell.update();
+	assertEquals(el.querySelector('p')!.textContent, 'x');
+	flush();
+	assertEquals(el.querySelector('p')!.textContent, 'Mars');
+});
+
+// A root branch printing `name`, logging each value its expression sees.
+function loggingPrint(log: unknown[], code: string, vars: string[]): BranchDesc {
+	const fn = new Function(...vars, `return ${code};`) as (...args: unknown[]) => unknown;
+	return { sites: [{ bfid: 'p', markers: ['m0', 'm1'], expr: {
+		fn: (...args: unknown[]) => { const v = fn(...args); log.push(v); return v; }, vars,
+	} }], sets: [] };
+}
+
+Deno.test("BackflipShell: a sync with nothing changed evaluates nothing", () => {
+	const { el } = host(`<p data-bfid="p"><!--m0-->x<!--m1--></p>`);
+	el.setAttribute('name', 'x');
+	const log: unknown[] = [];
+	class Shell extends BackflipShell {
+		static override bfAttrs = { name: 'string' } as const;
+		static override bfRoot = loggingPrint(log, 'name', ['name']);
+	}
+	const shell = new Shell(el);
+	log.length = 0;
+	shell.update();
+	flush();
+	assertEquals(log, []);
+});
+
+Deno.test("BackflipShell: several attributes changed before the flush sync once", () => {
+	const { el } = host(`<p data-bfid="p"><!--m0-->x<!--m1--></p>`);
+	const log: unknown[] = [];
+	class Shell extends BackflipShell {
+		static override bfAttrs = { a: 'string', b: 'string' } as const;
+		static override bfRoot = loggingPrint(log, 'a + b', ['a', 'b']);
+	}
+	const shell = new Shell(el);
+	log.length = 0;
+	el.setAttribute('a', '1');
+	shell.update();
+	el.setAttribute('b', '2');
+	shell.update();
+	flush();
+	assertEquals(log, ['12']);
+});
+
+// A parent shell passing `store.data.label` to a child's `label` attribute, the child
+// printing its attribute and the store's `suffix`, and both reading the store. The
+// child's expression logs what it sees.
+function parentAndChild() {
+	const dom = new JSDOM(`<!DOCTYPE html><body><x-parent><x-child data-bfid="c" label="A"><p data-bfid="p"><!--m0-->A!<!--m1--></p></x-child></x-parent></body>`);
+	const doc = dom.window.document;
+	const parent = doc.querySelector('x-parent')!, child = doc.querySelector('x-child')!;
+	const store = { data: { label: 'A', suffix: '!' } };
+	const log: unknown[] = [];
+	class ChildShell extends BackflipShell {
+		static override bfAttrs = { label: 'string' } as const;
+		static override bfStores = { store };
+		static override bfRoot = loggingPrint(log, 'label + store.data.suffix', ['label', 'store']);
+	}
+	class ParentShell extends BackflipShell {
+		static override bfStores = { store };
+		static override bfRoot: BranchDesc = { sites: [{ bfid: 'c', attr: 'label', expr: expr('store.data.label', ['store']) }], sets: [] };
+	}
+	// The child registers first, so it is first in the list.
+	const childShell = new ChildShell(child);
+	const parentShell = new ParentShell(parent);
+	log.length = 0;
+	return { dom, parent, child, store, log, childShell, parentShell };
+}
+
+Deno.test("Reactivity: a parent patches before a child that is first in the list", () => {
+	const { store, child, log } = parentAndChild();
+	store.data = { label: 'B', suffix: '?' };
+	storeChanged(store);
+	flush();
+	// One evaluation, seeing both the parent's attribute and the store's new data.
+	assertEquals(log, ['B?']);
+	assertEquals(child.querySelector('p')!.textContent, 'B?');
+});
+
+Deno.test("Reactivity: a child removed by an ancestor during the dispatch does not sync", () => {
+	const { parent, child, store, log, childShell } = parentAndChild();
+	// What an ancestor's patch would do: remove the child once the event is on its way.
+	const remove = () => child.remove();
+	parent.addEventListener('bf-store-flush', remove, { capture: true });
+	store.data = { label: 'A', suffix: '?' };
+	enqueue(child);
+	flush();
+	parent.removeEventListener('bf-store-flush', remove, { capture: true });
+	assertEquals(log, []);
+	assertEquals(child.querySelector('p')!.textContent, 'A!');
+
+	// Connected again, it catches up on what it missed.
+	parent.append(child);
+	childShell.update();
+	flush();
+	assertEquals(child.querySelector('p')!.textContent, 'A?');
+});
+
+Deno.test("Reactivity: an element changed while disconnected catches up on reconnect", () => {
+	const { parent, child, store, childShell } = parentAndChild();
+	child.remove();
+	store.data = { label: 'A', suffix: '?' };
+	storeChanged(store);
+	flush();
+	assertEquals(child.querySelector('p')!.textContent, 'A!');
+	parent.append(child);
+	childShell.update();
+	flush();
+	assertEquals(child.querySelector('p')!.textContent, 'A?');
+});
+
+Deno.test("Reactivity: a shell whose sync throws does not stop the others", () => {
+	const { el } = host(`<p data-bfid="p"><!--m0-->x<!--m1--></p><i></i>`);
+	const other = el.querySelector('i')!;
+	class Bad extends BackflipShell {
+		override sync(): void { throw new Error('boom'); }
+	}
+	new Bad(other);
+	el.setAttribute('name', 'x');
+	class Shell extends BackflipShell {
+		static override bfAttrs = { name: 'string' } as const;
+		static override bfRoot = PRINT_NAME;
+	}
+	const shell = new Shell(el);
+	el.setAttribute('name', 'Mars');
+	captureErrors(() => {
+		enqueue(other);
+		shell.update();
+		flush();
+	});
 	assertEquals(el.querySelector('p')!.textContent, 'Mars');
 });
 

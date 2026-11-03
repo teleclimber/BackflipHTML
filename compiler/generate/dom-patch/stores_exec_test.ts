@@ -11,6 +11,7 @@ import type { IfBranch, IfTNode, PrintTNode } from "../../types.ts";
 import { interpretBackcode } from "../../backcode.ts";
 import { BackflipShell } from "../../../runtime/dom-patch/patch.ts";
 import { BackflipStore } from "../../../runtime/dom-patch/stores.ts";
+import { flush } from "../../../runtime/dom-patch/flush.ts";
 import type { BackcodeSite, IfSetSite } from "./collect.ts";
 import { generateClassForPartial, type BfidSite, type IfSetPatchSite, type PatchBranch, type PatchTarget } from "./codegen.ts";
 
@@ -73,9 +74,10 @@ Deno.test("exec stores: a mixed expression re-patches when its attribute changes
 		const root = patchBranch([printSite({ kind: 'bfid-element', bfid: 'h' }, 'widgets.data[widget_id].name', 'm0', 'm1')]);
 		const js = generateClassForPartial('my-widget', [{ name: 'widget_id', isBool: false }], root, 'render', ['widgets'])!;
 		const { dom, host, instance } = mount(js, 'widget_id="42"', `<h3 data-bfid="h"><!--bfid:m0-->Gizmo<!--bfid:m1--></h3>`);
-		assertEquals(mutations(dom, host, () => instance.update()), []);
+		assertEquals(mutations(dom, host, () => { instance.update(); flush(); }), []);
 		host.setAttribute('widget_id', '7');
-		instance.update('widget_id');
+		instance.update();
+		flush();
 		assertEquals(host.querySelector('h3')!.textContent, 'Widget');
 	} finally {
 		cleanup();
@@ -90,10 +92,10 @@ Deno.test("exec stores: a store-only site is left alone on init and by attribute
 		]);
 		const js = generateClassForPartial('my-widget', [{ name: 'label', isBool: false }], root, 'render', ['widgets'])!;
 		const { dom, host, instance } = mount(js, 'label="x"', `<h3 data-bfid="h"><!--bfid:m0-->Shop<!--bfid:m1--></h3><p data-bfid="p"><!--bfid:m2-->x<!--bfid:m3--></p>`);
-		assertEquals(mutations(dom, host, () => instance.update()), []);
+		assertEquals(mutations(dom, host, () => { instance.update(); flush(); }), []);
 		const h3 = host.querySelector('h3')!;
 		host.setAttribute('label', 'y');
-		const records = mutations(dom, host, () => instance.update('label'));
+		const records = mutations(dom, host, () => { instance.update(); flush(); });
 		assertEquals(records.some(r => h3.contains(r.target)), false);
 		assertEquals(host.querySelector('p')!.textContent, 'y');
 	} finally {
@@ -112,7 +114,7 @@ Deno.test("exec stores: a store-driven reactive set keeps the branch the server 
 		const js = generateClassForPartial('my-widget', [], patchBranch([], [set]), 'render', ['widgets'])!;
 		const { dom, host, instance } = mount(js, '', `<!--bfid:s0--><!--bfid:s0:0--><p>on</p><!--bfid:s1-->`);
 		const p = host.querySelector('p')!;
-		assertEquals(mutations(dom, host, () => instance.update()), []);
+		assertEquals(mutations(dom, host, () => { instance.update(); flush(); }), []);
 		assertEquals(host.querySelector('p'), p);
 	} finally {
 		cleanup();
@@ -130,7 +132,8 @@ Deno.test("exec stores: a branch rendered in the browser reads the store", () =>
 		const js = generateClassForPartial('my-widget', [{ name: 'mode', isBool: false }], patchBranch([], [set]), 'render', ['widgets'])!;
 		const { host, instance } = mount(js, 'mode="a"', `<!--bfid:s0--><!--bfid:s0:0--><p>a</p><!--bfid:s1-->`);
 		host.setAttribute('mode', 'b');
-		instance.update('mode');
+		instance.update();
+		flush();
 		assertEquals(host.querySelector('p')!.textContent, 'from store');
 	} finally {
 		cleanup();
@@ -146,6 +149,102 @@ Deno.test("exec stores: the shell hands the store itself to patching, and its da
 		assertEquals(data.widgets, store);
 		assertThrows(() => { (store.data as Record<string, unknown>).title = 'x'; }, TypeError);
 	} finally {
+		cleanup();
+	}
+});
+
+// --- store changes -----------------------------------------------------------
+
+Deno.test("exec stores: a store-only site updates on set, writing only what changed", () => {
+	try {
+		const root = patchBranch([
+			printSite({ kind: 'bfid-element', bfid: 'h' }, 'widgets.data.title', 'm0', 'm1'),
+			printSite({ kind: 'bfid-element', bfid: 'p' }, 'label', 'm2', 'm3'),
+		]);
+		const js = generateClassForPartial('my-widget', [{ name: 'label', isBool: false }], root, 'render', ['widgets'])!;
+		const { dom, host, store } = mount(js, 'label="x"', `<h3 data-bfid="h"><!--bfid:m0-->Shop<!--bfid:m1--></h3><p data-bfid="p"><!--bfid:m2-->x<!--bfid:m3--></p>`);
+		const p = host.querySelector('p')!;
+		store.setAt(['title'], 'Store');
+		assertEquals(host.querySelector('h3')!.textContent, 'Shop');
+		const records = mutations(dom, host, flush);
+		assertEquals(host.querySelector('h3')!.textContent, 'Store');
+		assertEquals(records.some(r => p.contains(r.target)), false);
+	} finally {
+		cleanup();
+	}
+});
+
+Deno.test("exec stores: a store-driven reactive set swaps branches on set", () => {
+	try {
+		const set = ifSite(['widgets.data.on', null], STORE_SET_SNAPSHOT, [], [null, null]);
+		const js = generateClassForPartial('my-widget', [], patchBranch([], [set]), 'render', ['widgets'])!;
+		const { host, store } = mount(js, '', `<!--bfid:s0--><!--bfid:s0:0--><p>on</p><!--bfid:s1-->`);
+		store.setAt(['on'], false);
+		flush();
+		assertEquals(host.querySelector('p')!.textContent, 'off');
+		store.setAt(['on'], true);
+		flush();
+		assertEquals(host.querySelector('p')!.textContent, 'on');
+	} finally {
+		cleanup();
+	}
+});
+
+Deno.test("exec stores: an attribute and a store changed together show one snapshot, in one evaluation", () => {
+	try {
+		const root = patchBranch([printSite({ kind: 'bfid-element', bfid: 'h' }, 'widgets.data[widget_id].name', 'm0', 'm1')]);
+		const js = generateClassForPartial('my-widget', [{ name: 'widget_id', isBool: false }], root, 'render', ['widgets'])!;
+		const { dom, host, instance, store } = mount(js, 'widget_id="42"', `<h3 data-bfid="h"><!--bfid:m0-->Gizmo<!--bfid:m1--></h3>`);
+		host.setAttribute('widget_id', '7');
+		instance.update();
+		store.setAt(['7', 'name'], 'Renamed');
+		const records = mutations(dom, host, flush);
+		assertEquals(host.querySelector('h3')!.textContent, 'Renamed');
+		// One write: a single text node added.
+		assertEquals(records.filter(r => r.addedNodes.length > 0).length, 1);
+	} finally {
+		cleanup();
+	}
+});
+
+Deno.test("exec stores: a removed entry's site goes empty, and fills when the entry returns", () => {
+	try {
+		const root = patchBranch([printSite({ kind: 'bfid-element', bfid: 'h' }, 'widgets.data[widget_id].name', 'm0', 'm1')]);
+		const js = generateClassForPartial('my-widget', [{ name: 'widget_id', isBool: false }], root, 'render', ['widgets'])!;
+		const { host, store } = mount(js, 'widget_id="42"', `<h3 data-bfid="h"><!--bfid:m0-->Gizmo<!--bfid:m1--></h3>`);
+		const { '42': _gone, ...rest } = store.data as Record<string, unknown>;
+		store.set(rest);
+		const errors: unknown[][] = [];
+		const orig = console.error;
+		console.error = (...args: unknown[]) => { errors.push(args); };
+		try {
+			flush();
+		} finally {
+			console.error = orig;
+		}
+		assertEquals(errors.length, 1);
+		assertEquals(host.querySelector('h3')!.textContent, '');
+		store.setAt(['42'], { name: 'Back' });
+		flush();
+		assertEquals(host.querySelector('h3')!.textContent, 'Back');
+	} finally {
+		cleanup();
+	}
+});
+
+Deno.test("exec stores: a miss at init leaves the shell working", () => {
+	const orig = console.error;
+	console.error = () => {};
+	try {
+		const root = patchBranch([printSite({ kind: 'bfid-element', bfid: 'h' }, 'widgets.data[widget_id].name', 'm0', 'm1')]);
+		const js = generateClassForPartial('my-widget', [{ name: 'widget_id', isBool: false }], root, 'render', ['widgets'])!;
+		const { host, store } = mount(js, 'widget_id="99"', `<h3 data-bfid="h"><!--bfid:m0-->Stale<!--bfid:m1--></h3>`);
+		assertEquals(host.querySelector('h3')!.textContent, '');
+		store.setAt(['99'], { name: 'Arrived' });
+		flush();
+		assertEquals(host.querySelector('h3')!.textContent, 'Arrived');
+	} finally {
+		console.error = orig;
 		cleanup();
 	}
 });

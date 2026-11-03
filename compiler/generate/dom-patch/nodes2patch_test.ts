@@ -406,18 +406,18 @@ Deno.test("end-to-end: an if-set is bracketed by markers and its parent gets a b
 	const { bfRoot, defined } = evalModule(js, 'my-widget');
 	assertEquals(bfRoot.sets.length, 1);
 	const set = bfRoot.sets[0];
-	assertEquals([set.bfid, set.markers, set.subtreeVars, set.branches, set.branchMarkers],
-		['bf0', ['bfid:bf1', 'bfid:bf2'], [], [null, null], ['bfid:bf1:0', 'bfid:bf1:1']]);
+	assertEquals([set.bfid, set.markers, set.branches, set.branchMarkers],
+		['bf0', ['bfid:bf1', 'bfid:bf2'], [null, null], ['bfid:bf1:0', 'bfid:bf1:1']]);
 	assertEquals(set.snapshot, defined.bfif_bf1);
 });
 
-Deno.test("end-to-end: b-for value and index names are not if-set subtree vars", async () => {
+Deno.test("end-to-end: b-for value and index names in a set's branch need no declaration", async () => {
 	const file = await compileCustomElement(
 		`<my-widget b-attr:show b-attr:xs><div b-if="show"><p b-for="(x, i) in xs">{{ i }}{{ x }}</p></div></my-widget>`
 	);
 	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
 	if (!js) throw new Error('expected js');
-	assertEquals(evalModule(js, 'my-widget').bfRoot.sets[0].subtreeVars, ['xs']);
+	assertEquals(evalModule(js, 'my-widget').bfRoot.sets.length, 1);
 });
 
 // The module-level `bfif_*` consts, in emitted order, each with its literal text.
@@ -604,9 +604,7 @@ Deno.test("end-to-end: a nested if-set is its own patch-branch (nesting supporte
 	// Two module-level snapshots, one per set.
 	assertEquals((js.match(/const bfif_/g) ?? []).length, 2);
 	// The outer set's first branch owns the inner set, whose first branch owns the print.
-	// `b` reaches the inner set because the outer set forwards its subtree vars.
 	const outer = evalModule(js, 'my-widget').bfRoot.sets[0];
-	assertEquals(outer.subtreeVars, ['b']);
 	const inner = outer.branches[0].sets[0];
 	assertEquals(outer.branches[1], null);
 	assertEquals(plain(inner.branches[0].sites, { b: 'B' }).map((s: any) => s.expr), [{ vars: ['b'], value: 'B' }]);
@@ -669,6 +667,13 @@ Deno.test("stores: the shell imports each store its code reads, by its resolved 
 	// tags is read only inside a b-for, which is not patched.
 	assertEquals(js!.includes('tags'), false, js!);
 	assertEquals(file.partials.get('my-widget')!.stores!.map(s => [s.name, !!s.shipped]), [['widgets', true], ['tags', false]]);
+});
+
+Deno.test("stores: a store read only by a b-for in a reactive branch still ships", async () => {
+	const file = await compileWithStores(`<my-widget b-store:tags b-attr:open b-generate="full"><div b-if="open"><p b-for="t in tags.data.list">{{ t }}</p></div></my-widget>`);
+	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen(), assetMap: new Map([['static', '/static/']]) });
+	assertEquals(js!.includes(`import bfstore_tags from "/static/stores/tags.js";`), true, js!);
+	assertEquals(file.partials.get('my-widget')!.stores!.map(s => [s.name, !!s.shipped]), [['tags', true]]);
 });
 
 Deno.test("stores: a store-only site is patchable in a partial with no b-attr", async () => {

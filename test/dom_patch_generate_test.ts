@@ -20,6 +20,9 @@ import { linkAsScript } from "./link-as-script.ts";
 const TMPDIR = "/tmp/claude-1000/dom-patch-generate";
 const CLI_PATH = new URL("../cli.ts", import.meta.url).pathname;
 
+// Let the microtask that patches the DOM after a change run.
+const settled = () => new Promise(resolve => setTimeout(resolve));
+
 // A `full` partial exercising all three patch flavors: a dynamic attribute, a print,
 // and a reactive b-if set.
 const APP_HTML = `<count-badge b-attr:count b-attr:urgent.bool b-generate="full">
@@ -86,13 +89,16 @@ Deno.test("integration: a full custom element registers itself and patches with 
 
 		// A print and a dynamic attribute.
 		el.setAttribute("count", "12");
+		await settled();
 		assertStringIncludes(content(), 'data-count="12"');
 		assertStringIncludes(content(), ">12</span>");
 
 		// A reactive b-if set: the losing branch is rendered client-side and swapped in.
 		el.removeAttribute("urgent");
+		await settled();
 		assertStringIncludes(content(), "<em>Relax</em>");
 		el.setAttribute("urgent", "");
+		await settled();
 		assertStringIncludes(content(), "<em>Hurry</em>");
 		// The count patched earlier survives the branch swap.
 		assertStringIncludes(content(), ">12</span>");

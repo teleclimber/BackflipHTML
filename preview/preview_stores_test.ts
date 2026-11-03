@@ -61,6 +61,7 @@ Deno.test("preview stores: the generated module imports the store file at its pr
 		const js = await Deno.readTextFile(path.join(tmp, 'my-widget.js'));
 		assertStringIncludes(js, `import bfstore_widgets from "/__assets/static/stores/widgets.js";`);
 		assertEquals(Object.keys(result.domPatchAssets!).includes('/p/static/bfdom/runtime/dom-patch/stores.js'), true);
+		assertEquals(Object.keys(result.domPatchAssets!).includes('/p/static/bfdom/runtime/dom-patch/flush.js'), true);
 	} finally {
 		await Deno.remove(tmp, { recursive: true });
 	}

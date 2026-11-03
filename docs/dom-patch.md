@@ -1,6 +1,6 @@
 # Client-side patching (dom-patch)
 
-A [custom element partial](partials.md#custom-element-partials) can stay live in the browser: when one of its declared attributes changes, the parts of the server-rendered HTML that depend on it are updated in place, without re-rendering the element. Backflip generates the JavaScript that does this from the template itself.
+A [custom element partial](partials.md#custom-element-partials) can stay live in the browser: when one of its declared attributes or [stores](data-stores.md#changing-a-store) changes, the parts of the server-rendered HTML that depend on it are updated in place, without re-rendering the element. Backflip generates the JavaScript that does this from the template itself.
 
 ```html
 <my-widget b-attr:count b-attr:open.bool b-generate="full">
@@ -9,13 +9,15 @@ A [custom element partial](partials.md#custom-element-partials) can stay live in
 </my-widget>
 ```
 
-With a `dom-patch` [output](#build-output) configured, a page that renders `<my-widget count="3">` automatically loads the generated module, and `el.setAttribute('count', '4')` updates both the `data-count` attribute and the printed text. Toggling `open` renders or removes the paragraph.
+With a `dom-patch` [output](#build-output) configured, a page that renders `<my-widget count="3">` automatically loads the generated module, and `el.setAttribute('count', '4')` updates both the `data-count` attribute and the printed text on the next microtask. Toggling `open` renders or removes the paragraph.
 
 ---
 
 ## What updates in the browser
 
-Inside a partial that generates client JS, anything that depends on a `b-attr` or a [store](data-stores.md) updates when it changes. Only attributes change in the browser today, so in practice a value updates when one of its attributes does, reading the store's current data: `{{ widgets.data[widget_id].name }}` updates when `widget_id` changes. A value that depends on stores alone is checked against the server's HTML when the element starts up, and left alone after.
+Inside a partial that generates client JS, anything that depends on a `b-attr` or a [store](data-stores.md) updates when it changes.
+
+Changes wait for the next microtask, so several of them become one update showing one snapshot of attributes and stores. Parents update before children. To read the DOM right after a change, call `flush()` from `runtime/dom-patch/flush.js`; during an update it does nothing.
 
 What updates:
 
@@ -24,7 +26,7 @@ What updates:
 - **Attributes on nested custom elements** (`<child-el :show="show">`). The child sees a normal attribute change, so a child that generates JS patches its own content in turn. This is how a value flows from a parent element down into a child.
 - **`b-if` / `b-else-if` / `b-else` sets** — see [Reactive `b-if`](#reactive-b-if).
 
-An expression that uses no variable never changes and is left alone. Only what actually changes is written to the DOM.
+An expression that uses no variable never changes and is left alone. Every other value in the partial is evaluated on each update, and only what differs from what it last rendered is written to the DOM.
 
 Not patched:
 
@@ -62,7 +64,7 @@ The rule against partial references is what keeps [script auto-include](#script-
 
 Each partial that generates JS gets **its own module**, named after its tag (`my-widget.js`) at the root of the [dom-patch output dir](#build-output). It exports:
 
-- `BackflipMyWidget` — the patch class. Constructed with the element, it reads the declared attributes and patches the rendered DOM. Always exported.
+- `BackflipMyWidget` — the patch class. Constructed with the element, it reads the declared attributes and patches the rendered DOM. Always exported. In `render` mode your component calls its `update()` when an attribute changes or the element is connected again; the DOM updates on the next microtask.
 - `BackflipMyWidgetElement` — the `HTMLElement` subclass driving it, for `base` and `full`.
 
 With `b-script` present and no `b-generate`, the mode is `base`. Nothing is generated when a partial has neither.
@@ -121,6 +123,7 @@ The build warns, against the definition tag, when:
 
 - Patching targets **server-rendered** DOM. An element created in JavaScript (`document.createElement('my-widget')`) has no content to patch, and is not supported.
 - No shadow root is attached: patching works against the light-DOM children the server rendered.
+- An expression that throws in the browser, such as a [lookup that misses](data-stores.md#lookups-that-miss), is logged and affects only that value.
 - `<script>` tags inside a reactive `b-if` branch do not run when the branch is rendered in the browser.
 - Inside a reactive area, a non-reactive nested `b-if` keeps the branch the server rendered; dynamic values in its other branches cannot be found, and each update logs a console error for them.
 - When the rendered DOM no longer matches the template (for example, other script removed a patched element), the affected patch is skipped with a console error.
@@ -145,7 +148,7 @@ Enable generation with a `dom-patch` [output entry](configuration.md) (or `--lan
 ```
 
 - Each module is written flat at the output root, named after its partial's tag, wherever the defining template sits. Its URL stays stable when the template moves, which is what a hand-written `import` depends on.
-- The browser runtime the modules import is copied into the output dir under `runtime/`, including `runtime/dom-patch/stores.js`, which store files import.
+- The browser runtime the modules import is copied into the output dir under `runtime/`, including `runtime/dom-patch/stores.js`, which store files import, and `runtime/dom-patch/flush.js`, which exports `flush()`.
 - A module imports the store files its patching reads, by their served URLs.
 - The dom-patch pass adds `data-bfid` attributes and marker comments to the server-rendered HTML of generating partials, so the browser can find what to patch. These markers come from the same build as the modules: always deploy the server output and the dom-patch output together.
 

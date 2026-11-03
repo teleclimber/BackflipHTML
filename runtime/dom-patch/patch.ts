@@ -3,6 +3,7 @@
 // its partial's patchable sites as data; this file does the patching.
 
 import { render, activeBranchIndex, execFn, type rfn, type IfRNode } from '../js/render.js';
+import { enqueue, FLUSH_EVENT, register } from './flush.js';
 
 /**
  * Replace everything between two marker comments among `parent`'s direct children
@@ -84,15 +85,13 @@ export interface PrintSiteDesc {
 export type SiteDesc = AttrSiteDesc | PrintSiteDesc;
 
 /**
- * A `b-if` set: re-rendered from `snapshot` between its markers when a condition var
- * changes the winning branch. `subtreeVars` are the vars used anywhere in its branch
- * content; a change to one is forwarded to the active branch.
+ * A `b-if` set: re-rendered from `snapshot` between its markers when its winning
+ * branch changes.
  */
 export interface SetDesc {
 	bfid: string | null;
 	markers: [string, string];
 	snapshot: IfRNode;
-	subtreeVars: string[];
 	/** Index-aligned with the snapshot's branches; null for a branch with nothing to patch. */
 	branches: (BranchDesc | null)[];
 	/**
@@ -112,13 +111,11 @@ export interface BranchDesc {
 
 type Data = Record<string, unknown>;
 
-/** What a site shows in the DOM: presence for a bool attr, null for an absent attr, else text. */
-type Shown = string | boolean | null;
+/** What a site shows in the DOM: presence for a bool attr, else text. */
+type Shown = string | boolean;
 
 interface SetState {
 	desc: SetDesc;
-	/** Vars in the set's branch conditions: a change can move the winning branch. */
-	condVars: Set<string>;
 	/** The winning branch index, or -1 when none matches. */
 	active: number;
 	/** Patch-branch per branch index, created when that branch is rendered. */
@@ -147,7 +144,6 @@ export class PatchBranch {
 			const elem = this.target(d.bfid);
 			return {
 				desc: d,
-				condVars: new Set(d.snapshot.branches.flatMap(b => b.condition?.vars ?? [])),
 				active: elem ? renderedBranchIndex(elem, d) : -1,
 				children: new Map(),
 			};
@@ -156,48 +152,55 @@ export class PatchBranch {
 	}
 
 	/**
-	 * Apply a change to var `name`, or, with no name, recompute everything. Sets run
-	 * first: a re-render replaces whole subtrees, so this branch's own sites are patched
-	 * against the DOM that results. For each set the var drives, a condition var
-	 * re-renders it; a subtree var is forwarded to the active branch; a var that is both
-	 * does one or the other, never both.
+	 * Evaluate everything this branch owns and write what differs. Sets run first: a
+	 * re-render replaces whole subtrees, so this branch's own sites are patched against
+	 * the DOM that results. A set that keeps its branch updates that branch instead.
 	 */
-	update(data: Data, name?: string): void {
-		const all = name === undefined;
+	update(data: Data): void {
 		for (const s of this.sets) {
-			if ((all || s.condVars.has(name)) && this.renderIf(s, data)) continue;
-			if (all || s.desc.subtreeVars.includes(name)) s.children.get(s.active)?.update(data, name);
+			if (!this.renderIf(s, data)) s.children.get(s.active)?.update(data);
 		}
-
-		// One element lookup per target, in site order.
-		const byTarget = new Map<string | null, number[]>();
 		this.desc.sites.forEach((site, i) => {
-			if (!all && !site.expr.vars.includes(name)) return;
-			const group = byTarget.get(site.bfid);
-			if (group) group.push(i);
-			else byTarget.set(site.bfid, [i]);
+			const next = this.shownValue(site, data);
+			if (next === this.shown[i]) return;
+			const elem = this.target(site.bfid);
+			if (elem) this.shown[i] = writeSite(elem, site, next, this.shown[i]);
 		});
-		for (const [bfid, indexes] of byTarget) {
-			const elem = this.target(bfid);
-			if (!elem) continue;
-			for (const i of indexes) this.shown[i] = patchSite(elem, this.desc.sites[i], data, this.shown[i]);
-		}
 	}
 
-	// Swap in the winning branch if it changed; returns whether it did. The fragment is
-	// parsed against the target element so the branch HTML gets its real parent context
-	// (a <tr> under a <tbody> survives).
+	// What the site should show for `data`. An expression that throws, such as a lookup
+	// of a removed entry, shows as empty and is evaluated again on the next update.
+	shownValue(site: SiteDesc, data: Data): Shown {
+		let value: unknown = '';
+		try {
+			value = execFn(site.expr, data);
+		} catch (e) {
+			console.error('BackflipHTML: expression failed; showing an empty value', e, this.refElem);
+		}
+		return 'attr' in site && site.bool ? Boolean(value) : String(value);
+	}
+
+	// Swap in the winning branch if it changed; returns whether it did. An expression
+	// that throws keeps the current branch. The fragment is parsed against the target
+	// element so the branch HTML gets its real parent context (a <tr> under a <tbody>
+	// survives).
 	renderIf(s: SetState, data: Data): boolean {
-		const idx = activeBranchIndex(s.desc.snapshot, data);
-		if (idx === s.active) return false;
+		let idx: number, html: string;
+		try {
+			idx = activeBranchIndex(s.desc.snapshot, data);
+			if (idx === s.active) return false;
+			html = render(s.desc.snapshot, data);
+		} catch (e) {
+			console.error('BackflipHTML: b-if expression failed; keeping the current branch', e, this.refElem);
+			return false;
+		}
 		const elem = this.target(s.desc.bfid);
 		if (!elem) return false;
 		s.children.delete(s.active);
 		s.active = idx;
 		const range = elem.ownerDocument.createRange();
 		range.selectNodeContents(elem);
-		const frag = range.createContextualFragment(render(s.desc.snapshot, data));
-		replaceBetween(elem, s.desc.markers[0], s.desc.markers[1], frag);
+		replaceBetween(elem, s.desc.markers[0], s.desc.markers[1], range.createContextualFragment(html));
 		this.createChild(s, idx, data);
 		return true;
 	}
@@ -219,29 +222,21 @@ export class PatchBranch {
 	}
 }
 
-// Write the site's value unless it already shows it, reading what it shows from the
-// DOM when `shown` is undefined. Returns what the site shows afterwards.
-function patchSite(elem: Element, site: SiteDesc, data: Data, shown: Shown | undefined): Shown | undefined {
-	const value = execFn(site.expr, data);
+// Write `next` unless the DOM already shows it, reading what it shows when `shown` is
+// undefined. Returns what the site shows afterwards.
+function writeSite(elem: Element, site: SiteDesc, next: Shown, shown: Shown | undefined): Shown | undefined {
 	if ('attr' in site) {
-		if (site.bool) {
-			const on = Boolean(value);
-			if (on === (shown === undefined ? elem.hasAttribute(site.attr) : shown)) return on;
-			if (on) elem.setAttribute(site.attr, '');
-			else elem.removeAttribute(site.attr);
-			return on;
-		}
-		const text = String(value);
-		if (text !== (shown === undefined ? elem.getAttribute(site.attr) : shown)) elem.setAttribute(site.attr, text);
-		return text;
+		const current = shown ?? (site.bool ? elem.hasAttribute(site.attr) : elem.getAttribute(site.attr));
+		if (next === current) return next;
+		if (next === false) elem.removeAttribute(site.attr);
+		else elem.setAttribute(site.attr, next === true ? '' : next);
+		return next;
 	}
-	const text = String(value);
-	if (text === shown) return shown;
 	const range = findMarkers(elem, site.markers[0], site.markers[1]);
 	if (!range) return shown;
 	// A text node, never markup: siblings are preserved and the value is not parsed.
-	if (shown !== undefined || textBetween(range) !== text) replaceRange(range, elem.ownerDocument.createTextNode(text));
-	return text;
+	if (shown !== undefined || textBetween(range) !== next) replaceRange(range, elem.ownerDocument.createTextNode(String(next)));
+	return next;
 }
 
 // --- the shell --------------------------------------------------------------
@@ -249,22 +244,32 @@ function patchSite(elem: Element, site: SiteDesc, data: Data, shown: Shown | und
 /**
  * Base class of every generated shell (`BackflipMyWidget`). The subclass declares the
  * partial's attributes, the stores it reads and its root branch; the shell reads the
- * attributes off the element, puts them next to the stores, and hands every change to
- * the root patch-branch.
+ * attributes off the element, puts them next to the stores, and updates the root
+ * patch-branch when a flush reaches it and any of them differ from what it last rendered.
  */
 export class BackflipShell {
 	/** Each declared `b-attr`, and whether it is read as a string or a boolean. */
 	static bfAttrs: Record<string, 'string' | 'bool'> = {};
 	/** Each store the partial's patching reads, by name: the store file's default export. */
-	static bfStores: Record<string, unknown> = {};
+	static bfStores: Record<string, { data: unknown }> = {};
 	static bfRoot: BranchDesc = { sites: [], sets: [] };
 
 	ce: Element;
 	pb: PatchBranch;
+	/** The value last rendered for each attribute, and the `data` for each store. */
+	rendered: Data;
 
+	/** Patches the DOM right away, from the current attributes and store data. */
 	constructor(ce: Element) {
 		this.ce = ce;
-		this.pb = new PatchBranch((this.constructor as typeof BackflipShell).bfRoot, ce, this.collectData());
+		const shell = this.constructor as typeof BackflipShell;
+		const data = this.collectData();
+		this.pb = new PatchBranch(shell.bfRoot, ce, data);
+		this.rendered = this.readInputs();
+		// Capture, so ancestors sync before the element the event was dispatched on.
+		ce.addEventListener(FLUSH_EVENT, () => this.sync(), { capture: true });
+		for (const store of Object.values(shell.bfStores)) register(store, ce);
+		this.pb.update(data);
 	}
 
 	collectData(): Data {
@@ -276,9 +281,28 @@ export class BackflipShell {
 		return data;
 	}
 
-	/** Apply a change to attribute `name`, or, with no name, recompute everything. */
-	update(name?: string): void {
-		this.pb.update(this.collectData(), name);
+	// The data with each store replaced by its current `data`, whose identity changes
+	// when the store does.
+	readInputs(): Data {
+		const inputs = this.collectData();
+		const { bfStores } = this.constructor as typeof BackflipShell;
+		for (const [name, store] of Object.entries(bfStores)) inputs[name] = store.data;
+		return inputs;
+	}
+
+	/** Have the next flush bring the DOM up to date. */
+	update(): void {
+		enqueue(this.ce);
+	}
+
+	sync(): void {
+		// An ancestor's patch can remove the element after its event was dispatched. The
+		// recorded values stay, so it catches up if it is connected again.
+		if (!this.ce.isConnected) return;
+		const inputs = this.readInputs();
+		const changed = Object.keys(inputs).some(name => inputs[name] !== this.rendered[name]);
+		this.rendered = inputs;
+		if (changed) this.pb.update(this.collectData());
 	}
 }
 
@@ -290,7 +314,7 @@ const ElementBase = (globalThis.HTMLElement ?? class {}) as typeof HTMLElement;
 /**
  * Base class of every generated custom element class. The generated subclass sets
  * `bfShell`; this class observes the shell's declared attributes, runs the lifecycle
- * and forwards attribute changes to the shell.
+ * and tells the shell about attribute changes and reconnects.
  *
  * Nothing runs in the constructor: a custom element constructor may not inspect its
  * attributes or children, which is exactly what the shell does. Everything on the
@@ -308,17 +332,22 @@ export class BackflipElement extends ElementBase {
 	bfPatch?: BackflipShell;
 
 	connectedCallback(): void {
-		this.bfInit();
+		// An element connected again syncs with whatever changed while it was out.
+		if (this.bfPatch) this.bfPatch.update();
+		else this.bfInit();
 	}
 
 	attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
 		// setAttribute with an unchanged value still fires this. Before init there is
-		// nothing to patch: init compares everything against the DOM.
+		// nothing to patch: init compares everything against the DOM. A subclass may
+		// observe attributes the partial does not read.
 		if (oldValue === newValue || !this.bfPatch) return;
-		this.bfPatch.update(name);
+		const { bfShell } = this.constructor as typeof BackflipElement;
+		if (bfShell && Object.hasOwn(bfShell.bfAttrs, name)) this.bfPatch.update();
 	}
 
-	// Idempotent, since connectedCallback fires again whenever the element is moved.
+	// Idempotent, since an element connected mid-parse waits for the document and may
+	// be moved before it finishes.
 	bfInit(): void {
 		if (this.bfPatch) return;
 		if (this.ownerDocument.readyState === 'loading') {
@@ -328,9 +357,8 @@ export class BackflipElement extends ElementBase {
 		}
 		this.bfCheckObserved();
 		const cls = this.constructor as typeof BackflipElement;
-		this.bfPatch = new cls.bfShell!(this);
 		// Whatever changed since the server render, reported or not, is fixed here.
-		this.bfPatch.update();
+		this.bfPatch = new cls.bfShell!(this);
 	}
 
 	// observedAttributes is read once, at define() time, off the registered class, so

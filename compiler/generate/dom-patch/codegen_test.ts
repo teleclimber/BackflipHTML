@@ -257,7 +257,7 @@ Deno.test("sets: a set names its anchor, markers, snapshot const, subtree vars a
 	const d = bfRoot.sets[0];
 	assertEquals(d.snapshot, defined.bfif_bf0);
 	assertEquals({ ...d, snapshot: undefined }, {
-		bfid: 'bf9', markers: ['bfid:bf0', 'bfid:bf1'], snapshot: undefined, subtreeVars: ['name'],
+		bfid: 'bf9', markers: ['bfid:bf0', 'bfid:bf1'], snapshot: undefined,
 		branchMarkers: ['bfid:bf0:0', 'bfid:bf0:1'], branches: [null, null],
 	});
 });

@@ -113,6 +113,14 @@ Deno.test("readStoreFile: a method overriding a BackflipStore member", () => {
 	}
 });
 
+Deno.test("readStoreFile: a method overriding set or setAt", () => {
+	for (const name of ['set', 'setAt']) {
+		const { errors } = read(IMPORT + `class Widgets extends BackflipStore {\n\t${name}() {}\n}\nexport default new Widgets('widgets');\n`);
+		assertEquals(errors.length, 1);
+		assertStringIncludes(errors[0].message, `Widgets.${name} overrides a BackflipStore member`);
+	}
+});
+
 Deno.test("readStoreFile: static and other members are not overrides", () => {
 	const { errors } = read(IMPORT + `class Widgets extends BackflipStore {\n\tstatic data = 1;\n\tdatum() {}\n}\nexport default new Widgets('widgets');\n`);
 	assertEquals(errors, []);

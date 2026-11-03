@@ -17,7 +17,7 @@ export interface StoreDecl {
 export type StoreTable = Map<string, StoreDecl>;
 
 /** Members of `BackflipStore` that a store file may not redeclare. */
-export const STORE_BASE_MEMBERS = new Set(['data']);
+export const STORE_BASE_MEMBERS = new Set(['data', 'set', 'setAt']);
 
 const BASE_CLASS = 'BackflipStore';
 

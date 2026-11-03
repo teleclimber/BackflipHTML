@@ -18,6 +18,9 @@ import { linkAsScript } from "./link-as-script.ts";
 const TMPDIR = "/tmp/claude-1000/stores-generate";
 const CLI_PATH = new URL("../cli.ts", import.meta.url).pathname;
 
+// Let the microtask that patches the DOM after a change run.
+const settled = () => new Promise(resolve => setTimeout(resolve));
+
 const APP_HTML = `<my-widget b-store:widgets b-attr:widget_id b-generate="full">
 	<h3>{{ widgets.data[widget_id] ? widgets.data[widget_id].name : '' }}</h3>
 	<em b-if="widgets.data.sale">Sale</em>
@@ -32,6 +35,11 @@ const STORE_JS = `import { BackflipStore } from '/static/bfdom/runtime/dom-patch
 
 class Widgets extends BackflipStore {
 	count() { return Object.keys(this.data).length; }
+	rename(id, name) { this.setAt([id, 'name'], name); }
+	remove(id) {
+		const { [id]: _gone, ...rest } = this.data;
+		this.set(rest);
+	}
 }
 
 export default new Widgets('widgets');
@@ -65,6 +73,7 @@ Deno.test("integration: a generated partial reads its store in the browser", asy
 	try {
 		// The build copies the store runtime beside the other runtime files.
 		await fs.stat(path.join(workDir, "static/bfdom/runtime/dom-patch/stores.js"));
+		await fs.stat(path.join(workDir, "static/bfdom/runtime/dom-patch/flush.js"));
 		const moduleJs = await fs.readFile(path.join(workDir, "static/bfdom/my-widget.js"), "utf-8");
 		assertStringIncludes(moduleJs, `import bfstore_widgets from "/static/stores/widgets.js";`);
 
@@ -88,9 +97,30 @@ Deno.test("integration: a generated partial reads its store in the browser", asy
 
 		// A mixed expression re-patches from the store when its attribute changes.
 		el.setAttribute("widget_id", "7");
+		await settled();
 		assertEquals(content(), "<h3>Widget</h3> <em>Sale</em>");
 		el.setAttribute("widget_id", "99");
+		await settled();
 		assertEquals(content(), "<h3></h3> <em>Sale</em>");
+
+		// A store method patches every partial reading the store, on the next microtask.
+		el.setAttribute("widget_id", "7");
+		await settled();
+		const store = (el as unknown as { bfPatch: { constructor: { bfStores: { widgets: { rename(id: string, name: string): void, remove(id: string): void, setAt(path: string[], value: unknown): void } } } } }).bfPatch.constructor.bfStores.widgets;
+		store.rename("7", "Renamed");
+		assertEquals(content(), "<h3>Widget</h3> <em>Sale</em>");
+		await settled();
+		assertEquals(content(), "<h3>Renamed</h3> <em>Sale</em>");
+
+		// A store-driven b-if swaps branches.
+		store.setAt(["sale"], false);
+		await settled();
+		assertEquals(content().includes("Sale"), false);
+
+		// Removing what the partial looks up goes through its guard.
+		store.remove("7");
+		await settled();
+		assertEquals(content().startsWith("<h3></h3>"), true);
 	} finally {
 		await fs.rm(workDir, { recursive: true, force: true });
 	}

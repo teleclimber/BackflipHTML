@@ -40,7 +40,7 @@ export interface IfSetPatchSite {
 	setId: string;
 	endId: string;
 	snapshot: string;
-	/** Live vars anywhere in the set's branch *content* (nested conditions included). */
+	/** Vars anywhere in the set's branch *content*, for the declared-var check and store shipping. Not emitted. */
 	subtreeVars: string[];
 	/** Index-aligned with the branches; `null` for a branch with no patchable content. */
 	branches: (PatchBranch | null)[];
@@ -50,7 +50,7 @@ export interface IfSetPatchSite {
 export interface PatchBranch {
 	sites: BfidSite[];
 	sets: IfSetPatchSite[];
-	/** Live vars a change to which reaches this branch: its sites', and its sets' condition and subtree vars. */
+	/** Vars this branch reads: its sites', and its sets' condition and subtree vars. Not emitted. */
 	vars: string[];
 }
 
@@ -107,7 +107,7 @@ export function generateClassForPartial(
  * A runtime file, as its path relative to the package's `dist/`. The dom-patch output
  * dir holds each at the same relative path, so the imports between them resolve.
  */
-export type RuntimeFile = 'runtime/js/render.js' | 'runtime/dom-patch/patch.js' | 'runtime/dom-patch/stores.js';
+export type RuntimeFile = 'runtime/js/render.js' | 'runtime/dom-patch/patch.js' | 'runtime/dom-patch/flush.js' | 'runtime/dom-patch/stores.js';
 
 /** The runtime names a module uses, keyed by the file that exports them. */
 export type RuntimeImports = Map<RuntimeFile, string[]>;
@@ -199,7 +199,7 @@ function genSetDesc(s: IfSetPatchSite, depth: number): string {
 	const branchMarkers = s.branches.map((_, i) => `'${branchMarker(s.setId, i)}'`).join(', ');
 	return [
 		`{ bfid: ${bfidLiteral(s.target)}, markers: ${markersLiteral(s.setId, s.endId)},`,
-		`${ind}snapshot: ${ifConstName(s.setId)}, subtreeVars: [${s.subtreeVars.map(v => `'${v}'`).join(', ')}],`,
+		`${ind}snapshot: ${ifConstName(s.setId)},`,
 		`${ind}branchMarkers: [${branchMarkers}],`,
 		`${ind}branches: ${genList(branches, depth + 1)} }`,
 	].join('\n');

@@ -2,7 +2,7 @@
 
 A store is a named piece of JSON data — nested objects, collections — that your server code hands to the page renderer. A partial that declares the store reads its data. Stores are how structured data reaches a [client-side patching](dom-patch.md) partial, which otherwise takes only string and boolean `b-attr`s.
 
-In this version store data never changes during the life of a page.
+Browser code can [change a store](#changing-a-store), and the patching partials that read it update.
 
 ```html
 <my-widget b-store:widgets b-attr:widget_id b-generate="full">
@@ -29,13 +29,14 @@ export default new BackflipStore('widgets');
 
 - The store's **name** is the constructor's string argument, not the file name. It must be a valid identifier (no hyphens), since templates use it as a variable, and should be lowercase, since HTML lowercases `b-store:NAME`.
 - The compiler reads the file without running it. The default export must be `new BackflipStore('name')`, or `new C('name')` where `C` is a class declared in the file that extends `BackflipStore`.
-- The browser loads the file as written. It imports `stores.js` from the [runtime the build copies](dom-patch.md#build-output) into the dom-patch output directory; a relative import works both in the build and in the [preview](preview.md).
+- The browser loads the file as written. It imports `stores.js` from the [runtime the build copies](dom-patch.md#build-output) into the dom-patch output directory; a relative import works both in the build and in the [preview](preview.md). All of a page's code must load the runtime from that one URL, since a second copy would keep its own record of what changed.
 
-A subclass adds methods for your own browser code. They cannot be called from templates, and may not redeclare `data`:
+A subclass adds methods for your own browser code. They cannot be called from templates, and may not redeclare `data`, `set` or `setAt`:
 
 ```js
 class Widgets extends BackflipStore {
     ownedBy(owner) { return Object.values(this.data).filter((w) => w.owner === owner); }
+    rename(id, name) { this.setAt([id, 'name'], name); }
 }
 
 export default new Widgets('widgets');
@@ -102,17 +103,44 @@ import widgets from '/static/scripts/stores/widgets.js';
 widgets.data['42'].name;
 ```
 
-- `data` is parsed from the store's tag on first access, and every read returns the same object. It is deeply frozen: a write throws.
+- `data` is parsed from the store's tag on first access, and every read returns the same object until the store changes. It is deeply frozen: a write throws.
 - On a page that did not ship the store, `data` is `undefined`.
 - Read `data` from module code: module scripts run once the document is parsed, and the store tags come before the scripts.
 
-In a patching partial, a store is a variable like a `b-attr`. A value that uses both updates when its attribute changes, reading the store's data: `{{ widgets.data[widget_id].name }}` updates when `widget_id` does. A store can drive a [reactive `b-if`](dom-patch.md#reactive-b-if).
+In a patching partial, a store is a variable like a `b-attr`: `{{ widgets.data[widget_id].name }}` updates when `widget_id` or the store changes. A store can drive a [reactive `b-if`](dom-patch.md#reactive-b-if).
+
+---
+
+## Changing a store
+
+Store methods and your own code change a store with `set` and `setAt`:
+
+```js
+widgets.rename('42', 'Sprocket');                 // a method calling setAt
+widgets.set(await response.json());               // apply a server response
+```
+
+- `store.set(data)` replaces the data. The value must be JSON-like (strings, finite numbers, booleans, `null`, arrays and plain objects, with no cycles; a property holding `undefined` is not allowed), and it is deeply frozen. Anything else throws. Setting the current `data` does nothing.
+- `store.setAt(path, value)` sets the value at `path`, an array of keys, copying each object or array along it. The last key may be new. A missing earlier key throws, as does an array index that is not a non-negative integer.
+
+`data` is the new value right away; the DOM follows on the next microtask, after any other changes made in the meantime, so a partial never shows a mix of old and new. Call `flush()` when code must read the DOM right after a change:
+
+```js
+import { flush } from '/bfdom/runtime/dom-patch/flush.js';
+
+widgets.rename('42', 'Sprocket');
+flush();
+```
+
+`set` and `setAt` throw on a page that did not ship the store, which includes a store read only in parts of a partial that are not patched. They also throw during a flush, including from code a patch runs, such as an `attributeChangedCallback`; make the change from a microtask instead.
+
+A change updates only what [client-side patching](dom-patch.md#what-updates-in-the-browser) patches. Everything else keeps showing the store as it was rendered: `b-name` partials, `b-for` content, non-reactive `b-if` sets, slot content and `b-part` call contents. The compiler does not warn about these.
 
 ---
 
 ## Lookups that miss
 
-A lookup that finds nothing throws, as any expression error does: on the server it fails the render, in the browser it stops that update. The expression language has no `?.` or `&&`, so guard a lookup with a ternary:
+A lookup that finds nothing throws, as any expression error does. On the server it fails the render. In the browser it is logged with `console.error` and affects only that value: a printed value or attribute goes empty and a boolean attribute is removed, a `b-if` keeps its current branch, and each is evaluated again on the partial's next update. The expression language has no `?.` or `&&`, so guard a lookup with a ternary:
 
 ```html
 <h3>{{ widgets.data[widget_id] ? widgets.data[widget_id].name : '' }}</h3>
@@ -126,7 +154,7 @@ Since templates cannot call store methods, shape the data on the server so it ca
 
 Compile errors:
 
-- a store file whose default export is not `new BackflipStore('name')` or `new C('name')` (with `C` a class in the file extending `BackflipStore`), or a store class redeclaring `data`;
+- a store file whose default export is not `new BackflipStore('name')` or `new C('name')` (with `C` a class in the file extending `BackflipStore`), or a store class redeclaring `data`, `set` or `setAt`;
 - a store name that is not a valid identifier (uppercase letters are a warning), or two store files declaring the same name;
 - `b-store` anywhere but a partial definition tag, with a value, or naming no declared store;
 - `b-store:NAME` next to `b-attr:NAME` on one tag, or `b-data:NAME` at a call to a partial that declares `b-store:NAME`;

@@ -20,7 +20,7 @@ export type { RuntimeFile } from './codegen.js';
  * imports render.js, and store files import stores.js. A build copies each from the
  * package's `dist/` into the dom-patch output dir at the same relative path.
  */
-export const RUNTIME_FILES: RuntimeFile[] = ['runtime/js/render.js', 'runtime/dom-patch/patch.js', 'runtime/dom-patch/stores.js'];
+export const RUNTIME_FILES: RuntimeFile[] = ['runtime/js/render.js', 'runtime/dom-patch/patch.js', 'runtime/dom-patch/flush.js', 'runtime/dom-patch/stores.js'];
 
 /** The file a partial's module is written to, relative to the dom-patch output root. */
 export function moduleFileName(tagName: string): string {
