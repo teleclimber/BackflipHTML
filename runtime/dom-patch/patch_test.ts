@@ -556,6 +556,121 @@ Deno.test("PatchBranch: a swapped-in branch reads its rendered DOM, so an unchan
 	assertEquals(mutations(el, () => pb.update({ mode: 'a', name: 'World' })), []);
 });
 
+// --- another instance of the same partial inside this one ---------------------
+//
+// Instances share their data-bfids, and slot content can hold another instance
+// ahead of this one's own elements.
+
+Deno.test("PatchBranch: an attr site skips the same element in a nested instance", () => {
+	const { el } = host(`<my-el><p data-bfid="p" title="inner"></p></my-el><p id="own" data-bfid="p" title="outer"></p>`);
+	new PatchBranch({ sites: [{ bfid: 'p', attr: 'title', expr: expr('v', ['v']) }], sets: [] }, el, {}).update({ v: 'new' });
+	assertEquals(el.querySelector('my-el p')!.getAttribute('title'), 'inner');
+	assertEquals(el.querySelector('#own')!.getAttribute('title'), 'new');
+});
+
+Deno.test("PatchBranch: a print site skips the same element in a nested instance", () => {
+	const inner = `<my-el><p data-bfid="p"><!--m0-->inner<!--m1--></p></my-el>`;
+	const { el } = host(`${inner}<p id="own" data-bfid="p"><!--m0-->outer<!--m1--></p>`);
+	const { errors } = captureErrors(() =>
+		new PatchBranch({ sites: [{ bfid: 'p', markers: ['m0', 'm1'], expr: expr('v', ['v']) }], sets: [] }, el, {}).update({ v: 'new' }));
+	assertEquals(errors, []);
+	assertEquals(el.querySelector('my-el')!.outerHTML, inner);
+	assertEquals(el.querySelector('#own')!.textContent, 'new');
+});
+
+Deno.test("PatchBranch: a set anchored on a descendant skips the same element in a nested instance", () => {
+	const inner = `<my-el><section data-bfid="s">${SERVER_ELSE}</section></my-el>`;
+	const { el } = host(`${inner}<section id="own" data-bfid="s">${SERVER_ELSE}</section>`);
+	const pb = new PatchBranch({ sites: [], sets: [{ ...SET, bfid: 's' }] }, el, { mode: 'b', name: 'World' });
+	pb.update({ mode: 'a', name: 'Mars' });
+	assertEquals(el.querySelector('my-el')!.outerHTML, inner);
+	assertEquals(el.querySelector('#own p')!.textContent, 'Hi Mars');
+});
+
+Deno.test("PatchBranch: a branch whose ref element holds a nested instance patches its own content", () => {
+	const inner = `<my-el><p data-bfid="p">inner</p></my-el>`;
+	const { el } = host(`<section data-bfid="s">${inner}${SERVER_A}</section>`);
+	const pb = new PatchBranch({ sites: [], sets: [{ ...SET, bfid: 's' }] }, el, { mode: 'a', name: 'World' });
+	const { errors } = captureErrors(() => pb.update({ mode: 'a', name: 'Mars' }));
+	assertEquals(errors, []);
+	assertEquals(el.querySelector('section my-el')!.outerHTML, inner);
+	assertEquals(el.querySelector('section > p')!.textContent, 'Hi Mars');
+});
+
+Deno.test("PatchBranch: a site found only in a nested instance is reported, and writes nothing", () => {
+	const { el } = host(`<my-el><p data-bfid="p" title="inner"></p></my-el>`);
+	const pb = new PatchBranch({ sites: [{ bfid: 'p', attr: 'title', expr: expr('v', ['v']) }], sets: [] }, el, {});
+	const { errors, result: records } = captureErrors(() => mutations(el, () => pb.update({ v: 'new' })));
+	assertEquals(records, []);
+	assertEquals(errors.length, 1);
+});
+
+Deno.test("PatchBranch: a site on a call to the partial's own tag patches that call, not the one inside it", () => {
+	const { el } = host(`<my-el id="own" data-bfid="c" title="a"><my-el id="deep" data-bfid="c" title="b"></my-el></my-el>`);
+	new PatchBranch({ sites: [{ bfid: 'c', attr: 'title', expr: expr('v', ['v']) }], sets: [] }, el, {}).update({ v: 'new' });
+	assertEquals(el.querySelector('#own')!.getAttribute('title'), 'new');
+	assertEquals(el.querySelector('#deep')!.getAttribute('title'), 'b');
+});
+
+// --- the same data-bfid twice within one instance -----------------------------
+
+Deno.test("PatchBranch: an attr site on an element found twice is reported, and neither is patched", () => {
+	const { el } = host(`<p data-bfid="p" title="x"></p><p data-bfid="p" title="x"></p>`);
+	const pb = new PatchBranch({ sites: [{ bfid: 'p', attr: 'title', expr: expr('v', ['v']) }], sets: [] }, el, {});
+	const { errors, result: records } = captureErrors(() => mutations(el, () => pb.update({ v: 'new' })));
+	assertEquals(records, []);
+	assertEquals(errors.length, 1);
+	assertEquals(String(errors[0][0]).includes('[data-bfid="p"]'), true);
+});
+
+Deno.test("PatchBranch: a print site on an element found twice is reported, and neither is patched", () => {
+	const { el } = host(`<p data-bfid="p"><!--m0-->x<!--m1--></p><p data-bfid="p"><!--m0-->x<!--m1--></p>`);
+	const pb = new PatchBranch({ sites: [{ bfid: 'p', markers: ['m0', 'm1'], expr: expr('v', ['v']) }], sets: [] }, el, {});
+	const { errors, result: records } = captureErrors(() => mutations(el, () => pb.update({ v: 'new' })));
+	assertEquals(records, []);
+	assertEquals(errors.length, 1);
+});
+
+Deno.test("PatchBranch: a set anchored on an element found twice is reported, and does not swap", () => {
+	const { el } = host(`<section data-bfid="s">${SERVER_A}</section><section data-bfid="s">${SERVER_A}</section>`);
+	const { errors, result: pb } = captureErrors(() =>
+		new PatchBranch({ sites: [], sets: [{ ...SET, bfid: 's' }] }, el, { mode: 'a', name: 'World' }));
+	assertEquals(errors.length > 0, true);
+	assertEquals(String(errors[0][0]).includes('[data-bfid="s"]'), true);
+	const swap = captureErrors(() => mutations(el, () => pb.update({ mode: 'b', name: 'World' })));
+	assertEquals(swap.result, []);
+	assertEquals(swap.errors.length > 0, true);
+});
+
+Deno.test("PatchBranch: a duplicate is reported on each update until it is gone, then patching resumes", () => {
+	const { el } = host(`<p data-bfid="p" title="x"></p><p id="copy" data-bfid="p" title="x"></p>`);
+	const pb = new PatchBranch({ sites: [{ bfid: 'p', attr: 'title', expr: expr('v', ['v']) }], sets: [] }, el, {});
+	assertEquals(captureErrors(() => pb.update({ v: 'x' })).errors.length, 1);
+	assertEquals(captureErrors(() => pb.update({ v: 'x' })).errors.length, 1);
+	el.querySelector('#copy')!.remove();
+	assertEquals(captureErrors(() => pb.update({ v: 'new' })).errors, []);
+	assertEquals(el.querySelector('p')!.getAttribute('title'), 'new');
+});
+
+Deno.test("PatchBranch: the same data-bfid in a nested instance is not reported as a duplicate", () => {
+	const { el } = host(`<my-el><p data-bfid="p"></p></my-el><p id="own" data-bfid="p"></p>`);
+	const pb = new PatchBranch({ sites: [{ bfid: 'p', attr: 'title', expr: expr('v', ['v']) }], sets: [] }, el, {});
+	const { errors } = captureErrors(() => pb.update({ v: 'new' }));
+	assertEquals(errors, []);
+	assertEquals(el.querySelector('#own')!.getAttribute('title'), 'new');
+});
+
+Deno.test("PatchBranch: a copy made after a site is patched goes unreported until its value changes", () => {
+	const { el } = host(`<p id="own" data-bfid="p" title="x"></p>`);
+	const pb = new PatchBranch({ sites: [{ bfid: 'p', attr: 'title', expr: expr('v', ['v']) }], sets: [] }, el, {});
+	pb.update({ v: 'x' });
+	const own = el.querySelector('#own')!;
+	own.after(own.cloneNode(true));
+	assertEquals(captureErrors(() => pb.update({ v: 'x' })).errors, []);
+	assertEquals(captureErrors(() => pb.update({ v: 'new' })).errors.length, 1);
+	assertEquals(own.getAttribute('title'), 'x');
+});
+
 // --- BackflipShell -----------------------------------------------------------
 
 Deno.test("BackflipShell: reads each declared attr as a string or a boolean", () => {

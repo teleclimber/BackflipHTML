@@ -102,7 +102,7 @@ export class BackflipMyElement extends BackflipShell {
 
 The descriptors (the runtime's `BranchDesc`, `SetDesc` and `SiteDesc`):
 
-- **`bfid`** locates the element a site or set is anchored to: a descendant of the patch-branch's ref element with that `data-bfid`, or the ref element itself when `null`.
+- **`bfid`** locates the element a site or set is anchored to: a descendant of the patch-branch's ref element with that `data-bfid`, or the ref element itself when `null`. Instances of a partial share their bfids, so a match inside a nested instance of the same tag (one in slot content) is skipped.
 - **An attr site** (`attr`, caller attr, definition-root attr) names the attribute as written, and `bool: true` for a boolean one. Its expression's value is set with `setAttribute(name, String(value))`, or the attribute is removed for `null`, `undefined` and `false`; a boolean one is present (`''`) or removed. Both match the server-rendered HTML, and the omit rule is the renderer's `attrIsRendered`.
 - **A print site** names its marker comments. The range between them is replaced with a text node (never markup), so siblings are preserved and the value is never parsed.
 - **A set** names its markers, its module-level snapshot, each branch's marker (`branchMarkers`), and one descriptor per branch — `null` for a branch with nothing to patch.
@@ -119,7 +119,7 @@ A **patch-branch** owns patching for a DOM subtree that is either wholly present
 - **Writes only on change.** Each site remembers the value it shows, in DOM form: an attribute's text or presence, or a print's text. It is read from the DOM the first time the site is patched, so the server render (or, for a swapped-in branch, the client render) is the starting point rather than the data. A recomputed value equal to it writes nothing and does not look up the element; a set likewise re-renders only when its winning branch changes. Where the server and the JS runtime turn a value into different text (PHP prints a boolean `true` as `1`), the site is rewritten once, at init.
 - **Snapshots.** Every set — nested included — gets its own module-level `bfif_<setId>` snapshot, which a swap renders. A snapshot refers to each qualifying set nested in it by that set's `bfif_` name rather than repeating its content (the `ifRef` option of `nodeToJS`), so the consts are emitted innermost-first. A var-free nested `b-if` has no const and stays inline. Snapshots are taken only after pass 1 has spliced every marker at every depth, so a re-rendered parent branch still carries the anchors its nested patch-branches need.
 
-A missing anchor or marker pair means the rendered DOM diverged from the compiled template; it is reported with `console.error` and that patch is skipped.
+A missing anchor or marker pair means the rendered DOM diverged from the compiled template; it is reported with `console.error` and that patch is skipped. So is an anchor found twice within one instance (a script's clone, or a copy made by the HTML parser): patching one copy would hide the problem. A site whose lookup failed is retried on every update. One already patched is looked up only when its value changes, so a duplicate made later goes unreported until then.
 
 ## The custom element class
 

@@ -63,6 +63,31 @@ const OMITTED_STRING_ATTR_HTML = `<str-kid b-attr:a b-generate="full"><b>[{{ a }
 	<body><str-kid :a="v"></str-kid></body>
 </b-unwrap>`;
 
+// The slot comes first, so the nested panel's elements precede the outer panel's own:
+// a slot beside a reactive set, a set after the slot, a print, an attr and a call attr.
+const NESTED_IN_SLOT_HTML = `<plain-kid></plain-kid>
+
+<x-panel b-attr:t b-attr:open.bool b-generate="full">
+	<header><b-unwrap b-slot /><p b-if="open"><b :title="t">{{ t }}</b></p><p b-else>closed</p></header>
+	<section><i b-if="open">A</i><i b-else>B</i></section>
+	<span :title="t">{{ t }}</span>
+	<plain-kid :data-t="t"></plain-kid>
+</x-panel>
+
+<b-unwrap b-name="page" b-export>
+	<body><x-panel id="outer" t="o" open><div><x-panel id="inner" t="i" open>x</x-panel></div></x-panel></body>
+</b-unwrap>`;
+
+// The tags match, but a <div> closes the <p>, and the parser reopens the <b> inside it
+// as a copy that keeps its attributes.
+const PARSER_COPY_HTML = `<x-copy b-attr:t b-generate="full">
+	<p><b :title="t">a<div>b</div></b></p>
+</x-copy>
+
+<b-unwrap b-name="page" b-export>
+	<body><x-copy t="a"></x-copy></body>
+</b-unwrap>`;
+
 async function buildProject(appHtml = APP_HTML): Promise<string> {
 	const workDir = path.join(TMPDIR, `p_${Date.now()}_${Math.random().toString(36).slice(2)}`);
 	await fs.mkdir(path.join(workDir, "templates"), { recursive: true });
@@ -156,6 +181,68 @@ Deno.test("integration: a string b-attr whose attribute is omitted shows the sam
 			assertEquals(el.querySelector("b")!.textContent, "[x]");
 		}
 	} finally {
+		await fs.rm(workDir, { recursive: true, force: true });
+	}
+});
+
+Deno.test("integration: instances of a partial nested through a slot patch only themselves", async () => {
+	const workDir = await buildProject(NESTED_IN_SLOT_HTML);
+	try {
+		const mod = await import(path.join(workDir, "dist", "app.js"));
+		const doc = await browserFor(workDir, renderRoot(mod.page as RootRNode, {}), "x-panel");
+		const outer = doc.querySelector("#outer")!;
+		const inner = doc.querySelector("#inner")!;
+		const own = (panel: Element) => ({
+			branch: panel.querySelector(":scope > header > p")!.textContent,
+			set: panel.querySelector(":scope > section > i")!.textContent,
+			print: panel.querySelector(":scope > span")!.textContent,
+			attr: panel.querySelector(":scope > span")!.getAttribute("title"),
+			call: panel.querySelector(":scope > plain-kid")!.getAttribute("data-t"),
+		});
+		await settled();
+		assertEquals(own(outer), { branch: "o", set: "A", print: "o", attr: "o", call: "o" });
+		assertEquals(own(inner), { branch: "i", set: "A", print: "i", attr: "i", call: "i" });
+
+		outer.setAttribute("t", "o2");
+		await settled();
+		assertEquals(own(outer), { branch: "o2", set: "A", print: "o2", attr: "o2", call: "o2" });
+		assertEquals(own(inner), { branch: "i", set: "A", print: "i", attr: "i", call: "i" });
+
+		outer.removeAttribute("open");
+		await settled();
+		assertEquals(own(outer), { branch: "closed", set: "B", print: "o2", attr: "o2", call: "o2" });
+		assertEquals(own(inner), { branch: "i", set: "A", print: "i", attr: "i", call: "i" });
+
+		inner.setAttribute("t", "i2");
+		await settled();
+		assertEquals(own(inner), { branch: "i2", set: "A", print: "i2", attr: "i2", call: "i2" });
+		assertEquals(own(outer), { branch: "closed", set: "B", print: "o2", attr: "o2", call: "o2" });
+	} finally {
+		await fs.rm(workDir, { recursive: true, force: true });
+	}
+});
+
+Deno.test("integration: an element the HTML parser duplicates is reported when patched", async () => {
+	const workDir = await buildProject(PARSER_COPY_HTML);
+	const errors: unknown[][] = [];
+	const orig = console.error;
+	console.error = (...args: unknown[]) => { errors.push(args); };
+	try {
+		const mod = await import(path.join(workDir, "dist", "app.js"));
+		const doc = await browserFor(workDir, renderRoot(mod.page as RootRNode, {}), "x-copy");
+		const el = doc.querySelector("x-copy")!;
+		await settled();
+		// Reported at startup, when each site first looks up its element.
+		assertEquals(errors.length, 1);
+		assertStringIncludes(String(errors[0][0]), "data-bfid");
+
+		el.setAttribute("t", "b");
+		await settled();
+		assertEquals(errors.length, 2);
+		// Neither copy is patched: updating one would hide that something is wrong.
+		assertEquals([...el.querySelectorAll("b")].map(b => b.getAttribute("title")), ["a", "a"]);
+	} finally {
+		console.error = orig;
 		await fs.rm(workDir, { recursive: true, force: true });
 	}
 });

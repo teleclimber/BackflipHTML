@@ -132,13 +132,16 @@ interface SetState {
 export class PatchBranch {
 	desc: BranchDesc;
 	refElem: Element;
+	/** The custom element this branch belongs to. */
+	owner: Element;
 	sets: SetState[];
 	/** What each site shows, index-aligned with `desc.sites`; undefined until read from the DOM. */
 	shown: (Shown | undefined)[];
 
-	constructor(desc: BranchDesc, refElem: Element, data: Data) {
+	constructor(desc: BranchDesc, refElem: Element, data: Data, owner: Element = refElem) {
 		this.desc = desc;
 		this.refElem = refElem;
+		this.owner = owner;
 		this.shown = desc.sites.map(() => undefined);
 		this.sets = desc.sets.map(d => {
 			const elem = this.target(d.bfid);
@@ -211,17 +214,30 @@ export class PatchBranch {
 		const desc = s.desc.branches[idx];
 		if (!desc || s.children.has(idx)) return;
 		const elem = this.target(s.desc.bfid);
-		if (elem) s.children.set(idx, new PatchBranch(desc, elem, data));
+		if (elem) s.children.set(idx, new PatchBranch(desc, elem, data, this.owner));
 	}
 
-	// The element a site or set is anchored to. A missing one means the rendered DOM
-	// diverged from the compiled template, so it is reported rather than skipped silently.
+	// The element a site or set is anchored to. A missing or duplicated one means the
+	// rendered DOM diverged from the compiled template, so it is reported and not patched
 	target(bfid: string | null): Element | null {
 		if (bfid === null) return this.refElem;
-		const elem = this.refElem.querySelector(`[data-bfid="${bfid}"]`);
-		if (!elem) console.error(`BackflipHTML: element [data-bfid="${bfid}"] not found; skipping update`, this.refElem);
-		return elem;
+		// Instances of a partial share their data-bfids, and slot content can put another
+		// instance ahead of this one's own elements.
+		const own = Array.from(this.refElem.querySelectorAll(`[data-bfid="${bfid}"]`))
+			.filter(elem => nearestOfSameTag(elem, this.owner) === this.owner);
+		if (own.length === 1) return own[0];
+		if (own.length === 0) console.error(`BackflipHTML: element [data-bfid="${bfid}"] not found; skipping update`, this.refElem);
+		else console.error(`BackflipHTML: ${own.length} elements have [data-bfid="${bfid}"]; skipping update`, own);
+		return null;
 	}
+}
+
+// The closest ancestor of `elem` with the same tag as `owner`.
+function nearestOfSameTag(elem: Element, owner: Element): Element | null {
+	for (let p = elem.parentElement; p; p = p.parentElement) {
+		if (p.localName === owner.localName) return p;
+	}
+	return null;
 }
 
 // Write `next` unless the DOM already shows it, reading what it shows when `shown` is

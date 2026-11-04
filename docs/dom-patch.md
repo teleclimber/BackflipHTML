@@ -127,6 +127,7 @@ The build warns, against the definition tag, when:
 - `<script>` tags inside a reactive `b-if` branch do not run when the branch is rendered in the browser.
 - Inside a reactive area, a non-reactive nested `b-if` keeps the branch the server rendered; dynamic values in its other branches cannot be found, and each update logs a console error for them.
 - When the rendered DOM no longer matches the template (for example, other script removed a patched element), the affected patch is skipped with a console error.
+- When a patched element appears twice (other script cloned it, or invalid HTML such as a `<div>` inside a `<p>` made the parser copy it), neither copy is updated and a console error is logged.
 
 ---
 
