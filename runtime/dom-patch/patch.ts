@@ -7,11 +7,13 @@ import { enqueue, FLUSH_EVENT, register } from './flush.js';
 
 /**
  * Replace everything between two marker comments among `parent`'s direct children
- * with `node`. The markers themselves survive, so the range stays patchable.
+ * with `node`. The markers themselves survive, so the range stays patchable. Returns
+ * whether the markers were found.
  */
-export function replaceBetween(parent: Node, startMarker: string, endMarker: string, node: Node): void {
+export function replaceBetween(parent: Node, startMarker: string, endMarker: string, node: Node): boolean {
 	const range = findMarkers(parent, startMarker, endMarker);
 	if (range) replaceRange(range, node);
+	return range !== null;
 }
 
 // Replace everything between two sibling markers with `node`, keeping the markers.
@@ -32,20 +34,16 @@ function textBetween([start, end]: [ChildNode, ChildNode]): string {
 	return text;
 }
 
-// The two marker comments among `parent`'s direct children. Missing ones mean the
-// rendered DOM diverged from the compiled template, so they are reported.
+// The two marker comments among `parent`'s direct children. Missing or repeated ones
+// mean the rendered DOM diverged from the compiled template, so they are reported.
 function findMarkers(parent: Node, startMarker: string, endMarker: string): [ChildNode, ChildNode] | null {
-	let start: ChildNode | null = null, end: ChildNode | null = null;
-	for (const child of parent.childNodes) {
-		if (child.nodeType !== 8) continue;
-		if (child.nodeValue === startMarker) start = child;
-		else if (child.nodeValue === endMarker) end = child;
-	}
-	if (!start || !end) {
-		console.error(`BackflipHTML: comment markers ${startMarker} / ${endMarker} not found`, parent);
-		return null;
-	}
-	return [start, end];
+	const comments = Array.from(parent.childNodes).filter(child => child.nodeType === 8);
+	const starts = comments.filter(c => c.nodeValue === startMarker);
+	const ends = comments.filter(c => c.nodeValue === endMarker);
+	if (starts.length === 1 && ends.length === 1) return [starts[0], ends[0]];
+	const problem = starts.length > 1 || ends.length > 1 ? 'found more than once' : 'not found';
+	console.error(`BackflipHTML: comment markers ${startMarker} / ${endMarker} ${problem}`, parent);
+	return null;
 }
 
 // The index of the branch rendered between a set's markers, from the branch marker
@@ -201,11 +199,11 @@ export class PatchBranch {
 		}
 		const elem = this.target(s.desc.bfid);
 		if (!elem) return false;
-		s.children.delete(s.active);
-		s.active = idx;
 		const range = elem.ownerDocument.createRange();
 		range.selectNodeContents(elem);
-		replaceBetween(elem, s.desc.markers[0], s.desc.markers[1], range.createContextualFragment(html));
+		if (!replaceBetween(elem, s.desc.markers[0], s.desc.markers[1], range.createContextualFragment(html))) return false;
+		s.children.delete(s.active);
+		s.active = idx;
 		this.createChild(s, idx, data);
 		return true;
 	}

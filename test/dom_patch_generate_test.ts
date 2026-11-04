@@ -88,6 +88,13 @@ const PARSER_COPY_HTML = `<x-copy b-attr:t b-generate="full">
 	<body><x-copy t="a"></x-copy></body>
 </b-unwrap>`;
 
+// A print and a set among the custom element's direct children, as a script cloning them would repeat.
+const DIRECT_MARKERS_HTML = `<x-dup b-attr:t b-attr:open.bool b-generate="full">[{{ t }}]<i b-if="open">A</i><i b-else>B</i></x-dup>
+
+<b-unwrap b-name="page" b-export>
+	<body><x-dup t="a" open></x-dup></body>
+</b-unwrap>`;
+
 async function buildProject(appHtml = APP_HTML): Promise<string> {
 	const workDir = path.join(TMPDIR, `p_${Date.now()}_${Math.random().toString(36).slice(2)}`);
 	await fs.mkdir(path.join(workDir, "templates"), { recursive: true });
@@ -241,6 +248,31 @@ Deno.test("integration: an element the HTML parser duplicates is reported when p
 		assertEquals(errors.length, 2);
 		// Neither copy is patched: updating one would hide that something is wrong.
 		assertEquals([...el.querySelectorAll("b")].map(b => b.getAttribute("title")), ["a", "a"]);
+	} finally {
+		console.error = orig;
+		await fs.rm(workDir, { recursive: true, force: true });
+	}
+});
+
+Deno.test("integration: marker comments a script repeats are reported, and nothing between them is patched", async () => {
+	const workDir = await buildProject(DIRECT_MARKERS_HTML);
+	const errors: unknown[][] = [];
+	const orig = console.error;
+	console.error = (...args: unknown[]) => { errors.push(args); };
+	try {
+		const mod = await import(path.join(workDir, "dist", "app.js"));
+		const doc = await browserFor(workDir, renderRoot(mod.page as RootRNode, {}), "x-dup");
+		const el = doc.querySelector("x-dup")!;
+		await settled();
+		assertEquals(errors, []);
+
+		el.append(...[...el.childNodes].map(n => n.cloneNode(true)));
+		const before = el.innerHTML;
+		el.setAttribute("t", "b");
+		el.removeAttribute("open");
+		await settled();
+		assertEquals(el.innerHTML, before);
+		assertEquals(errors.map(e => String(e[0]).includes("found more than once")), [true, true]);
 	} finally {
 		console.error = orig;
 		await fs.rm(workDir, { recursive: true, force: true });

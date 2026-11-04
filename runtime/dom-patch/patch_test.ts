@@ -85,6 +85,21 @@ for (const [label, html] of [
 	});
 }
 
+for (const [label, html] of [
+	['start', `<!--a-->old<!--b--><!--a-->`],
+	['end', `<!--b--><!--a-->old<!--b-->`],
+	['pair', `<!--a-->one<!--b--><!--a-->two<!--b-->`],
+] as const) {
+	Deno.test(`replaceBetween: a repeated ${label} marker logs and changes nothing`, () => {
+		const { doc, parent } = parentWith(html);
+		const { errors } = captureErrors(() => replaceBetween(parent, 'a', 'b', doc.createTextNode('new')));
+		assertEquals(parent.innerHTML, html);
+		assertEquals(errors.length, 1);
+		assertEquals(String(errors[0][0]).includes('comment markers a / b found more than once'), true);
+		assertEquals(errors[0][1], parent);
+	});
+}
+
 // --- PatchBranch ------------------------------------------------------------
 
 function expr(code: string, vars: string[]): rfn {
@@ -669,6 +684,66 @@ Deno.test("PatchBranch: a copy made after a site is patched goes unreported unti
 	assertEquals(captureErrors(() => pb.update({ v: 'x' })).errors, []);
 	assertEquals(captureErrors(() => pb.update({ v: 'new' })).errors.length, 1);
 	assertEquals(own.getAttribute('title'), 'x');
+});
+
+// --- the same marker comments twice within one element -------------------------
+
+// Every child of `el` cloned onto its end, as a script copying its content would.
+function cloneChildren(el: Element): ChildNode[] {
+	const copies = Array.from(el.childNodes).map(n => n.cloneNode(true) as ChildNode);
+	el.append(...copies);
+	return copies;
+}
+
+Deno.test("PatchBranch: a print whose markers appear twice is reported, and neither copy is patched", () => {
+	const { el } = host(`<!--m0-->x<!--m1--><!--m0-->x<!--m1-->`);
+	const pb = new PatchBranch({ sites: [{ bfid: null, markers: ['m0', 'm1'], expr: expr('v', ['v']) }], sets: [] }, el, {});
+	const { errors, result: records } = captureErrors(() => mutations(el, () => pb.update({ v: 'new' })));
+	assertEquals(records, []);
+	assertEquals(errors.length, 1);
+});
+
+Deno.test("PatchBranch: a print reports its repeated markers on each update, and resumes once they are gone", () => {
+	const { el } = host(`<!--m0-->x<!--m1-->`);
+	const pb = new PatchBranch({ sites: [{ bfid: null, markers: ['m0', 'm1'], expr: expr('v', ['v']) }], sets: [] }, el, {});
+	const copies = cloneChildren(el);
+	assertEquals(captureErrors(() => pb.update({ v: 'a' })).errors.length, 1);
+	assertEquals(captureErrors(() => pb.update({ v: 'a' })).errors.length, 1);
+	for (const c of copies) c.remove();
+	assertEquals(captureErrors(() => pb.update({ v: 'a' })).errors, []);
+	assertEquals(el.innerHTML, `<!--m0-->a<!--m1-->`);
+});
+
+Deno.test("PatchBranch: a set whose markers appear twice at startup is reported, and does not swap", () => {
+	const { el } = host(SERVER_A + SERVER_A);
+	const { errors, result: pb } = captureErrors(() => new PatchBranch({ sites: [], sets: [SET] }, el, { mode: 'a', name: 'World' }));
+	assertEquals(errors.length > 0, true);
+	const swap = captureErrors(() => mutations(el, () => pb.update({ mode: 'b', name: 'World' })));
+	assertEquals(swap.result, []);
+	assertEquals(swap.errors.length > 0, true);
+});
+
+Deno.test("PatchBranch: a set skipped for repeated markers swaps once they are gone", () => {
+	const { el } = host(SERVER_A);
+	const pb = new PatchBranch({ sites: [], sets: [SET] }, el, { mode: 'a', name: 'World' });
+	const copies = cloneChildren(el);
+	const skipped = captureErrors(() => mutations(el, () => pb.update({ mode: 'b', name: 'World' })));
+	assertEquals(skipped.result, []);
+	assertEquals(skipped.errors.length > 0, true);
+	for (const c of copies) c.remove();
+	assertEquals(captureErrors(() => pb.update({ mode: 'b', name: 'World' })).errors, []);
+	assertEquals(el.innerHTML, SERVER_ELSE);
+});
+
+Deno.test("PatchBranch: a set skipped for a missing marker swaps once it is back", () => {
+	const { el } = host(SERVER_A);
+	const pb = new PatchBranch({ sites: [], sets: [SET] }, el, { mode: 'a', name: 'World' });
+	const start = el.firstChild as ChildNode;
+	start.remove();
+	assertEquals(captureErrors(() => pb.update({ mode: 'b', name: 'World' })).errors.length > 0, true);
+	el.prepend(start);
+	assertEquals(captureErrors(() => pb.update({ mode: 'b', name: 'World' })).errors, []);
+	assertEquals(el.innerHTML, SERVER_ELSE);
 });
 
 // --- BackflipShell -----------------------------------------------------------
