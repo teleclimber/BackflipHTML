@@ -27,6 +27,18 @@ export function getBindAttrName(name: string): string {
 	throw new Error(`Not a bind attr: ${name}`);
 }
 
+const DIRECTIVE_ATTRS = new Set([
+	'b-name', 'b-export',
+	'b-if', 'b-for', 'b-key', 'b-else', 'b-else-if',
+	'b-part', 'b-slot', 'b-in',
+	'b-script', 'b-generate',
+]);
+
+/** Whether an attribute is a Backflip directive, as opposed to one on the rendered tag. */
+export function isDirectiveAttr(name: string): boolean {
+	return DIRECTIVE_ATTRS.has(name) || name.startsWith('b-data:') || name.startsWith('b-attr:') || name.startsWith('b-store:');
+}
+
 export function isAssetAttr(attrName: string): boolean {
 	return attrName.endsWith('~');
 }
@@ -44,13 +56,7 @@ export function effectiveAttrNames(attrs: { name: string, value: string }[]): st
 	const names: string[] = [];
 	for (const a of attrs) {
 		const n = a.name;
-		if (n === 'b-name' || n === 'b-export') continue;
-		if (n === 'b-if' || n === 'b-for' || n === 'b-else' || n === 'b-else-if') continue;
-		if (n === 'b-part' || n === 'b-slot' || n === 'b-in') continue;
-		if (n === 'b-script' || n === 'b-generate') continue;
-		if (n.startsWith('b-data:')) continue;
-		if (n.startsWith('b-attr:')) continue;
-		if (n.startsWith('b-store:')) continue;
+		if (isDirectiveAttr(n)) continue;
 		if (n.startsWith('b-bind:')) { names.push(n.slice('b-bind:'.length).replace(/~$/, '')); continue; }
 		if (n.startsWith(':')) { names.push(n.slice(1).replace(/~$/, '')); continue; }
 		if (n.endsWith('~')) { names.push(n.slice(0, -1)); continue; }

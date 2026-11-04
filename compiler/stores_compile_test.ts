@@ -214,7 +214,7 @@ Deno.test("shipped: a store read only inside a reactive b-if branch", async () =
 });
 
 Deno.test("shipped: not for a store read only inside a b-for", async () => {
-	assertEquals(await shippedAfterDomPatch(`<my-widget b-store:widgets b-attr:id b-generate="full"><p>{{ id }}</p><b-unwrap b-for="w in widgets.data.list"><p>{{ w }}</p></b-unwrap></my-widget>\n`),
+	assertEquals(await shippedAfterDomPatch(`<my-widget b-store:widgets b-attr:id b-generate="full"><p>{{ id }}</p><b-unwrap b-for="w in widgets.data.list" b-key="w"><p>{{ w }}</p></b-unwrap></my-widget>\n`),
 		{ 'my-widget': { widgets: false } });
 });
 

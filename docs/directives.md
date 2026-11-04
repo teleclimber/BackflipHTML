@@ -40,7 +40,13 @@ The index counts positions in both runtimes: in PHP, an associative array gives 
 
 Write `_` for a name you don't need. It binds nothing, so `b-for="_, i in widgets"` binds only `i`, and `b-for="_ in widgets"` repeats the element without binding anything.
 
-**Errors:** the attribute value must match one of the forms above; each name must be an identifier made of letters, digits and `_` (not starting with a digit); the value and index must have different names (unless both are `_`).
+`b-key`, on the same tag, is an expression that identifies an item across [client-side updates](dom-patch.md). It can read the loop's names and must be unique in the list. It is required on every `b-for` in a partial that generates client JS, and ignored elsewhere. It renders nothing.
+
+```html
+<li b-for="post in posts" b-key="post.id">{{ post.title }}</li>
+```
+
+**Errors:** the attribute value must match one of the forms above; each name must be an identifier made of letters, digits and `_` (not starting with a digit); the value and index must have different names (unless both are `_`). `b-key` must have a value, and is allowed only on a tag with `b-for`.
 
 ---
 
@@ -222,4 +228,5 @@ The compiler reports errors for:
 - `b-for` value not in `item in collection` or `(item, index) in collection` form, an invalid loop variable name, or a value and index with the same name
 - `b-else` or `b-else-if` without a preceding `b-if` element
 - `b-else` given a value
-- Multiple `b-*` directives on the same element
+- More than one of `b-for`, `b-if`, `b-else-if` and `b-else` on the same element
+- A `b-for` with no `b-key` in a partial that generates client JS

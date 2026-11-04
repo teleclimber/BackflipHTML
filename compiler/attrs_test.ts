@@ -1,6 +1,51 @@
 import { assertEquals } from "jsr:@std/assert";
 
-import { effectiveAttrNames } from "./attrs.ts";
+import { effectiveAttrNames, isDirectiveAttr } from "./attrs.ts";
+import { compileFile } from "./test-helpers.ts";
+import type { TNode } from "./types.ts";
+
+// ---- isDirectiveAttr ----
+
+Deno.test("isDirectiveAttr: true for every directive", () => {
+	for (const name of [
+		'b-name', 'b-export', 'b-if', 'b-for', 'b-key', 'b-else', 'b-else-if', 'b-part', 'b-slot', 'b-in',
+		'b-script', 'b-generate', 'b-data:d', 'b-attr:a', 'b-store:s',
+	]) {
+		assertEquals(isDirectiveAttr(name), true, name);
+	}
+});
+
+Deno.test("isDirectiveAttr: false for attributes that reach the rendered tag", () => {
+	for (const name of ['id', 'class', 'b-unknown', ':title', 'b-bind:title', 'src~', 'data-b-for']) {
+		assertEquals(isDirectiveAttr(name), false, name);
+	}
+});
+
+// ---- a custom element call's two attribute lists ----
+
+Deno.test("custom element call: callerAttrInfos and callerAttrNames agree on which attributes are directives", async () => {
+	const directives = [
+		'b-key="x"', 'b-script="x"', 'b-generate="full"', 'b-export', 'b-data:d="x"',
+		'b-attr:a', 'b-store:s', 'b-in="x"', 'b-for="x in xs"',
+	];
+	for (const directive of directives) {
+		const { compiled } = await compileFile(`<ul b-name="p"><my-card ${directive} id="i" :v="x"></my-card></ul>`);
+		const find = (ns: TNode[]): TNode | undefined => {
+			for (const n of ns) {
+				if (n.type === 'partial-ref') return n;
+				if (n.type === 'element' || n.type === 'for') {
+					const hit = find(n.tnodes);
+					if (hit) return hit;
+				}
+			}
+			return undefined;
+		};
+		const call = find(compiled.partials.get('p')!.tnodes);
+		if (call?.type !== 'partial-ref' || call.kind !== 'custom-element') throw new Error(`no call for ${directive}`);
+		assertEquals(call.callerAttrInfos!.map(a => a.name), ['id', 'v'], directive);
+		assertEquals(call.callerAttrNames, ['id', 'v'], directive);
+	}
+});
 
 // ---- effectiveAttrNames unit tests ----
 

@@ -158,6 +158,13 @@ Deno.test("php: indexed-list: b-for binds a 0-based index", async () => {
     );
 });
 
+Deno.test("php: keyed-list: b-key renders nothing", async () => {
+    assertEquals(
+        normalize(await renderPhp("blog.html", "keyed_list", { posts: ["Alpha", "Beta"] })),
+        "<ul><li>Alpha</li><li>Beta</li></ul>"
+    );
+});
+
 Deno.test("php: indexed-list: index counts positions, not keys, of an associative array", async () => {
     assertEquals(
         normalize(await renderPhp("blog.html", "indexed_list", { posts: { a: "Alpha", b: "Beta" } })),

@@ -24,6 +24,12 @@
     </ul>
 </b-unwrap>
 
+<b-unwrap b-name="keyed-list">
+    <ul>
+        <li b-for="post in posts" b-key="post">{{ post }}</li>
+    </ul>
+</b-unwrap>
+
 <b-unwrap b-name="nested-index">
     <b-unwrap b-for="row, r in rows"><b-unwrap b-for="cell, c in row">[{{ r }}{{ c }}{{ cell }}]</b-unwrap></b-unwrap>
 </b-unwrap>

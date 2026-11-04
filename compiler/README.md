@@ -9,7 +9,7 @@ The compiler takes HTML templates with `b-*` directive attributes and `{{ expres
 Compilation of one partial runs in two passes:
 
 1. **Parse (`parse-tree.ts`)** — `buildSourceTree()` consumes `parse5`'s SAX events (so real HTML — void elements, self-closing tags, etc. — is handled correctly) and builds a dumb, faithful source tree of elements and text with attributes, raw tag text, and source locations. It has no directive knowledge. This is also the single place where parse5 source locations are converted to `SourceLoc`.
-2. **Lower (`lower.ts`)** — `lowerSlice()` recursively transforms the source tree into the compiled TNode AST. All directive semantics live here: `b-for`, `b-if`, `b-else-if`, `b-else`, `b-bind:`, `b-name`, `b-part`, `b-slot`, `b-in`, `b-data:`, `b-unwrap`, and `{{ }}` interpolation. Anything that isn't a directive is stored as a raw HTML string node.
+2. **Lower (`lower.ts`)** — `lowerSlice()` recursively transforms the source tree into the compiled TNode AST. All directive semantics live here: `b-for`, `b-key`, `b-if`, `b-else-if`, `b-else`, `b-bind:`, `b-name`, `b-part`, `b-slot`, `b-in`, `b-data:`, `b-unwrap`, and `{{ }}` interpolation. Anything that isn't a directive is stored as a raw HTML string node.
 
 `compiler.ts` is the thin public wrapper:
 

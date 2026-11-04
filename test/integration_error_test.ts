@@ -143,9 +143,32 @@ Deno.test("data-errors.html: b-data on a generating partial at line 16", () => {
 });
 
 // ---------------------------------------------------------------------------
+// key-errors.html
+//   line 2: <p b-for="x in 'ab'">         — no b-key in a generating partial
+//   line 3: <p b-key="x">                 — b-key without b-for
+//   line 4: <p b-for="x in 'ab'" b-key>   — b-key with no value
+// ---------------------------------------------------------------------------
+
+Deno.test("key-errors.html: reports 3 errors", () => {
+    assertEquals(errorsFor("key-errors.html").length, 3);
+});
+
+Deno.test("key-errors.html: missing b-key at line 2", () => {
+    assertEquals(findError("key-errors.html", "needs a b-key").line, 2);
+});
+
+Deno.test("key-errors.html: b-key without b-for at line 3", () => {
+    assertEquals(findError("key-errors.html", "only allowed with b-for").line, 3);
+});
+
+Deno.test("key-errors.html: b-key with no value at line 4", () => {
+    assertEquals(findError("key-errors.html", "requires a value").line, 4);
+});
+
+// ---------------------------------------------------------------------------
 // All files combined: verify total error count across the directory
 // ---------------------------------------------------------------------------
 
 Deno.test("total errors across all files", () => {
-    assertEquals(errors.length, 12);
+    assertEquals(errors.length, 15);
 });

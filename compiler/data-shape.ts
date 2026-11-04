@@ -438,11 +438,13 @@ function walkNodesForShape(
 
 				// Walk loop body with the loop's names scoped — collects free var shapes
 				const childScope = new Set([...scoped, ...forBoundNames(n)]);
+				if (n.key) collectFromParsed(n.key, 'printed', undefined, childScope, shapes);
 				walkNodesForShape(n.tnodes, childScope, shapes);
 
 				// Walk again into temp map with valName NOT scoped to extract its shape
 				if (n.valName) {
 					const tempShapes = new Map<string, DataShape>();
+					if (n.key) collectFromParsed(n.key, 'printed', undefined, scoped, tempShapes);
 					walkNodesForShape(n.tnodes, scoped, tempShapes);
 					const valShape = tempShapes.get(n.valName);
 					if (valShape) applyElementShape(n.iterable, valShape, scoped, shapes);

@@ -93,6 +93,8 @@ class MyWidget extends BackflipMyWidgetElement {
 customElements.define('my-widget', MyWidget);
 ```
 
+`connectedCallback` can run more than once, because moving an element in the page disconnects and reconnects it. Attach listeners on the element itself in the constructor, where they are added once. Anything `connectedCallback` sets up outside the element, such as a listener on `document`, must be undone in `disconnectedCallback`. (OK but the solution is not the constructor)
+
 Two rules the browser enforces silently:
 
 - `observedAttributes` and the lifecycle callbacks are read **once**, when `customElements.define()` runs, off the class you register. A subclass that declares `static observedAttributes` without spreading `super.observedAttributes`, or defines `connectedCallback` / `attributeChangedCallback` without calling `super`, stops the patching with no error. The generated class reports a missing attribute to the console when it initializes.
@@ -117,6 +119,7 @@ Your module is the page's **entry** for this element and the generated module is
 - `b-generate` and `b-script` are allowed only on a custom element partial **definition** tag. `b-generate` takes one of the three values above and cannot be bare. `b-script` is an asset path (`@name/subpath`) to an existing file in a configured asset directory, at most one per definition.
 - **Data comes in through `b-attr` and `b-store`.** The browser patches from the values it can read: the element's attributes and the page's [stores](data-stores.md). Anything else could go stale the moment an attribute changes. A variable the partial body uses must be declared with `b-attr:NAME` (a string or boolean) or `b-store:NAME` (any JSON), and `b-data:NAME` on a call to such a partial is an error.
 - A store such a partial declares must be served: its store file has to sit inside an asset directory, since the generated module imports it.
+- Every `b-for` in such a partial must have a [`b-key`](directives.md#b-for--loop).
 - A partial that generates JS must have a project-unique tag name, since its module and its registration are named after the tag.
 
 The build warns, against the definition tag, when:

@@ -4,7 +4,7 @@
 
 <my-tagger b-store:tags b-attr:label b-generate="full">
 	<p>{{ label }}</p>
-	<ul><li b-for="t in tags.data.list">{{ t }}</li></ul>
+	<ul><li b-for="t in tags.data.list" b-key="t">{{ t }}</li></ul>
 </my-tagger>
 
 <b-unwrap b-name="owner-line" b-store:users>

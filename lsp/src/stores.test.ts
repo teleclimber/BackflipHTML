@@ -41,6 +41,7 @@ describe('variableAt', () => {
 		strictEqual(variableAt('{{ widgets.data.a }}', 4), 'widgets');
 		strictEqual(variableAt('<h3 :title="widgets.data">', 14), 'widgets');
 		strictEqual(variableAt('<p b-if="on && widgets">', 18), 'widgets');
+		strictEqual(variableAt('<p b-for="x in xs" b-key="widgets.id">', 28), 'widgets');
 		strictEqual(variableAt('{{ m[widget_id] }}', 8), 'widget_id');
 	});
 

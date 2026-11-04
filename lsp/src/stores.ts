@@ -50,7 +50,7 @@ function enclosingPartial(file: CompiledFile, offset: number): { partialName: st
 }
 
 // `{{ … }}` interpolations, and the values of the attributes that hold an expression.
-const EXPRESSION_RE = /\{\{([^{}]*)\}\}|(?<=\s)(?:b-if|b-else-if|b-for|b-data:[\w-]+|b-bind:[\w~-]+|:[\w~-]+)=(?:"([^"]*)"|'([^']*)')/g;
+const EXPRESSION_RE = /\{\{([^{}]*)\}\}|(?<=\s)(?:b-if|b-else-if|b-for|b-key|b-data:[\w-]+|b-bind:[\w~-]+|:[\w~-]+)=(?:"([^"]*)"|'([^']*)')/g;
 
 /**
  * The variable at `character` when it sits in an expression on `line`: an identifier

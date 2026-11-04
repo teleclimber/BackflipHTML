@@ -10,7 +10,7 @@ import {
 	isCustomElementTagName, effectiveAttrNames, parseBPartValue, parseBForValue,
 	DOCUMENT_LEVEL_TAGS, VOID_ELEMENTS, INTERPOLATION_RE,
 } from './helpers.js';
-import { classifyOpenTagAttrs, buildAttrParts } from './attrs.js';
+import { classifyOpenTagAttrs, buildAttrParts, isDirectiveAttr } from './attrs.js';
 import { validateStaticAssetAttr, type AssetAttrCtx } from './assets.js';
 import type { SourceNode, SourceElement, SourceText, SourceAttr, TextLoc } from './parse-tree.js';
 import type {
@@ -235,6 +235,12 @@ const DEFINITION_ONLY_DIRECTIVES = ['b-script', 'b-generate'];
 
 function reportDirectiveMisplacement(el: SourceElement, ctx: Ctx, onNamedDefinition = false): void {
 	for (const attr of el.attrs) {
+		if (attr.name === 'b-key') {
+			if (!onNamedDefinition && !findAttr(el, 'b-for')) {
+				ctx.errors.push(new BackflipError(`b-key is only allowed with b-for`, attrErrLoc(el, attr.name, ctx)));
+			}
+			continue;
+		}
 		if (attr.name.startsWith('b-store:')) {
 			if (!onNamedDefinition) {
 				ctx.errors.push(new BackflipError(`b-store is only allowed on partial definitions`, attrErrLoc(el, attr.name, ctx)));
@@ -290,7 +296,7 @@ function parseStoreDecls(el: SourceElement, ctx: Ctx): PartialStore[] {
 }
 
 function reportFlowOnDefinition(el: SourceElement, ctx: Ctx): void {
-	for (const flow of FLOW_DIRECTIVES) {
+	for (const flow of [...FLOW_DIRECTIVES, 'b-key']) {
 		if (findAttr(el, flow)) {
 			ctx.errors.push(new BackflipError(`${flow} is not allowed on a partial definition`, attrErrLoc(el, flow, ctx)));
 		}
@@ -474,12 +480,12 @@ function lowerTag(el: SourceElement, pctx: PartialCtx, siblings: TNode[], exclud
 		ctx_error(pctx, "more than one b-attr", tagErrLoc(el, pctx));
 		return lowerFallbackTag(el, pctx);
 	}
-	if (flow.length === 0) return lowerTagBody(el, pctx, exclude);
+	if (flow.length === 0) return lowerTagBody(el, pctx, ['b-key', ...exclude]);
 
 	const fc = setupFlow(el, flow[0], pctx, siblings);
 	if (!fc) return lowerFallbackTag(el, pctx);
-	// The flow attr belongs to the wrapper, so it is excluded from the tag itself.
-	for (const n of lowerTagBody(el, pctx, [flow[0].name, ...exclude])) {
+	// The flow attr and its b-key belong to the wrapper, so they are excluded from the tag itself.
+	for (const n of lowerTagBody(el, pctx, [flow[0].name, 'b-key', ...exclude])) {
 		appendCoalesced(fc.container.tnodes!, n);
 	}
 	return fc.emit;
@@ -799,6 +805,16 @@ function setupFlow(el: SourceElement, flowAttr: SourceAttr, pctx: PartialCtx, si
 		if (parsed.valName) for_node.valName = parsed.valName;
 		if (parsed.indexName) for_node.indexName = parsed.indexName;
 		for_node.loc = findAttrLoc(el, 'b-for');
+		const keyAttr = findAttr(el, 'b-key');
+		if (keyAttr?.value) {
+			for_node.key = interpretBackcodeAt(keyAttr.value, attrErrLoc(el, 'b-key', pctx), pctx);
+		} else if (keyAttr) {
+			ctx_error(pctx, 'b-key requires a value', attrErrLoc(el, 'b-key', pctx));
+		} else if (pctx.root.kind === 'custom-element' && pctx.root.generate !== undefined) {
+			ctx_error(pctx,
+				`this b-for needs a b-key: <${pctx.name}> generates client JS, which matches each item to its DOM by key. Use a value unique in the list, such as b-key="item.id"`,
+				attrErrLoc(el, 'b-for', pctx));
+		}
 		return { container: for_node, emit: [for_node] };
 	}
 
@@ -869,12 +885,7 @@ function buildCustomElementPartialRef(el: SourceElement, pctx: PartialCtx, exclu
 	const callerAttrInfos: NonNullable<CustomElementCallTNode['callerAttrInfos']> = [];
 	for (const attr of el.attrs) {
 		const n = attr.name;
-		if (n === 'b-name' || n === 'b-export') continue;
-		if (n === 'b-if' || n === 'b-for' || n === 'b-else' || n === 'b-else-if') continue;
-		if (n === 'b-part' || n === 'b-slot' || n === 'b-in') continue;
-		if (n.startsWith('b-data:')) continue;
-		if (n.startsWith('b-attr:')) continue;
-		if (n.startsWith('b-store:')) continue;
+		if (isDirectiveAttr(n)) continue;
 		const aLoc = attr.loc;
 		if (n.startsWith('b-bind:') || n.startsWith(':')) {
 			const stripped = n.startsWith('b-bind:') ? n.slice('b-bind:'.length) : n.slice(1);

@@ -143,6 +143,13 @@ Deno.test("indexed-list: b-for binds a 0-based index", () => {
     );
 });
 
+Deno.test("keyed-list: b-key renders nothing", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("blog.html")["keyed_list"], { posts: ["Alpha", "Beta"] })),
+        "<ul><li>Alpha</li><li>Beta</li></ul>"
+    );
+});
+
 // Template (nested-index):
 //   <b-unwrap b-for="row, r in rows"><b-unwrap b-for="cell, c in row">[{{ r }}{{ c }}{{ cell }}]</b-unwrap></b-unwrap>
 

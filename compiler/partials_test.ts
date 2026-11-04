@@ -2169,7 +2169,7 @@ Deno.test("compileDirectory - a custom element that generates no JS still takes 
 Deno.test("compileDirectory - a b-for value name inside a generating partial is not undeclared", async () => {
     // `row` is bound by the loop, not supplied from outside; only `rows` is at fault.
     const fatal = await fatalsFor("gen_for_local", `
-        <my-widget b-generate="full"><p b-for="row in rows">{{ row }}</p></my-widget>
+        <my-widget b-generate="full"><p b-for="row in rows" b-key="row">{{ row }}</p></my-widget>
     `);
     assertEquals(fatal.length, 1, JSON.stringify(fatal.map(e => e.message)));
     assertStringIncludes(fatal[0].message, 'variable rows cannot be supplied to <my-widget>');

@@ -120,7 +120,7 @@ Deno.test("end-to-end: live var declared but never used => no class", async () =
 
 Deno.test("end-to-end: attr inside b-for is skipped (v1 limitation)", async () => {
 	const file = await compileCustomElement(
-		`<my-widget b-attr:title><ul><li b-for="item in items" :data-x="title">x</li></ul></my-widget>`
+		`<my-widget b-attr:title><ul><li b-for="item in items" b-key="item" :data-x="title">x</li></ul></my-widget>`
 	);
 	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
 	// b-for is skipped (the for body contains other vars too like `items`/`item`).
@@ -422,7 +422,7 @@ Deno.test("end-to-end: an if-set is bracketed by markers and its parent gets a b
 
 Deno.test("end-to-end: b-for value and index names in a set's branch need no declaration", async () => {
 	const file = await compileCustomElement(
-		`<my-widget b-attr:show b-attr:xs><div b-if="show"><p b-for="(x, i) in xs">{{ i }}{{ x }}</p></div></my-widget>`
+		`<my-widget b-attr:show b-attr:xs><div b-if="show"><p b-for="(x, i) in xs" b-key="i">{{ i }}{{ x }}</p></div></my-widget>`
 	);
 	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
 	if (!js) throw new Error('expected js');
@@ -587,7 +587,7 @@ Deno.test("end-to-end: disqualified if-sets get no markers and no class", async 
 	const cases = [
 		`<my-widget b-attr:mode><p b-if="mode == 'a'"><other-thing></other-thing></p><em b-else>B</em></my-widget>`,
 		`<my-widget b-attr:mode><p b-if="mode == 'a'"><span b-slot></span></p><em b-else>B</em></my-widget>`,
-		`<my-widget b-attr:mode><ul><li b-for="i in items"><b b-if="mode == 'a'">A</b></li></ul></my-widget>`,
+		`<my-widget b-attr:mode><ul><li b-for="i in items" b-key="i"><b b-if="mode == 'a'">A</b></li></ul></my-widget>`,
 	];
 	for (const html of cases) {
 		const file = await compileCustomElement(html);
@@ -669,7 +669,7 @@ async function compileWithStores(html: string): Promise<CompiledFile> {
 }
 
 Deno.test("stores: the shell imports each store its code reads, by its resolved URL", async () => {
-	const file = await compileWithStores(`<my-widget b-store:widgets b-store:tags b-attr:id b-generate="full"><h3>{{ widgets.data[id].name }}</h3><p b-for="t in tags.data.list">{{ t }}</p></my-widget>`);
+	const file = await compileWithStores(`<my-widget b-store:widgets b-store:tags b-attr:id b-generate="full"><h3>{{ widgets.data[id].name }}</h3><p b-for="t in tags.data.list" b-key="t">{{ t }}</p></my-widget>`);
 	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen(), assetMap: new Map([['static', '/static/']]) });
 	assertEquals(js!.includes(`import bfstore_widgets from "/static/stores/widgets.js";`), true, js!);
 	assertEquals(js!.includes('\tstatic bfStores = { widgets: bfstore_widgets };'), true, js!);
@@ -679,7 +679,7 @@ Deno.test("stores: the shell imports each store its code reads, by its resolved 
 });
 
 Deno.test("stores: a store read only by a b-for in a reactive branch still ships", async () => {
-	const file = await compileWithStores(`<my-widget b-store:tags b-attr:open b-generate="full"><div b-if="open"><p b-for="t in tags.data.list">{{ t }}</p></div></my-widget>`);
+	const file = await compileWithStores(`<my-widget b-store:tags b-attr:open b-generate="full"><div b-if="open"><p b-for="t in tags.data.list" b-key="t">{{ t }}</p></div></my-widget>`);
 	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen(), assetMap: new Map([['static', '/static/']]) });
 	assertEquals(js!.includes(`import bfstore_tags from "/static/stores/tags.js";`), true, js!);
 	assertEquals(file.partials.get('my-widget')!.stores!.map(s => [s.name, !!s.shipped]), [['tags', true]]);

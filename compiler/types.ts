@@ -94,6 +94,7 @@ export interface ForTNode {
 	iterable: Parsed,
 	valName?: string,	// bound to the item; absent when written as `_`
 	indexName?: string,	// bound to the 0-based iteration count
+	key?: Parsed,	// b-key: identifies an item across client-side updates
 	tnodes: TNode[],
 	loc?: SourceLoc
 }
