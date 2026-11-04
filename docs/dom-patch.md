@@ -52,6 +52,14 @@ The rule against partial references is what keeps [script auto-include](#script-
 
 ---
 
+## Scripts and patched DOM
+
+Patching owns the DOM it manages. The server generates a page's HTML and data together, so they match when the page loads, and patching depends on that match lasting. Scripts must not change that DOM directly.
+
+Patching does not try to detect or repair direct changes. Some cause a console error, and others leave the page wrong with no warning.
+
+---
+
 ## `b-generate`
 
 `b-generate` on a custom element partial's definition tag says how much JavaScript Backflip generates:

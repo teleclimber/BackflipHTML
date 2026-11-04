@@ -10,6 +10,12 @@ Unlike the [`js/`](../js/README.md) and [`php/`](../php/README.md) generators (w
 
 Because of this, the CLI calls `applyDomPatch()` on each `CompiledFile` **before** running flatten + js/php codegen. The preview server does the same before rendering (see `preview/preview.ts`), so previewed HTML carries the same `data-bfid` markers as a real build.
 
+## Patching owns its DOM
+
+The server generates the HTML and the data together, so they match when the page loads. Dom-patch is designed on the assumption that they stay matched: after that, only patching changes the DOM it manages. Author code changes a partial through its inputs, its declared attributes and stores, and [the author docs](../../../docs/dom-patch.md#scripts-and-patched-dom) tell authors not to change that DOM directly.
+
+Handling scripts that break this rule is a non-goal, so don't add machinery to detect or repair their changes. The `console.error` reports for a missing or duplicated anchor are diagnostics, and comparing against the DOM at init is not a guarantee to authors.
+
 ## What qualifies
 
 Five site flavors are emitted:
