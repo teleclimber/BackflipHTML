@@ -28,6 +28,7 @@ This runs `deno test --allow-read --allow-write --allow-run=php,deno` and covers
 | `dom_patch_autoinclude_test.ts` | Script auto-include: the module each `b-generate` mode contributes, its URL, and where the renderer injects it (JS and PHP). |
 | `dom_patch_if_test.ts` | Reactive `b-if` and nested set descriptors, plus the runtime (`runtime/js/render.js`, `runtime/dom-patch/patch.js`) the CLI copies beside generated modules. |
 | `dom_patch_generate_test.ts` | `b-generate="full"` end to end: CLI build → server render → the generated module patching that HTML in jsdom. |
+| `dom_patch_for_test.ts` | Reactive `b-for` end to end: CLI build → JS and PHP server render → the generated module adding, removing, moving and updating items in jsdom. |
 | `stores_compile_test.ts` | Store compile errors over the `stores-project/` fixture, with a served and an unserved store dir. |
 | `stores_render_test.ts` | Stores at render time: the same templates rendered in JS and PHP, comparing the HTML outside the store tags and the decoded store payloads. |
 | `stores_generate_test.ts` | A generated partial reading a store end to end: CLI build → server render with store data → the module, store file and runtime in jsdom. |

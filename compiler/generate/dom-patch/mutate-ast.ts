@@ -1,6 +1,6 @@
-import type { AttrPart, CustomElementCallTNode, ElementTNode, IfBranch, TNode } from '../../types.js';
+import type { AttrPart, CustomElementCallTNode, ElementTNode, TNode } from '../../types.js';
 import { commentMarker, type BfidGen } from './bfid.js';
-import { isIfSetSite, type Site } from './collect.js';
+import { isIfSetSite, isLoopSite, type Site } from './collect.js';
 
 const BFID_RE = /\sdata-bfid="([^"]*)"/;
 const MARKER_PREFIX = 'bfid:';
@@ -49,13 +49,14 @@ export function ensureCommentsAround(
 }
 
 /**
- * Open a `b-if` branch's content with its branch marker, so the rendered DOM shows
- * which branch won. Idempotent, like `ensureCommentsAround`.
+ * Open a `b-if` branch's or `b-for` item's content with its marker, so the rendered DOM
+ * shows which branch won, or where each item starts. Idempotent, like
+ * `ensureCommentsAround`.
  */
-export function ensureBranchMarker(branch: IfBranch, text: string): void {
-	const first = branch.tnodes[0];
+export function ensureOpeningMarker(parent: { tnodes: TNode[] }, text: string): void {
+	const first = parent.tnodes[0];
 	if (first?.type === 'comment' && first.text === text) return;
-	branch.tnodes.unshift({ type: 'comment', text });
+	parent.tnodes.unshift({ type: 'comment', text });
 }
 
 // Reuse an existing `data-bfid` static attr in `attrs`, or append one. Idempotent,
@@ -91,8 +92,8 @@ export function ensureCallBfid(call: CustomElementCallTNode, bfidGen: BfidGen): 
  * the owning patch-branch's ref element to decide `this.ref_elem` vs `sel_<bfid>`.
  */
 export function elementForSite(s: Site): ElementTNode | null {
-	// An if-set anchors to the nearest enclosing element, or null (this.ref_elem).
-	if (isIfSetSite(s)) return s.parentElement;
+	// A set or loop anchors to the nearest enclosing element, or null (this.ref_elem).
+	if (isIfSetSite(s) || isLoopSite(s)) return s.parentElement;
 	switch (s.site.kind) {
 		case 'attr': return s.site.element;
 		case 'print': return s.site.parentElement;

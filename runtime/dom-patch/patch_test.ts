@@ -1,9 +1,9 @@
 import { assertEquals } from "jsr:@std/assert";
 import { JSDOM } from "npm:jsdom";
 
-import { BackflipElement, BackflipShell, PatchBranch, replaceBetween, type BranchDesc, type SetDesc } from "./patch.ts";
+import { BackflipElement, BackflipShell, PatchBranch, replaceBetween, type BranchDesc, type ItemRange, type LoopDesc, type SetDesc } from "./patch.ts";
 import { enqueue, flush, storeChanged } from "./flush.ts";
-import type { IfRNode, rfn } from "../js/render.ts";
+import type { ForRNode, IfRNode, rfn } from "../js/render.ts";
 
 function parentWith(innerHtml: string) {
 	const dom = new JSDOM(`<!DOCTYPE html><body><div>${innerHtml}</div></body>`);
@@ -957,4 +957,846 @@ Deno.test("BackflipElement: an author subclass can spread super.observedAttribut
 		static override get observedAttributes() { return [...super.observedAttributes, 'extra']; }
 	}
 	assertEquals(Authored.observedAttributes, ['title', 'extra']);
+});
+
+// --- PatchBranch: limited to a b-for item's nodes ----------------------------
+//
+// Items share a parent and repeat each other's data-bfids and markers, so a branch
+// given an item range sees only that item.
+
+function loop(...items: string[]): string {
+	return `<!--ls-->${items.map(i => `<!--it-->${i}`).join('')}<!--le-->`;
+}
+
+function itemRange(el: Element, n: number, itemMarker = 'it', endMarker = 'le'): ItemRange {
+	const opening = [...el.childNodes].filter(c => c.nodeType === 8 && c.nodeValue === itemMarker);
+	return { start: opening[n], itemMarker, endMarker };
+}
+
+// A branch for item `n` of the loop in `el`, as the runtime builds one.
+function itemBranch(desc: BranchDesc, el: Element, n: number, data: Record<string, unknown> = {}): PatchBranch {
+	return new PatchBranch(desc, el, data, el, itemRange(el, n));
+}
+
+const TITLE_SITE: BranchDesc = { sites: [{ bfid: 'x', attr: 'title', expr: expr('v', ['v']) }], sets: [] };
+const TITLES = (el: Element) => [...el.querySelectorAll('[data-bfid="x"]')].map(e => e.getAttribute('title'));
+
+Deno.test("item range: an attr site patches only its own item's copy", () => {
+	const { el } = host(loop(`<li data-bfid="x" title="a"></li>`, `<li data-bfid="x" title="b"></li>`));
+	const { errors } = captureErrors(() => itemBranch(TITLE_SITE, el, 1).update({ v: 'new' }));
+	assertEquals(errors, []);
+	assertEquals(TITLES(el), ['a', 'new']);
+});
+
+Deno.test("item range: finds an anchor nested inside an item's root", () => {
+	const { el } = host(loop(`<li><b data-bfid="x" title="a"></b></li>`, `<li><b data-bfid="x" title="b"></b></li>`));
+	const { errors } = captureErrors(() => itemBranch(TITLE_SITE, el, 0).update({ v: 'new' }));
+	assertEquals(errors, []);
+	assertEquals(TITLES(el), ['new', 'b']);
+});
+
+Deno.test("item range: a print inside an element patches only its own item's copy", () => {
+	const { el } = host(loop(`<li data-bfid="p"><!--m0-->a<!--m1--></li>`, `<li data-bfid="p"><!--m0-->b<!--m1--></li>`));
+	const desc: BranchDesc = { sites: [{ bfid: 'p', markers: ['m0', 'm1'], expr: expr('v', ['v']) }], sets: [] };
+	const { errors } = captureErrors(() => itemBranch(desc, el, 1).update({ v: 'new' }));
+	assertEquals(errors, []);
+	assertEquals([...el.querySelectorAll('li')].map(li => li.textContent), ['a', 'new']);
+});
+
+Deno.test("item range: a print directly in the item uses its own repeated markers", () => {
+	const { el } = host(loop(`<!--m0-->a<!--m1-->`, `<!--m0-->b<!--m1-->`));
+	const desc: BranchDesc = { sites: [{ bfid: null, markers: ['m0', 'm1'], expr: expr('v', ['v']) }], sets: [] };
+	const { errors } = captureErrors(() => itemBranch(desc, el, 0).update({ v: 'new' }));
+	assertEquals(errors, []);
+	assertEquals(el.innerHTML, loop(`<!--m0-->new<!--m1-->`, `<!--m0-->b<!--m1-->`));
+});
+
+Deno.test("item range: an anchor found only in a sibling item is reported, and the sibling is left alone", () => {
+	const { el } = host(loop(`<li data-bfid="x" title="a"></li>`, `<li></li>`));
+	const { errors } = captureErrors(() => itemBranch(TITLE_SITE, el, 1).update({ v: 'new' }));
+	assertEquals(errors.length, 1);
+	assertEquals(TITLES(el), ['a']);
+});
+
+Deno.test("item range: an anchor repeated within the item is reported, and neither copy is patched", () => {
+	const { el } = host(loop(`<li data-bfid="x" title="a"></li><li data-bfid="x" title="b"></li>`));
+	const { errors } = captureErrors(() => itemBranch(TITLE_SITE, el, 0).update({ v: 'new' }));
+	assertEquals(errors.length, 1);
+	assertEquals(TITLES(el), ['a', 'b']);
+});
+
+Deno.test("item range: a marker repeated within the item is reported", () => {
+	const { el } = host(loop(`<!--m0-->a<!--m1--><!--m0-->b<!--m1-->`));
+	const desc: BranchDesc = { sites: [{ bfid: null, markers: ['m0', 'm1'], expr: expr('v', ['v']) }], sets: [] };
+	const { errors } = captureErrors(() => itemBranch(desc, el, 0).update({ v: 'new' }));
+	assertEquals(errors.length, 1);
+});
+
+Deno.test("item range: stops at the loop's end marker and ignores what surrounds the loop", () => {
+	const { el } = host(`<li data-bfid="x" title="before"></li>${loop(`<li data-bfid="x" title="a"></li>`)}<li data-bfid="x" title="after"></li>`);
+	const { errors } = captureErrors(() => itemBranch(TITLE_SITE, el, 0).update({ v: 'new' }));
+	assertEquals(errors, []);
+	assertEquals(TITLES(el), ['before', 'new', 'after']);
+});
+
+Deno.test("item range: an empty item has nothing to find", () => {
+	const { el } = host(loop(``, `<li data-bfid="x" title="b"></li>`));
+	const { errors } = captureErrors(() => itemBranch(TITLE_SITE, el, 0).update({ v: 'new' }));
+	assertEquals(errors.length, 1);
+	assertEquals(TITLES(el), ['b']);
+});
+
+Deno.test("item range: an anchor inside a nested instance of the same tag is not this branch's", () => {
+	const { el } = host(loop(`<my-el><li data-bfid="x" title="nested"></li></my-el><li data-bfid="x" title="own"></li>`));
+	const { errors } = captureErrors(() => itemBranch(TITLE_SITE, el, 0).update({ v: 'new' }));
+	assertEquals(errors, []);
+	assertEquals(TITLES(el), ['nested', 'new']);
+});
+
+Deno.test("item range: a branch keeps patching its own item after the item's nodes move", () => {
+	const { el } = host(loop(`<li data-bfid="x" title="a"></li>`, `<li data-bfid="x" title="b"></li>`));
+	const pb = itemBranch(TITLE_SITE, el, 1);
+	const [first] = [...el.childNodes].filter(c => c.nodeValue === 'it');
+	const second = pb.range!.start;
+	first.before(second, second.nextSibling!);
+	const { errors } = captureErrors(() => pb.update({ v: 'new' }));
+	assertEquals(errors, []);
+	assertEquals(TITLES(el), ['new', 'a']);
+});
+
+// Sets directly in an item, on the parent element: their markers repeat across items.
+
+const SET_ITEM_A = (name: string) => `<!--s0--><!--b0--><p data-bfid="p">Hi <!--n0-->${name}<!--n1--></p><!--s1-->`;
+
+Deno.test("item range: a set reads the branch rendered in its own item", () => {
+	const { el } = host(loop(SERVER_ELSE, SERVER_A));
+	const desc: BranchDesc = { sites: [], sets: [SET] };
+	assertEquals(itemBranch(desc, el, 0).sets[0].active, 1);
+	assertEquals(itemBranch(desc, el, 1).sets[0].active, 0);
+});
+
+Deno.test("item range: a set swaps its branch in its own item only", () => {
+	const { el } = host(loop(SET_ITEM_A('one'), SET_ITEM_A('two')));
+	const pb = itemBranch({ sites: [], sets: [SET] }, el, 0, { mode: 'a', name: 'one' });
+	const { errors } = captureErrors(() => pb.update({ mode: 'b', name: 'one' }));
+	assertEquals(errors, []);
+	assertEquals(el.innerHTML, loop(SERVER_ELSE, SET_ITEM_A('two')));
+});
+
+Deno.test("item range: a set's live branch patches within the item", () => {
+	const { el } = host(loop(SET_ITEM_A('one'), SET_ITEM_A('two')));
+	const pb = itemBranch({ sites: [], sets: [SET] }, el, 1, { mode: 'a', name: 'two' });
+	const { errors } = captureErrors(() => pb.update({ mode: 'a', name: 'new' }));
+	assertEquals(errors, []);
+	assertEquals(el.innerHTML, loop(SET_ITEM_A('one'), SET_ITEM_A('new')));
+});
+
+Deno.test("item range: a branch swapped in by a set patches within the item", () => {
+	const { el } = host(loop(SET_ITEM_A('one'), SERVER_ELSE));
+	const pb = itemBranch({ sites: [], sets: [SET] }, el, 1, { mode: 'b', name: 'x' });
+	const { errors } = captureErrors(() => {
+		pb.update({ mode: 'a', name: 'two' });
+		pb.update({ mode: 'a', name: 'new' });
+	});
+	assertEquals(errors, []);
+	assertEquals(el.innerHTML, loop(SET_ITEM_A('one'), SET_ITEM_A('new')));
+});
+
+Deno.test("item range: a set nested in a set's branch stays within the item", () => {
+	const inner: IfRNode = { type: 'if', branches: [
+		{ condition: expr('on', ['on']), nodes: [{ type: 'comment', text: 'ib0' }, { type: 'raw', raw: '<u>on</u>' }] },
+		{ nodes: [{ type: 'comment', text: 'ib1' }, { type: 'raw', raw: '<u>off</u>' }] },
+	] };
+	const innerSet: SetDesc = { bfid: null, markers: ['i0', 'i1'], snapshot: inner, branches: [null, null], branchMarkers: ['ib0', 'ib1'] };
+	const outer: IfRNode = { type: 'if', branches: [{ condition: expr('show', ['show']), nodes: [] }] };
+	const outerSet: SetDesc = { bfid: null, markers: ['s0', 's1'], snapshot: outer, branches: [{ sites: [], sets: [innerSet] }], branchMarkers: ['b0'] };
+	const item = (word: string, marker: string) => `<!--s0--><!--b0--><!--i0--><!--${marker}--><u>${word}</u><!--i1--><!--s1-->`;
+	const { el } = host(loop(item('on', 'ib0'), item('on', 'ib0')));
+	const pb = itemBranch({ sites: [], sets: [outerSet] }, el, 1, { show: true, on: true });
+	const { errors } = captureErrors(() => pb.update({ show: true, on: false }));
+	assertEquals(errors, []);
+	assertEquals(el.innerHTML, loop(item('on', 'ib0'), item('off', 'ib1')));
+});
+
+Deno.test("item range: a set anchored to an element in the item patches against that element", () => {
+	const anchored: SetDesc = { ...SET, bfid: 'w' };
+	const item = (body: string) => `<div data-bfid="w">${body}</div>`;
+	const { el } = host(loop(item(SET_ITEM_A('one')), item(SET_ITEM_A('two'))));
+	const pb = itemBranch({ sites: [], sets: [anchored] }, el, 1, { mode: 'a', name: 'two' });
+	assertEquals(pb.sets[0].children.get(0)!.refElem, el.querySelectorAll('div')[1]);
+	assertEquals(pb.sets[0].children.get(0)!.range, undefined);
+	const { errors } = captureErrors(() => pb.update({ mode: 'a', name: 'new' }));
+	assertEquals(errors, []);
+	assertEquals(el.innerHTML, loop(item(SET_ITEM_A('one')), item(SET_ITEM_A('new'))));
+});
+
+// A loop directly in another loop's item: both sets of markers sit under one parent.
+
+const NESTED_LOOPS = `<!--ls--><!--it-->`
+	+ `<!--ils--><!--iit--><b data-bfid="x" title="1"></b><!--iit--><b data-bfid="x" title="2"></b><!--ile-->`
+	+ `<i data-bfid="o" title="outer"></i>`
+	+ `<!--it--><i data-bfid="o" title="other"></i><!--le-->`;
+
+Deno.test("item range: an outer item runs past an inner loop's markers", () => {
+	const { el } = host(NESTED_LOOPS);
+	const desc: BranchDesc = { sites: [{ bfid: 'o', attr: 'title', expr: expr('v', ['v']) }], sets: [] };
+	const { errors } = captureErrors(() => itemBranch(desc, el, 0).update({ v: 'new' }));
+	assertEquals(errors, []);
+	assertEquals([...el.querySelectorAll('i')].map(i => i.title), ['new', 'other']);
+});
+
+Deno.test("item range: an inner item is limited to itself", () => {
+	const { el } = host(NESTED_LOOPS);
+	const range = itemRange(el, 1, 'iit', 'ile');
+	const { errors } = captureErrors(() => new PatchBranch(TITLE_SITE, el, {}, el, range).update({ v: 'new' }));
+	assertEquals(errors, []);
+	assertEquals(TITLES(el), ['1', 'new']);
+});
+
+Deno.test("item range: an inner item does not reach past its loop's end marker", () => {
+	const { el } = host(NESTED_LOOPS);
+	const desc: BranchDesc = { sites: [{ bfid: 'o', attr: 'title', expr: expr('v', ['v']) }], sets: [] };
+	const range = itemRange(el, 1, 'iit', 'ile');
+	const { errors } = captureErrors(() => new PatchBranch(desc, el, {}, el, range).update({ v: 'new' }));
+	assertEquals(errors.length, 1);
+	assertEquals([...el.querySelectorAll('i')].map(i => i.title), ['outer', 'other']);
+});
+
+// --- PatchBranch: b-for loops, pairing and updating ---------------------------
+
+const LOOP: LoopDesc = {
+	bfid: null, markers: ['ls', 'le'], itemMarker: 'it', key: expr('x.id', ['x']),
+	snapshot: { type: 'for', iterable: expr('xs', ['xs']), valName: 'x', nodes: [
+		{ type: 'comment', text: 'it' },
+		{ type: 'raw', raw: '<li data-bfid="x" title="' },
+		{ type: 'print', data: expr('x.name', ['x']) },
+		{ type: 'raw', raw: '"></li>' },
+	] },
+	item: { sites: [{ bfid: 'x', attr: 'title', expr: expr('x.name', ['x']) }], sets: [] },
+};
+const FOR = (over: Partial<ForRNode>): ForRNode => ({ ...LOOP.snapshot, ...over });
+const LOOP_ROOT: BranchDesc = { sites: [], sets: [], loops: [LOOP] };
+const li = (name: string) => `<li data-bfid="x" title="${name}"></li>`;
+const AB = [{ id: 1, name: 'A' }, { id: 2, name: 'B' }];
+
+Deno.test("loop: at init the Nth key is paired with the Nth item marker", () => {
+	const { el } = host(loop(li('A'), li('B')));
+	const pb = new PatchBranch(LOOP_ROOT, el, { xs: AB });
+	const markers = [...el.childNodes].filter(c => c.nodeValue === 'it');
+	const items = pb.loops[0].items!;
+	assertEquals([...items.keys()], [1, 2]);
+	assertEquals(items.get(1)!.range!.start, markers[0]);
+	assertEquals(items.get(2)!.range!.start, markers[1]);
+});
+
+Deno.test("loop: pairing comes from the data, so it writes nothing to the DOM", () => {
+	const { el } = host(loop(li('A'), li('B')));
+	const records = mutations(el, () => {
+		const pb = new PatchBranch(LOOP_ROOT, el, { xs: AB });
+		pb.update({ xs: AB });
+	});
+	assertEquals(records, []);
+});
+
+Deno.test("loop: an empty list pairs with no items", () => {
+	const { el } = host(loop());
+	const { result: pb, errors } = captureErrors(() => new PatchBranch(LOOP_ROOT, el, { xs: [] }));
+	assertEquals(errors, []);
+	assertEquals(pb.loops[0].items!.size, 0);
+});
+
+Deno.test("loop: a changed item is updated in place, and the other items are not touched", () => {
+	const { el } = host(loop(li('A'), li('B')));
+	const pb = new PatchBranch(LOOP_ROOT, el, { xs: AB });
+	const [first, second] = el.querySelectorAll('li');
+	const records = mutations(el, () => pb.update({ xs: [{ id: 1, name: 'A' }, { id: 2, name: 'New' }] }));
+	assertEquals(records.length, 1);
+	assertEquals(records[0].target, second);
+	assertEquals([first.title, second.title], ['A', 'New']);
+	assertEquals([...el.querySelectorAll('li')], [first, second]);
+});
+
+Deno.test("loop: an item's sites read the enclosing data too", () => {
+	const desc: LoopDesc = { ...LOOP, item: { sites: [{ bfid: 'x', attr: 'title', expr: expr('x.name + suffix', ['x', 'suffix']) }], sets: [] } };
+	const { el } = host(loop(li('A!'), li('B!')));
+	const pb = new PatchBranch({ sites: [], sets: [], loops: [desc] }, el, { xs: AB, suffix: '!' });
+	pb.update({ xs: AB, suffix: '?' });
+	assertEquals(TITLES(el), ['A?', 'B?']);
+});
+
+Deno.test("loop: a loop name shadows the same name in the enclosing data", () => {
+	const { el } = host(loop(li('A')));
+	const pb = new PatchBranch(LOOP_ROOT, el, { xs: [AB[0]], x: { id: 9, name: 'outer' } });
+	pb.update({ xs: [{ id: 1, name: 'New' }], x: { id: 9, name: 'outer' } });
+	assertEquals(TITLES(el), ['New']);
+});
+
+Deno.test("loop: the index name is bound to the item's position", () => {
+	const desc: LoopDesc = { ...LOOP, snapshot: FOR({ indexName: 'i' }), item: { sites: [{ bfid: 'x', attr: 'title', expr: expr('i', ['i']) }], sets: [] } };
+	const { el } = host(loop(li('0'), li('1')));
+	const pb = new PatchBranch({ sites: [], sets: [], loops: [desc] }, el, { xs: AB });
+	const { errors } = captureErrors(() => pb.update({ xs: AB }));
+	assertEquals(errors, []);
+	assertEquals(TITLES(el), ['0', '1']);
+});
+
+Deno.test("loop: a key can be the index", () => {
+	const desc: LoopDesc = { ...LOOP, snapshot: FOR({ indexName: 'i' }), key: expr('i', ['i']) };
+	const { el } = host(loop(li('A'), li('A')));
+	const pb = new PatchBranch({ sites: [], sets: [], loops: [desc] }, el, { xs: [{ name: 'A' }, { name: 'A' }] });
+	assertEquals([...pb.loops[0].items!.keys()], [0, 1]);
+	pb.update({ xs: [{ name: 'A' }, { name: 'B' }] });
+	assertEquals(TITLES(el), ['A', 'B']);
+});
+
+Deno.test("loop: with no value name the item is not bound", () => {
+	const desc: LoopDesc = { ...LOOP, snapshot: FOR({ valName: undefined, indexName: 'i' }), key: expr('i', ['i']),
+		item: { sites: [{ bfid: 'x', attr: 'title', expr: expr('typeof x', ['x']) }], sets: [] } };
+	const { el } = host(loop(li('undefined')));
+	const pb = new PatchBranch({ sites: [], sets: [], loops: [desc] }, el, { xs: [1] });
+	assertEquals(mutations(el, () => pb.update({ xs: [1] })), []);
+});
+
+Deno.test("loop: keys may be strings or numbers, which stay distinct", () => {
+	const { el } = host(loop(li('A'), li('B')));
+	const pb = new PatchBranch(LOOP_ROOT, el, { xs: [{ id: 1, name: 'A' }, { id: '1', name: 'B' }] });
+	const { errors } = captureErrors(() => pb.update({ xs: [{ id: 1, name: 'A' }, { id: '1', name: 'New' }] }));
+	assertEquals(errors, []);
+	assertEquals(TITLES(el), ['A', 'New']);
+});
+
+Deno.test("loop: anchored to an element, it stays inside that element", () => {
+	const desc: LoopDesc = { ...LOOP, bfid: 'u' };
+	const { el } = host(`<ul data-bfid="u">${loop(li('A'), li('B'))}</ul>`);
+	const pb = new PatchBranch({ sites: [], sets: [], loops: [desc] }, el, { xs: AB });
+	pb.update({ xs: [AB[0], { id: 2, name: 'New' }] });
+	assertEquals(TITLES(el), ['A', 'New']);
+});
+
+Deno.test("loop: other comments among the items are not item markers", () => {
+	const { el } = host(loop(`<!--author-->${li('A')}`, li('B')));
+	const { result: pb, errors } = captureErrors(() => new PatchBranch(LOOP_ROOT, el, { xs: AB }));
+	assertEquals(errors, []);
+	assertEquals(pb.loops[0].items!.size, 2);
+});
+
+Deno.test("loop: sibling content around the loop is left alone", () => {
+	const { el } = host(`<li data-bfid="x" title="before"></li>${loop(li('A'))}<li data-bfid="x" title="after"></li>`);
+	const pb = new PatchBranch(LOOP_ROOT, el, { xs: [AB[0]] });
+	const { errors } = captureErrors(() => pb.update({ xs: [{ id: 1, name: 'New' }] }));
+	assertEquals(errors, []);
+	assertEquals(TITLES(el), ['before', 'New', 'after']);
+});
+
+// A set in each item, on the parent, whose condition reads the item.
+
+const ITEM_SET: SetDesc = {
+	bfid: null, markers: ['s0', 's1'], branchMarkers: ['b0', 'b1'], branches: [null, null],
+	snapshot: { type: 'if', branches: [
+		{ condition: expr('x.on', ['x']), nodes: [{ type: 'comment', text: 'b0' }, { type: 'raw', raw: '<u>on</u>' }] },
+		{ nodes: [{ type: 'comment', text: 'b1' }, { type: 'raw', raw: '<u>off</u>' }] },
+	] },
+};
+const on = `<!--s0--><!--b0--><u>on</u><!--s1-->`;
+const off = `<!--s0--><!--b1--><u>off</u><!--s1-->`;
+
+Deno.test("loop: a b-if in an item reads the item, and swaps within it", () => {
+	const desc: LoopDesc = { ...LOOP, item: { sites: [], sets: [ITEM_SET] } };
+	const { el } = host(loop(on, off));
+	const pb = new PatchBranch({ sites: [], sets: [], loops: [desc] }, el, { xs: [{ id: 1, on: true }, { id: 2, on: false }] });
+	const { errors } = captureErrors(() => pb.update({ xs: [{ id: 1, on: false }, { id: 2, on: false }] }));
+	assertEquals(errors, []);
+	assertEquals(el.innerHTML, loop(off, off));
+});
+
+Deno.test("loop: inside a set's branch, it is built with that branch and sees its range", () => {
+	const set: SetDesc = {
+		bfid: null, markers: ['s0', 's1'], branchMarkers: ['b0'],
+		snapshot: { type: 'if', branches: [{ condition: expr('show', ['show']), nodes: [] }] },
+		branches: [{ sites: [], sets: [], loops: [LOOP] }],
+	};
+	const { el } = host(`<!--s0--><!--b0-->${loop(li('A'), li('B'))}<!--s1-->`);
+	const pb = new PatchBranch({ sites: [], sets: [set] }, el, { show: true, xs: AB });
+	const { errors } = captureErrors(() => pb.update({ show: true, xs: [AB[0], { id: 2, name: 'New' }] }));
+	assertEquals(errors, []);
+	assertEquals(TITLES(el), ['A', 'New']);
+});
+
+// Loops nested in loops.
+
+const INNER_LOOP = (bfid: string | null): LoopDesc => ({
+	bfid, markers: ['ils', 'ile'], itemMarker: 'iit',
+	key: expr('c.id', ['c']),
+	snapshot: { type: 'for', iterable: expr('r.cells', ['r']), valName: 'c', nodes: [
+		{ type: 'comment', text: 'iit' },
+		{ type: 'raw', raw: '<li data-bfid="x" title="' },
+		{ type: 'print', data: expr('c.name + r.tag', ['c', 'r']) },
+		{ type: 'raw', raw: '"></li>' },
+	] },
+	item: { sites: [{ bfid: 'x', attr: 'title', expr: expr('c.name + r.tag', ['c', 'r']) }], sets: [] },
+});
+const ROWS = (tag: string) => [
+	{ id: 'r1', tag, cells: [{ id: 1, name: 'a' }, { id: 2, name: 'b' }] },
+	{ id: 'r2', tag, cells: [{ id: 1, name: 'c' }] },
+];
+const OUTER_LOOP = (inner: LoopDesc): BranchDesc => ({ sites: [], sets: [], loops: [{
+	...LOOP, key: expr('r.id', ['r']),
+	snapshot: { type: 'for', iterable: expr('rows', ['rows']), valName: 'r', nodes: [
+		{ type: 'comment', text: 'it' },
+		...(inner.bfid ? [{ type: 'raw', raw: `<ul data-bfid="${inner.bfid}">` } as const] : []),
+		{ type: 'comment', text: 'ils' },
+		inner.snapshot,
+		{ type: 'comment', text: 'ile' },
+		...(inner.bfid ? [{ type: 'raw', raw: '</ul>' } as const] : []),
+	] },
+	item: { sites: [], sets: [], loops: [inner] },
+}] });
+const innerLoop = (...items: string[]) => `<!--ils-->${items.map(i => `<!--iit-->${i}`).join('')}<!--ile-->`;
+
+Deno.test("loop: nested directly under the same parent, each inner loop stays in its outer item", () => {
+	const html = loop(innerLoop(li('a'), li('b')), innerLoop(li('c')));
+	const { el } = host(html);
+	const pb = new PatchBranch(OUTER_LOOP(INNER_LOOP(null)), el, { rows: ROWS('') });
+	const { errors } = captureErrors(() => pb.update({ rows: ROWS('!') }));
+	assertEquals(errors, []);
+	assertEquals(TITLES(el), ['a!', 'b!', 'c!']);
+});
+
+Deno.test("loop: nested in an element of each outer item, each inner loop finds its own element", () => {
+	const row = (...items: string[]) => `<ul data-bfid="u">${innerLoop(...items)}</ul>`;
+	const { el } = host(loop(row(li('a'), li('b')), row(li('c'))));
+	const pb = new PatchBranch(OUTER_LOOP(INNER_LOOP('u')), el, { rows: ROWS('') });
+	const { errors } = captureErrors(() => pb.update({ rows: ROWS('!') }));
+	assertEquals(errors, []);
+	assertEquals(TITLES(el), ['a!', 'b!', 'c!']);
+});
+
+// What cannot be paired: reported, and the loop is left as rendered.
+
+for (const [label, xs] of [
+	['an object', { a: AB[0] }],
+	['a string', 'ab'],
+	['null', null],
+	['undefined', undefined],
+] as const) {
+	Deno.test(`loop: over ${label} at init is reported, and the loop stays as rendered`, () => {
+		const { el } = host(loop(li('A')));
+		const { result: pb, errors } = captureErrors(() => new PatchBranch(LOOP_ROOT, el, { xs }));
+		assertEquals(errors.length, 1);
+		assertEquals(pb.loops[0].items, null);
+		const later = captureErrors(() => pb.update({ xs: [{ id: 1, name: 'New' }] }));
+		assertEquals(later.errors, []);
+		assertEquals(TITLES(el), ['A']);
+	});
+}
+
+for (const [label, html, xs] of [
+	['more items than markers', loop(li('A')), AB],
+	['more markers than items', loop(li('A'), li('B')), [AB[0]]],
+	['items and no markers', loop(), AB],
+] as const) {
+	Deno.test(`loop: ${label} at init is reported, and the loop stays as rendered`, () => {
+		const { el } = host(html);
+		const { result: pb, errors } = captureErrors(() => new PatchBranch(LOOP_ROOT, el, { xs }));
+		assertEquals(errors.length, 1);
+		assertEquals(pb.loops[0].items, null);
+		const before = el.innerHTML;
+		captureErrors(() => pb.update({ xs: [{ id: 1, name: 'New' }] }));
+		assertEquals(el.innerHTML, before);
+	});
+}
+
+const BAD_KEYS: [string, unknown[]][] = [
+	['a duplicate key', [{ id: 1, name: 'A' }, { id: 1, name: 'B' }]],
+	['a null key', [{ id: 1, name: 'A' }, { id: null, name: 'B' }]],
+	['a missing key', [{ id: 1, name: 'A' }, { name: 'B' }]],
+	['a boolean key', [{ id: 1, name: 'A' }, { id: true, name: 'B' }]],
+	['an object key', [{ id: 1, name: 'A' }, { id: {}, name: 'B' }]],
+	['a non-finite key', [{ id: 1, name: 'A' }, { id: NaN, name: 'B' }]],
+	['a key that throws', [{ id: 1, name: 'A' }, null]],
+];
+
+for (const [label, xs] of BAD_KEYS) {
+	Deno.test(`loop: ${label} at init is reported, and the loop stays as rendered`, () => {
+		const { el } = host(loop(li('A'), li('B')));
+		const { result: pb, errors } = captureErrors(() => new PatchBranch(LOOP_ROOT, el, { xs }));
+		assertEquals(errors.length, 1);
+		assertEquals(pb.loops[0].items, null);
+	});
+
+	Deno.test(`loop: ${label} on update is reported, nothing is patched, and the next update recovers`, () => {
+		const { el } = host(loop(li('A'), li('B')));
+		const pb = new PatchBranch(LOOP_ROOT, el, { xs: AB });
+		const { errors } = captureErrors(() => pb.update({ xs }));
+		assertEquals(errors.length, 1);
+		assertEquals(TITLES(el), ['A', 'B']);
+		pb.update({ xs: [{ id: 1, name: 'New' }, AB[1]] });
+		assertEquals(TITLES(el), ['New', 'B']);
+	});
+}
+
+for (const [label, xs] of [['an object', { a: 1 }], ['null', null]] as const) {
+	Deno.test(`loop: over ${label} on update is reported, nothing is patched, and the next update recovers`, () => {
+		const { el } = host(loop(li('A'), li('B')));
+		const pb = new PatchBranch(LOOP_ROOT, el, { xs: AB });
+		const { errors } = captureErrors(() => pb.update({ xs }));
+		assertEquals(errors.length, 1);
+		assertEquals(TITLES(el), ['A', 'B']);
+		pb.update({ xs: [{ id: 1, name: 'New' }, AB[1]] });
+		assertEquals(TITLES(el), ['New', 'B']);
+	});
+}
+
+Deno.test("loop: an iterable that throws at init is reported, and the loop stays as rendered", () => {
+	const desc: LoopDesc = { ...LOOP, snapshot: FOR({ iterable: expr('o.xs', ['o']) }) };
+	const { el } = host(loop(li('A')));
+	const { result: pb, errors } = captureErrors(() => new PatchBranch({ sites: [], sets: [], loops: [desc] }, el, {}));
+	assertEquals(errors.length, 1);
+	assertEquals(pb.loops[0].items, null);
+});
+
+Deno.test("loop: an iterable that throws on update is reported, and the next update recovers", () => {
+	const desc: LoopDesc = { ...LOOP, snapshot: FOR({ iterable: expr('o.xs', ['o']) }) };
+	const { el } = host(loop(li('A'), li('B')));
+	const pb = new PatchBranch({ sites: [], sets: [], loops: [desc] }, el, { o: { xs: AB } });
+	const { errors } = captureErrors(() => pb.update({}));
+	assertEquals(errors.length, 1);
+	assertEquals(TITLES(el), ['A', 'B']);
+	pb.update({ o: { xs: [{ id: 1, name: 'New' }, AB[1]] } });
+	assertEquals(TITLES(el), ['New', 'B']);
+});
+
+Deno.test("loop: a missing anchor is reported, and the loop stays as rendered", () => {
+	const desc: LoopDesc = { ...LOOP, bfid: 'nope' };
+	const { el } = host(loop(li('A')));
+	const { result: pb, errors } = captureErrors(() => new PatchBranch({ sites: [], sets: [], loops: [desc] }, el, { xs: [AB[0]] }));
+	assertEquals(errors.length, 1);
+	assertEquals(pb.loops[0].items, null);
+});
+
+Deno.test("loop: missing markers are reported, and the loop stays as rendered", () => {
+	const { el } = host(li('A'));
+	const { result: pb, errors } = captureErrors(() => new PatchBranch(LOOP_ROOT, el, { xs: [AB[0]] }));
+	assertEquals(errors.length, 1);
+	assertEquals(pb.loops[0].items, null);
+});
+
+// Driven by a shell, the way a generated module drives it.
+
+Deno.test("loop: a store change reaches the items through the shell", () => {
+	const { el } = host(loop(li('A'), li('B')));
+	const store = { data: { list: AB } };
+	class Shell extends BackflipShell {
+		static override bfStores = { store };
+		static override bfRoot: BranchDesc = { sites: [], sets: [], loops: [{ ...LOOP, snapshot: FOR({ iterable: expr('store.data.list', ['store']) }) }] };
+	}
+	new Shell(el);
+	const [first, second] = el.querySelectorAll('li');
+	store.data = { list: [AB[0], { id: 2, name: 'New' }] };
+	storeChanged(store);
+	flush();
+	assertEquals([first.title, second.title], ['A', 'New']);
+});
+
+// --- PatchBranch: b-for loops, adding, removing and moving items ---------------
+
+const XS = (...ids: string[]) => ids.map(id => ({ id, name: id }));
+
+// A rendered loop over items whose key and name are `ids`, with its branch and the
+// element each id started with.
+function started(...ids: string[]) {
+	const { el, doc } = host(loop(...ids.map(li)));
+	const pb = new PatchBranch(LOOP_ROOT, el, { xs: XS(...ids) });
+	const nodes = Object.fromEntries(ids.map((id, i) => [id, el.querySelectorAll('li')[i]]));
+	return { el, doc, pb, nodes };
+}
+
+// The nodes an update added or removed under `el`.
+function touched(records: MutationRecord[]): Node[] {
+	return records.flatMap(r => [...r.addedNodes, ...r.removedNodes]);
+}
+
+function permutations<T>(xs: T[]): T[][] {
+	if (xs.length <= 1) return [xs];
+	return xs.flatMap((x, i) => permutations([...xs.slice(0, i), ...xs.slice(i + 1)]).map(rest => [x, ...rest]));
+}
+
+for (const [label, before, after] of [
+	['at the end', ['a', 'b'], ['a', 'b', 'c']],
+	['at the start', ['a', 'b'], ['c', 'a', 'b']],
+	['in the middle', ['a', 'b'], ['a', 'c', 'b']],
+	['to an empty list', [], ['a', 'b']],
+	['several at once, apart', ['a', 'b'], ['c', 'a', 'd', 'b', 'e']],
+] as const) {
+	Deno.test(`loop: an item added ${label} is rendered, and the existing items keep their nodes`, () => {
+		const { el, pb, nodes } = started(...before);
+		const { errors } = captureErrors(() => pb.update({ xs: XS(...after) }));
+		assertEquals(errors, []);
+		assertEquals(el.innerHTML, loop(...after.map(li)));
+		for (const id of before) assertEquals(el.querySelectorAll('li')[(after as readonly string[]).indexOf(id)], nodes[id]);
+	});
+}
+
+Deno.test("loop: adding an item at the end touches nothing else", () => {
+	const { el, pb, nodes } = started('a', 'b');
+	const records = mutations(el, () => pb.update({ xs: XS('a', 'b', 'c') }));
+	const moved = touched(records);
+	assertEquals(moved.includes(nodes.a), false);
+	assertEquals(moved.includes(nodes.b), false);
+	assertEquals(records.flatMap(r => [...r.removedNodes]), []);
+});
+
+Deno.test("loop: an added item patches on later updates", () => {
+	const { el, pb } = started('a');
+	pb.update({ xs: XS('a', 'b') });
+	const { errors } = captureErrors(() => pb.update({ xs: [{ id: 'a', name: 'a' }, { id: 'b', name: 'new' }] }));
+	assertEquals(errors, []);
+	assertEquals(TITLES(el), ['a', 'new']);
+});
+
+Deno.test("loop: an added item is parsed in its parent's context", () => {
+	const row: LoopDesc = {
+		...LOOP, bfid: 't', snapshot: FOR({ nodes: [{ type: 'comment', text: 'it' }, { type: 'raw', raw: '<tr><td>' }, { type: 'print', data: expr('x.name', ['x']) }, { type: 'raw', raw: '</td></tr>' }] }),
+		item: { sites: [], sets: [] },
+	};
+	const dom = new JSDOM(`<!DOCTYPE html><body><my-el><table><tbody data-bfid="t"><!--ls--><!--le--></tbody></table></my-el></body>`);
+	const el = dom.window.document.querySelector('my-el')!;
+	const pb = new PatchBranch({ sites: [], sets: [], loops: [row] }, el, { xs: [] });
+	pb.update({ xs: XS('a') });
+	assertEquals(el.querySelector('tbody')!.innerHTML, '<!--ls--><!--it--><tr><td>a</td></tr><!--le-->');
+});
+
+Deno.test("loop: an added item's value is written as text, escaped", () => {
+	const { el, pb } = started();
+	pb.update({ xs: [{ id: 'a', name: '"><b>x</b>' }] });
+	assertEquals(el.querySelector('b'), null);
+	assertEquals(TITLES(el), ['"><b>x</b>']);
+});
+
+for (const [label, before, after] of [
+	['the first', ['a', 'b', 'c'], ['b', 'c']],
+	['the last', ['a', 'b', 'c'], ['a', 'b']],
+	['a middle', ['a', 'b', 'c'], ['a', 'c']],
+	['every', ['a', 'b'], []],
+] as const) {
+	Deno.test(`loop: removing ${label} item removes its nodes and leaves the rest in place`, () => {
+		const { el, pb, nodes } = started(...before);
+		const records = mutations(el, () => pb.update({ xs: XS(...after) }));
+		assertEquals(el.innerHTML, loop(...after.map(li)));
+		for (const id of after) assertEquals(touched(records).includes(nodes[id]), false);
+	});
+}
+
+Deno.test("loop: a removed item's whole range goes, however many nodes it has", () => {
+	const multi: LoopDesc = { ...LOOP, item: { sites: [], sets: [] } };
+	const body = (t: string) => `\n  <b>${t}</b>text<!--author--><i>${t}</i>\n`;
+	const { el } = host(loop(body('1'), body('2'), body('3')));
+	const pb = new PatchBranch({ sites: [], sets: [], loops: [multi] }, el, { xs: XS('a', 'b', 'c') });
+	pb.update({ xs: XS('a', 'c') });
+	assertEquals(el.innerHTML, loop(body('1'), body('3')));
+});
+
+Deno.test("loop: a removed item is no longer updated, and its key can come back as a new item", () => {
+	const { el, pb, nodes } = started('a', 'b');
+	pb.update({ xs: XS('a') });
+	const { errors } = captureErrors(() => pb.update({ xs: XS('a') }));
+	assertEquals(errors, []);
+	pb.update({ xs: XS('a', 'b') });
+	assertEquals(el.innerHTML, loop(li('a'), li('b')));
+	assertEquals(el.querySelectorAll('li')[1] === nodes.b, false);
+});
+
+for (const order of permutations(['a', 'b', 'c', 'd'])) {
+	Deno.test(`loop: moving to ${order.join('')} keeps every item's node`, () => {
+		const { el, pb, nodes } = started('a', 'b', 'c', 'd');
+		const { errors } = captureErrors(() => pb.update({ xs: XS(...order) }));
+		assertEquals(errors, []);
+		assertEquals(el.innerHTML, loop(...order.map(li)));
+		assertEquals([...el.querySelectorAll('li')], order.map(id => nodes[id]));
+	});
+}
+
+Deno.test("loop: a moved item's own state survives, since its DOM is never rebuilt", () => {
+	const { el, pb, nodes } = started('a', 'b', 'c');
+	(nodes.a as unknown as { mine: number }).mine = 1;
+	pb.update({ xs: XS('c', 'b', 'a') });
+	assertEquals((el.querySelectorAll('li')[2] as unknown as { mine: number }).mine, 1);
+});
+
+Deno.test("loop: an item already in place is not moved", () => {
+	const { el, pb, nodes } = started('a', 'b', 'c', 'd');
+	const records = mutations(el, () => pb.update({ xs: XS('a', 'c', 'b', 'd') }));
+	const moved = touched(records);
+	assertEquals(moved.includes(nodes.a), false);
+	assertEquals(moved.includes(nodes.b), false);
+	assertEquals(moved.includes(nodes.c), true);
+	assertEquals(moved.includes(nodes.d), false);
+});
+
+Deno.test("loop: an order that did not change touches no nodes", () => {
+	const { el, pb } = started('a', 'b', 'c');
+	assertEquals(mutations(el, () => pb.update({ xs: XS('a', 'b', 'c') })), []);
+});
+
+Deno.test("loop: a moved item takes all its nodes, in order", () => {
+	const multi: LoopDesc = { ...LOOP, item: { sites: [], sets: [] } };
+	const body = (t: string) => `\n<b>${t}</b>text<!--author--><i>${t}</i>\n`;
+	const { el } = host(loop(body('1'), body('2'), body('3')));
+	const pb = new PatchBranch({ sites: [], sets: [], loops: [multi] }, el, { xs: XS('a', 'b', 'c') });
+	pb.update({ xs: XS('c', 'a', 'b') });
+	assertEquals(el.innerHTML, loop(body('3'), body('1'), body('2')));
+});
+
+Deno.test("loop: a moved item's data and index update too", () => {
+	const desc: LoopDesc = {
+		...LOOP, snapshot: FOR({ indexName: 'i' }),
+		item: { sites: [{ bfid: 'x', attr: 'title', expr: expr('x.name + i', ['x', 'i']) }], sets: [] },
+	};
+	const { el } = host(loop(li('a0'), li('b1')));
+	const pb = new PatchBranch({ sites: [], sets: [], loops: [desc] }, el, { xs: XS('a', 'b') });
+	const [a, b] = el.querySelectorAll('li');
+	pb.update({ xs: [{ id: 'b', name: 'B' }, { id: 'a', name: 'a' }] });
+	assertEquals([...el.querySelectorAll('li')], [b, a]);
+	assertEquals(TITLES(el), ['B0', 'a1']);
+});
+
+Deno.test("loop: added, removed, moved and changed items in one update", () => {
+	const { el, pb, nodes } = started('a', 'b', 'c', 'd');
+	pb.update({ xs: [{ id: 'd', name: 'D' }, { id: 'e', name: 'e' }, { id: 'a', name: 'a' }, { id: 'f', name: 'f' }, { id: 'b', name: 'b' }] });
+	assertEquals(el.innerHTML, loop(li('D'), li('e'), li('a'), li('f'), li('b')));
+	const lis = el.querySelectorAll('li');
+	assertEquals([lis[0], lis[2], lis[4]], [nodes.d, nodes.a, nodes.b]);
+});
+
+Deno.test("loop: content around the loop stays put through changes", () => {
+	const { el } = host(`<p>before</p>${loop(li('a'), li('b'))}<p>after</p>`);
+	const pb = new PatchBranch(LOOP_ROOT, el, { xs: XS('a', 'b') });
+	pb.update({ xs: XS('c', 'b', 'a') });
+	assertEquals(el.innerHTML, `<p>before</p>${loop(li('c'), li('b'), li('a'))}<p>after</p>`);
+});
+
+Deno.test("loop: anchored to an element, its items change inside that element", () => {
+	const { el } = host(`<ul data-bfid="u">${loop(li('a'), li('b'))}</ul>`);
+	const pb = new PatchBranch({ sites: [], sets: [], loops: [{ ...LOOP, bfid: 'u' }] }, el, { xs: XS('a', 'b') });
+	pb.update({ xs: XS('b', 'c') });
+	assertEquals(el.innerHTML, `<ul data-bfid="u">${loop(li('b'), li('c'))}</ul>`);
+});
+
+// moveBefore, where the browser has it.
+
+for (const available of [true, false]) {
+	Deno.test(`loop: moves ${available ? 'with moveBefore when available' : 'with insertBefore otherwise'}`, () => {
+		const { el, pb, nodes } = started('a', 'b');
+		const calls: Node[] = [];
+		if (available) {
+			(el as unknown as { moveBefore: (n: Node, ref: Node) => void }).moveBefore = (n, ref) => {
+				calls.push(n);
+				el.insertBefore(n, ref);
+			};
+		}
+		pb.update({ xs: XS('b', 'a') });
+		assertEquals([...el.querySelectorAll('li')], [nodes.b, nodes.a]);
+		assertEquals(calls.includes(nodes.b), available);
+	});
+}
+
+// Items holding sets and loops of their own.
+
+Deno.test("loop: an added item's b-if works, and a moved item's keeps working", () => {
+	const nodes = [
+		{ type: 'comment', text: 'it' }, { type: 'comment', text: 's0' }, ITEM_SET.snapshot, { type: 'comment', text: 's1' },
+	] as ForRNode['nodes'];
+	const desc: LoopDesc = { ...LOOP, snapshot: FOR({ nodes }), item: { sites: [], sets: [ITEM_SET] } };
+	const { el } = host(loop(on));
+	const pb = new PatchBranch({ sites: [], sets: [], loops: [desc] }, el, { xs: [{ id: 1, on: true }] });
+	const { errors } = captureErrors(() => {
+		pb.update({ xs: [{ id: 2, on: false }, { id: 1, on: true }] });
+		pb.update({ xs: [{ id: 2, on: true }, { id: 1, on: false }] });
+	});
+	assertEquals(errors, []);
+	assertEquals(el.innerHTML, loop(on, off));
+});
+
+const ROW = (id: string, ...cells: string[]) => ({ id, tag: '', cells: cells.map(c => ({ id: c, name: c })) });
+
+for (const [label, bfid, row] of [
+	['under the same parent', null, (...items: string[]) => innerLoop(...items)],
+	['in an element', 'u', (...items: string[]) => `<ul data-bfid="u">${innerLoop(...items)}</ul>`],
+] as const) {
+	Deno.test(`loop: nested ${label}, an inner loop adds, removes and moves within its outer item`, () => {
+		const { el } = host(loop(row(li('a'), li('b')), row(li('c'))));
+		const pb = new PatchBranch(OUTER_LOOP(INNER_LOOP(bfid)), el, { rows: [ROW('r1', 'a', 'b'), ROW('r2', 'c')] });
+		const { errors } = captureErrors(() => pb.update({ rows: [ROW('r1', 'b', 'z', 'a'), ROW('r2')] }));
+		assertEquals(errors, []);
+		assertEquals(el.innerHTML, loop(row(li('b'), li('z'), li('a')), row()));
+	});
+
+	Deno.test(`loop: nested ${label}, a moved outer item keeps its inner items' nodes and keeps patching`, () => {
+		const { el } = host(loop(row(li('a'), li('b')), row(li('c'))));
+		const pb = new PatchBranch(OUTER_LOOP(INNER_LOOP(bfid)), el, { rows: [ROW('r1', 'a', 'b'), ROW('r2', 'c')] });
+		const [a, b, c] = el.querySelectorAll('li');
+		const { errors } = captureErrors(() => {
+			pb.update({ rows: [ROW('r2', 'c'), ROW('r1', 'a', 'b')] });
+			pb.update({ rows: [ROW('r2', 'c', 'n'), ROW('r1', 'b', 'a')] });
+		});
+		assertEquals(errors, []);
+		assertEquals(el.innerHTML, loop(row(li('c'), li('n')), row(li('b'), li('a'))));
+		const lis = el.querySelectorAll('li');
+		assertEquals([lis[0], lis[2], lis[3]], [c, b, a]);
+	});
+
+	Deno.test(`loop: nested ${label}, an added outer item renders its inner loop, which then patches`, () => {
+		const { el } = host(loop(row(li('a'))));
+		const pb = new PatchBranch(OUTER_LOOP(INNER_LOOP(bfid)), el, { rows: [ROW('r1', 'a')] });
+		const { errors } = captureErrors(() => {
+			pb.update({ rows: [ROW('r1', 'a'), ROW('r2', 'b')] });
+			pb.update({ rows: [ROW('r1', 'a'), ROW('r2', 'c', 'b')] });
+		});
+		assertEquals(errors, []);
+		assertEquals(el.innerHTML, loop(row(li('a')), row(li('c'), li('b'))));
+	});
+}
+
+// What goes wrong while changing the items.
+
+Deno.test("loop: an added item that fails to render is reported, nothing changes, and the next update recovers", () => {
+	const { el, pb } = started('a', 'b');
+	const before = el.innerHTML;
+	const { errors } = captureErrors(() => pb.update({ xs: [{ id: 'c', get name() { throw new Error('boom'); } }, { id: 'a', name: 'new' }] }));
+	assertEquals(errors.length, 1);
+	assertEquals(el.innerHTML, before);
+	pb.update({ xs: XS('c', 'a') });
+	assertEquals(el.innerHTML, loop(li('c'), li('a')));
+});
+
+Deno.test("loop: markers gone when items change are reported, nothing changes, and the next update recovers", () => {
+	const { el, pb } = started('a', 'b');
+	const end = [...el.childNodes].find(c => c.nodeValue === 'le')!;
+	end.remove();
+	const before = el.innerHTML;
+	const { errors } = captureErrors(() => pb.update({ xs: XS('b', 'a') }));
+	assertEquals(errors.length, 1);
+	assertEquals(el.innerHTML, before);
+	el.append(end);
+	pb.update({ xs: XS('b', 'a') });
+	assertEquals(el.innerHTML, loop(li('b'), li('a')));
+});
+
+// Driven by a shell, the way a generated module drives it.
+
+Deno.test("loop: store changes add, remove and move items through the shell", () => {
+	const { el } = host(loop(li('a'), li('b'), li('c')));
+	const store = { data: { list: XS('a', 'b', 'c') } };
+	class Shell extends BackflipShell {
+		static override bfStores = { store };
+		static override bfRoot: BranchDesc = { sites: [], sets: [], loops: [{ ...LOOP, snapshot: FOR({ iterable: expr('store.data.list', ['store']) }) }] };
+	}
+	new Shell(el);
+	const [a, , c] = el.querySelectorAll('li');
+	store.data = { list: XS('c', 'd', 'a') };
+	storeChanged(store);
+	flush();
+	assertEquals(el.innerHTML, loop(li('c'), li('d'), li('a')));
+	const lis = el.querySelectorAll('li');
+	assertEquals([lis[0], lis[2]], [c, a]);
 });

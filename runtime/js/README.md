@@ -11,6 +11,7 @@ See [`docs/runtime-js.md`](../../docs/runtime-js.md) for the full API reference,
 - `stores` holds store data by name; each rendered partial gets a `{ data }` object for every store it declares. See [docs/data-stores.md](../../docs/data-stores.md).
 - `execFn(rfn, ctx)` — evaluates a compiled expression against a context. Rendering uses it, and so do dom-patch modules to compute a patched value.
 - `activeBranchIndex(ifNode, ctx)` — the index of the branch an `if` node renders, or `-1` when none does. Rendering uses it, and so do dom-patch modules that swap a branch client-side.
+- `forItemCtx(names, ctx, item, index)` — the context of one loop item: `ctx` with the loop's names bound. Rendering uses it, and so do dom-patch modules that patch or add an item.
 
 ## Node types handled
 

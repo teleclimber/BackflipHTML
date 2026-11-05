@@ -12,9 +12,10 @@ import { forBoundNames } from './helpers.js';
  * - `attribute`: used as the value of an HTML attribute (e.g. via `b-bind:` / `:`).
  * - `boolean`: evaluated in a boolean context (b-if condition, ternary test, `!x`).
  * - `iterable`: iterated over in a `b-for` loop.
+ * - `key`: identifies a `b-for` item, via `b-key`.
  * - `passed`: forwarded to another partial via a `b-data:` binding.
  */
-export type UsageKind = 'printed' | 'attribute' | 'boolean' | 'iterable' | 'passed';
+export type UsageKind = 'printed' | 'attribute' | 'boolean' | 'iterable' | 'key' | 'passed';
 
 /**
  * Describes how a free variable (or one of its sub-paths) is used inside a partial's
@@ -438,13 +439,13 @@ function walkNodesForShape(
 
 				// Walk loop body with the loop's names scoped — collects free var shapes
 				const childScope = new Set([...scoped, ...forBoundNames(n)]);
-				if (n.key) collectFromParsed(n.key, 'printed', undefined, childScope, shapes);
+				if (n.key) collectFromParsed(n.key, 'key', undefined, childScope, shapes);
 				walkNodesForShape(n.tnodes, childScope, shapes);
 
 				// Walk again into temp map with valName NOT scoped to extract its shape
 				if (n.valName) {
 					const tempShapes = new Map<string, DataShape>();
-					if (n.key) collectFromParsed(n.key, 'printed', undefined, scoped, tempShapes);
+					if (n.key) collectFromParsed(n.key, 'key', undefined, scoped, tempShapes);
 					walkNodesForShape(n.tnodes, scoped, tempShapes);
 					const valShape = tempShapes.get(n.valName);
 					if (valShape) applyElementShape(n.iterable, valShape, scoped, shapes);

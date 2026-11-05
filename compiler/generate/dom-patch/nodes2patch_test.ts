@@ -118,14 +118,14 @@ Deno.test("end-to-end: live var declared but never used => no class", async () =
 	assertEquals(js, null);
 });
 
-Deno.test("end-to-end: attr inside b-for is skipped (v1 limitation)", async () => {
+Deno.test("end-to-end: attr inside a keyed b-for belongs to the loop's item", async () => {
 	const file = await compileCustomElement(
-		`<my-widget b-attr:title><ul><li b-for="item in items" b-key="item" :data-x="title">x</li></ul></my-widget>`
+		`<my-widget b-attr:title b-attr:items><ul><li b-for="item in items" b-key="item" :data-x="title">x</li></ul></my-widget>`
 	);
 	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen() });
-	// b-for is skipped (the for body contains other vars too like `items`/`item`).
-	// In this scenario the only attr site with `title` is inside the for, so no class.
-	assertEquals(js, null);
+	const root = evalModule(js!, 'my-widget').bfRoot;
+	assertEquals(root.sites, []);
+	assertEquals(root.loops[0].item.sites[0].attr, 'data-x');
 });
 
 Deno.test("end-to-end: a bool b-attr is declared bool, and a bool attr site is marked bool", async () => {
@@ -583,11 +583,11 @@ Deno.test("end-to-end: base and full modules also import BackflipElement", async
 
 Deno.test("end-to-end: disqualified if-sets get no markers and no class", async () => {
 	// One case per disqualifier: a partial ref in the subtree, a slot, and a set
-	// inside b-for.
+	// inside a non-reactive b-for.
 	const cases = [
 		`<my-widget b-attr:mode><p b-if="mode == 'a'"><other-thing></other-thing></p><em b-else>B</em></my-widget>`,
 		`<my-widget b-attr:mode><p b-if="mode == 'a'"><span b-slot></span></p><em b-else>B</em></my-widget>`,
-		`<my-widget b-attr:mode><ul><li b-for="i in items" b-key="i"><b b-if="mode == 'a'">A</b></li></ul></my-widget>`,
+		`<my-widget b-attr:mode b-attr:items><ul><li b-for="i in items" b-key="i"><other-thing></other-thing><b b-if="mode == 'a'">A</b></li></ul></my-widget>`,
 	];
 	for (const html of cases) {
 		const file = await compileCustomElement(html);
@@ -672,8 +672,14 @@ Deno.test("stores: the shell imports each store its code reads, by its resolved 
 	const file = await compileWithStores(`<my-widget b-store:widgets b-store:tags b-attr:id b-generate="full"><h3>{{ widgets.data[id].name }}</h3><p b-for="t in tags.data.list" b-key="t">{{ t }}</p></my-widget>`);
 	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen(), assetMap: new Map([['static', '/static/']]) });
 	assertEquals(js!.includes(`import bfstore_widgets from "/static/stores/widgets.js";`), true, js!);
-	assertEquals(js!.includes('\tstatic bfStores = { widgets: bfstore_widgets };'), true, js!);
-	// tags is read only inside a b-for, which is not patched.
+	assertEquals(js!.includes(`import bfstore_tags from "/static/stores/tags.js";`), true, js!);
+	assertEquals(js!.includes('\tstatic bfStores = { widgets: bfstore_widgets, tags: bfstore_tags };'), true, js!);
+	assertEquals(file.partials.get('my-widget')!.stores!.map(s => [s.name, !!s.shipped]), [['widgets', true], ['tags', true]]);
+});
+
+Deno.test("stores: a store read only by a non-reactive b-for is not imported or shipped", async () => {
+	const file = await compileWithStores(`<my-widget b-store:widgets b-store:tags b-attr:id b-generate="full"><h3>{{ widgets.data[id].name }}</h3><p b-for="t in tags.data.list" b-key="t"><other-thing></other-thing></p></my-widget>`);
+	const { js } = domPatch(file, { bfidGen: makeSequentialBfidGen(), assetMap: new Map([['static', '/static/']]) });
 	assertEquals(js!.includes('tags'), false, js!);
 	assertEquals(file.partials.get('my-widget')!.stores!.map(s => [s.name, !!s.shipped]), [['widgets', true], ['tags', false]]);
 });

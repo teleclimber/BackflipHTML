@@ -16,6 +16,8 @@ export interface NodeToJsOptions {
 	assetMap?: Map<string, string>;
 	/** A name to emit in place of an if node's literal, or undefined to emit it inline. */
 	ifRef?: (n: IfTNode) => string | undefined;
+	/** A name to emit in place of a for node's literal, or undefined to emit it inline. */
+	forRef?: (n: ForTNode) => string | undefined;
 	/** The name of the partial a root node is, which render errors about its stores name. */
 	partialName?: string;
 }
@@ -28,7 +30,7 @@ export function nodeToJS(n :TNode|RootTNode, opts: NodeToJsOptions = {}) :string
 			out = rootToJS(n, opts);
 			break;
 		case 'for':
-			out = forToJS(n, opts);
+			out = opts.forRef?.(n) ?? forToJS(n, opts);
 			break;
 		case 'if':
 			out = opts.ifRef?.(n) ?? ifToJS(n, opts);

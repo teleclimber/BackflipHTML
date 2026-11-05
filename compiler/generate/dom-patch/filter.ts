@@ -1,6 +1,6 @@
 import type { AttrPart, TNode } from '../../types.js';
 import type { Parsed } from '../../backcode.js';
-import { isIfSetSite, type IfSetSite, type Site } from './collect.js';
+import { isIfSetSite, isLoopSite, type IfSetSite, type LoopSite, type Site } from './collect.js';
 
 /**
  * Predicate: true when a site should drive dom-patch codegen.
@@ -15,6 +15,7 @@ export function qualifies(s: Site): boolean {
 	if (s.liveVars.length === 0) return false;   // nothing to drive a patch
 	if (s.inForLoop) return false;
 	if (isIfSetSite(s)) return ifSetQualifies(s);
+	if (isLoopSite(s)) return loopQualifies(s);
 	// Per-kind support (extend as new kinds become patchable):
 	switch (s.site.kind) {
 		case 'attr':
@@ -51,6 +52,16 @@ function ifSetQualifies(s: IfSetSite): boolean {
 		if (!subtreeOk(b.tnodes)) return false;
 	}
 	return true;
+}
+
+/**
+ * Loop rules beyond the cross-kind ones. An added item is rendered client-side, so the
+ * body has to be renderable there, as a set's branches do. The key is how items are
+ * matched to their DOM.
+ */
+function loopQualifies(s: LoopSite): boolean {
+	const { iterable, key, tnodes } = s.node;
+	return exprOk(iterable) && !!key && exprOk(key) && subtreeOk(tnodes);
 }
 
 // An expression is usable when it parsed. Its variables need no check: they are

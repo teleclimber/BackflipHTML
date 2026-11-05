@@ -29,7 +29,7 @@ function computeVars(sites: BfidSite[], sets: IfSetPatchSite[]): string[] {
 }
 
 function branch(sites: BfidSite[] = [], sets: IfSetPatchSite[] = []): PatchBranch {
-	return { sites, sets, vars: computeVars(sites, sets) };
+	return { sites, sets, loops: [], vars: computeVars(sites, sets) };
 }
 
 function dynAttr(name: string, code: string, isBoolean = false): AttrPart {

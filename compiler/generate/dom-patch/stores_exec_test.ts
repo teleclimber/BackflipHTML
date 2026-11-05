@@ -38,7 +38,7 @@ function ifSite(conditions: (string | null)[], snapshot: string, subtreeVars: st
 
 function patchBranch(sites: BfidSite[] = [], sets: IfSetPatchSite[] = []): PatchBranch {
 	const vars = [...new Set([...sites.flatMap(s => s.backcode.liveVars), ...sets.flatMap(s => [...s.ifSet.liveVars, ...s.subtreeVars])])];
-	return { sites, sets, vars };
+	return { sites, sets, loops: [], vars };
 }
 
 // Mount the generated shell on a `<my-widget>` built from `innerHtml`, in a document

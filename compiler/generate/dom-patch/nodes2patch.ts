@@ -1,15 +1,15 @@
-import type { CompiledFile, ElementTNode, IfTNode, PartialStore, TNode } from '../../types.js';
+import type { CompiledFile, ElementTNode, PartialStore, TNode } from '../../types.js';
 import { replaceAssetRef } from '../../assets.js';
 import { forBoundNames } from '../../helpers.js';
 import type { Parsed } from '../../backcode.js';
 import { nodeToJS } from '../js/nodes2js.js';
-import { branchMarker, makeBfidGen, type BfidGen } from './bfid.js';
-import { collectPatchTree, type BranchScope, type IfSetScope } from './collect.js';
+import { branchMarker, itemMarker, makeBfidGen, type BfidGen } from './bfid.js';
+import { collectPatchTree, type BranchScope, type IfSetScope, type LoopScope } from './collect.js';
 import { qualifies } from './filter.js';
-import { ensureBfid, ensureBranchMarker, ensureCallBfid, elementForSite, ensureCommentsAround } from './mutate-ast.js';
+import { ensureBfid, ensureOpeningMarker, ensureCallBfid, elementForSite, ensureCommentsAround } from './mutate-ast.js';
 import {
-	allBranches, generateClassForPartial, generateFile, ifConstName, runtimeImportsFor,
-	type BfidSite, type IfSetPatchSite, type PatchBranch, type PatchTarget, type RuntimeFile,
+	allBranches, forConstName, generateClassForPartial, generateFile, ifConstName, runtimeImportsFor,
+	type BfidSite, type IfSetPatchSite, type LoopPatchSite, type PatchBranch, type PatchTarget, type RuntimeFile,
 } from './codegen.js';
 
 export type { BfidGen } from './bfid.js';
@@ -69,14 +69,14 @@ export function applyDomPatch(file: CompiledFile, opts?: DomPatchOptions): DomPa
 
 		// With no declared inputs there is nothing to patch, but 'base' and 'full'
 		// still owe the author a class — an empty patch-branch gives them one.
-		let rootBranch: PatchBranch = { sites: [], sets: [], vars: [] };
+		let rootBranch: PatchBranch = { sites: [], sets: [], loops: [], vars: [] };
 		if (bAttrs.length > 0 || stores.length > 0) {
 			// Walk into a scope tree (qualification folded in — the tree's shape depends
-			// on which sets qualify).
+			// on which sets and loops qualify).
 			const scope = collectPatchTree(root, qualifies);
 
 			// Pass 1 — all AST mutation, every scope at every depth: allocate bfids and
-			// splice in every marker pair (attr/print/if-set), building the PatchBranch tree
+			// splice in every marker pair (attr/print/if-set/loop), building the PatchBranch tree
 			// with ids and targets filled in. No snapshots yet.
 			rootBranch = buildPatchBranch(scope, gen);
 
@@ -115,12 +115,13 @@ export function applyDomPatch(file: CompiledFile, opts?: DomPatchOptions): DomPa
 }
 
 // Pass 1: turn a scope into a PatchBranch, allocating bfids/markers for its own
-// sites and sets and, recursively, for every descendant branch — before any
-// snapshot is taken.
-function buildPatchBranch(scope: BranchScope, gen: BfidGen): PatchBranch {
+// sites, sets and loops and, recursively, for every descendant branch — before any
+// snapshot is taken. `bound` holds the names the enclosing loops bind.
+function buildPatchBranch(scope: BranchScope, gen: BfidGen, bound: Set<string> = new Set()): PatchBranch {
 	const sites = scope.sites.map(s => toBfidSite(s, scope.refElement, gen));
-	const sets = scope.sets.map(ss => toIfSetPatchSite(ss, scope.refElement, gen));
-	return { sites, sets, vars: computeVars(sites, sets) };
+	const sets = scope.sets.map(ss => toIfSetPatchSite(ss, scope.refElement, gen, bound));
+	const loops = scope.loops.map(ls => toLoopPatchSite(ls, scope.refElement, gen, bound));
+	return { sites, sets, loops, vars: computeVars(sites, sets, loops, bound) };
 }
 
 function toBfidSite(
@@ -146,20 +147,36 @@ function toIfSetPatchSite(
 	scope: IfSetScope,
 	refElement: ElementTNode | null,
 	gen: BfidGen,
+	bound: Set<string>,
 ): IfSetPatchSite {
 	const set = scope.set;
 	const target = resolveTarget(elementForSite(set), refElement, gen);
 	const { startId: setId, endId } = ensureCommentsAround(set.container, set.node, gen);
 	// Before the branches' own sites, so the branch marker stays first in its content.
-	set.node.branches.forEach((b, i) => ensureBranchMarker(b, branchMarker(setId, i)));
+	set.node.branches.forEach((b, i) => ensureOpeningMarker(b, branchMarker(setId, i)));
 	// A branch with nothing patchable gets no descriptor.
 	const branches = scope.branches.map(child =>
-		child.sites.length === 0 && child.sets.length === 0 ? null : buildPatchBranch(child, gen));
-	return {
-		target, ifSet: set, setId, endId, snapshot: '',
-		subtreeVars: computeSubtreeVars(set.node),
-		branches,
-	};
+		child.sites.length === 0 && child.sets.length === 0 && child.loops.length === 0 ? null : buildPatchBranch(child, gen, bound));
+	const subtreeVars: string[] = [];
+	for (const b of set.node.branches) walkSubtreeVars(b.tnodes, bound, subtreeVars);
+	return { target, ifSet: set, setId, endId, snapshot: '', subtreeVars, branches };
+}
+
+function toLoopPatchSite(
+	scope: LoopScope,
+	refElement: ElementTNode | null,
+	gen: BfidGen,
+	bound: Set<string>,
+): LoopPatchSite {
+	const loop = scope.loop;
+	const target = resolveTarget(elementForSite(loop), refElement, gen);
+	const { startId: loopId, endId } = ensureCommentsAround(loop.container, loop.node, gen);
+	// Before the item's own sites, so the item marker stays first in its content.
+	ensureOpeningMarker(loop.node, itemMarker(loopId));
+	const subtreeVars: string[] = [];
+	walkSubtreeVars([loop.node], bound, subtreeVars);
+	const item = buildPatchBranch(scope.item, gen, new Set([...bound, ...forBoundNames(loop.node)]));
+	return { target, loop, loopId, endId, snapshot: '', subtreeVars, item };
 }
 
 // A site's DOM node is either the patch-branch's own ref element or a descendant
@@ -173,15 +190,22 @@ function resolveTarget(
 	return { kind: 'bfid-element', bfid: ensureBfid(anchor!, gen) };
 }
 
-// Pass 2: snapshot every set in the tree. A set's literal names each qualifying set
-// nested in it (by its `bfif_` const) instead of repeating that set's content.
+// Pass 2: snapshot every set and loop in the tree. A literal names each qualifying set
+// and loop nested in it (by its `bfif_` or `bffor_` const) instead of repeating its content.
 function fillSnapshots(root: PatchBranch): void {
-	const sets = allBranches(root).flatMap(b => b.sets);
-	const names = new Map(sets.map(s => [s.ifSet.node, ifConstName(s.setId)]));
-	for (const s of sets) {
-		const own = s.ifSet.node;
-		s.snapshot = nodeToJS(own, { ifRef: n => n === own ? undefined : names.get(n) });
-	}
+	const branches = allBranches(root);
+	const sets = branches.flatMap(b => b.sets);
+	const loops = branches.flatMap(b => b.loops);
+	const names = new Map<TNode, string>([
+		...sets.map((s): [TNode, string] => [s.ifSet.node, ifConstName(s.setId)]),
+		...loops.map((l): [TNode, string] => [l.loop.node, forConstName(l.loopId)]),
+	]);
+	const snapshot = (own: TNode) => {
+		const ref = (n: TNode) => n === own ? undefined : names.get(n);
+		return nodeToJS(own, { ifRef: ref, forRef: ref });
+	};
+	for (const s of sets) s.snapshot = snapshot(s.ifSet.node);
+	for (const l of loops) l.snapshot = snapshot(l.loop.node);
 }
 
 // Guard the invariant this module is built on: the compiler rejects a partial that
@@ -200,39 +224,35 @@ function assertDeclared(branch: PatchBranch, declared: Set<string>, partialName:
 			if (child) assertDeclared(child, declared, partialName);
 		}
 	}
+	for (const l of branch.loops) assertDeclared(l.item, declared, partialName);
 }
 
 // PatchBranch.vars, first-seen: site live vars, then each set's condition and
-// subtree vars.
-function computeVars(sites: BfidSite[], sets: IfSetPatchSite[]): string[] {
+// subtree vars, then each loop's subtree vars. Names an enclosing loop binds are left out.
+function computeVars(sites: BfidSite[], sets: IfSetPatchSite[], loops: LoopPatchSite[], bound: Set<string>): string[] {
 	const out: string[] = [];
-	const note = (v: string) => { if (!out.includes(v)) out.push(v); };
+	const note = (v: string) => { if (!bound.has(v) && !out.includes(v)) out.push(v); };
 	for (const s of sites) for (const v of s.backcode.liveVars) note(v);
 	for (const s of sets) {
 		for (const v of s.ifSet.liveVars) note(v);
 		for (const v of s.subtreeVars) note(v);
 	}
+	for (const l of loops) for (const v of l.subtreeVars) note(v);
 	return out;
 }
 
-// Vars referenced anywhere in the set's branch content (nested conditions and
-// b-for iterables included), minus b-for-bound value and index names — those are bound by the
-// loop, not supplied by the element. Deliberately over-broad per the spec: a var in
-// a non-patchable position still yields a no-op mutate.
-function computeSubtreeVars(node: IfTNode): string[] {
-	const out: string[] = [];
-	for (const b of node.branches) walkSubtreeVars(b.tnodes, new Set(), out);
-	return out;
-}
-
+// Vars referenced anywhere in `tnodes` (nested conditions, b-for iterables and keys
+// included), minus names in `scope` — those are bound by a loop, not supplied by the
+// element. Deliberately over-broad per the spec: a var in a non-patchable position
+// still yields a no-op mutate.
 function walkSubtreeVars(
 	tnodes: TNode[],
 	scope: Set<string>,
 	out: string[],
 ): void {
-	const add = (p: Parsed) => {
+	const add = (p: Parsed, names = scope) => {
 		for (const v of p.vars) {
-			if (!scope.has(v) && !out.includes(v)) out.push(v);
+			if (!names.has(v) && !out.includes(v)) out.push(v);
 		}
 	};
 	for (const n of tnodes) {
@@ -250,6 +270,7 @@ function walkSubtreeVars(
 			case 'for': {
 				add(n.iterable);
 				const inner = new Set([...scope, ...forBoundNames(n)]);
+				if (n.key) add(n.key, inner);
 				walkSubtreeVars(n.tnodes, inner, out);
 				break;
 			}

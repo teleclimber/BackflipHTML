@@ -14,6 +14,12 @@ export function branchMarker(setId: string, index: number): string {
 	return `${commentMarker(setId)}:${index}`;
 }
 
+// Text of the marker comment that opens each item of the `b-for` whose leading marker
+// is `loopId` (e.g. `bfitem:bf3`). Every item has the same one.
+export function itemMarker(loopId: string): string {
+	return `bfitem:${loopId}`;
+}
+
 export interface BfidOptions {
 	prefix?: string;
 }

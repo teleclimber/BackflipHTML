@@ -25,12 +25,13 @@ What updates:
 - **Interpolations** (`{{ expr }}`). The value is written as text, never parsed as HTML.
 - **Attributes on nested custom elements** (`<child-el :show="show">`). The child sees a normal attribute change, so a child that generates JS patches its own content in turn. This is how a value flows from a parent element down into a child.
 - **`b-if` / `b-else-if` / `b-else` sets** — see [Reactive `b-if`](#reactive-b-if).
+- **`b-for` loops** — see [Reactive `b-for`](#reactive-b-for).
 
 An expression that uses no variable never changes and is left alone. Every other value in the partial is evaluated on each update, and only what differs from what it last rendered is written to the DOM.
 
 Not patched:
 
-- anything inside a `b-for` loop;
+- anything inside a non-reactive `b-for` loop;
 - dynamic attributes on nested custom-element calls that carry an asset reference (`:src~`), since the browser has no asset map;
 - slot content passed to a nested custom element;
 - the partial's own slots, which hold the caller's content;
@@ -42,13 +43,42 @@ A `b-if` set re-renders in the browser when the winning branch changes: the new 
 
 A set is reactive when it is:
 
-- not inside a `b-for`;
+- not inside a non-reactive `b-for`;
 - driven by variables (attributes or stores) in each of its branch conditions (`b-else` excepted);
 - free of partial references (`b-part` calls and custom-element calls), slots, and asset references anywhere in its subtree.
 
-Any failure makes the whole set non-reactive, and a disqualifier inside a nested set makes the enclosing set non-reactive too. A non-reactive set still renders correctly on the server — it just stays as rendered. A `b-for` inside a reactive set is fine: it is rendered as part of its branch.
+Any failure makes the whole set non-reactive, and a disqualifier inside a nested set makes the enclosing set non-reactive too. A non-reactive set still renders correctly on the server — it just stays as rendered.
 
 The rule against partial references is what keeps [script auto-include](#script-auto-include) correct: a branch shown later in the browser can never introduce a custom element whose script the page did not load.
+
+### Reactive `b-for`
+
+A `b-for` updates item by item, matching each item to its DOM by its [`b-key`](directives.md#b-for--loop):
+
+```html
+<my-list b-store:todos b-generate="full">
+	<ul><li b-for="t in todos.data.list" b-key="t.id" :class="t.done ? 'done' : null">{{ t.title }}</li></ul>
+</my-list>
+```
+
+- A **new key** is rendered in the browser and inserted at its position.
+- A **key that is gone** has its item's DOM removed.
+- An item whose **position changed** has its existing DOM moved, never rebuilt. An item already in place is not touched. Where the browser supports `moveBefore`, a moved item also keeps its focus and running animations.
+- Every **kept item** updates in place, and only what differs is written.
+
+Because items are matched by key, replacing the whole list with new objects, such as a server response, updates the same way. `b-key="i"` matches items by position, which also works but keeps DOM state, such as an input's value, at the position instead of with the item.
+
+An item can be any shape: one element, several elements, text, or nothing at all. Items can hold `b-if` sets and other loops, and a loop can sit inside a reactive `b-if` branch.
+
+A loop is reactive when it is:
+
+- not inside a non-reactive `b-for`;
+- iterating over an expression that names a variable;
+- free of partial references (`b-part` calls and custom-element calls), slots, and asset references anywhere in its body, the same rule as for a [reactive `b-if`](#reactive-b-if), since a new item is rendered in the browser.
+
+Any failure makes the whole loop non-reactive, and a disqualifier inside a nested set or loop makes the enclosing set or loop non-reactive too. A non-reactive loop still renders correctly on the server — it just stays as rendered.
+
+Patching pairs items with their DOM from the data, so the rendered list has to match the data the page shipped. In the browser, a reactive loop's iterable must be an **array**, and each key a string or number that is **unique in the list**. When these do not hold, a console error is logged. If that happens as the element initializes, the loop stays as rendered from then on. On a later update, the loop skips that update and tries again on the next.
 
 ---
 
@@ -135,7 +165,9 @@ The build warns, against the definition tag, when:
 - Patching targets **server-rendered** DOM. An element created in JavaScript (`document.createElement('my-widget')`) has no content to patch, and is not supported.
 - No shadow root is attached: patching works against the light-DOM children the server rendered.
 - An expression that throws in the browser, such as a [lookup that misses](data-stores.md#lookups-that-miss), is logged and affects only that value.
-- `<script>` tags inside a reactive `b-if` branch do not run when the branch is rendered in the browser.
+- `<script>` tags inside a reactive `b-if` branch or `b-for` item do not run when it is rendered in the browser.
+- A `<tr b-for>` directly under a `<table>` is not updated, because the HTML parser adds a `<tbody>` that splits the loop's marker comments. Write the `<tbody>` in the template.
+- Moving an item toward the end of a list also moves the items it passed, which then lose focus in browsers without `moveBefore`.
 - Inside a reactive area, a non-reactive nested `b-if` keeps the branch the server rendered; dynamic values in its other branches cannot be found, and each update logs a console error for them.
 - When the rendered DOM no longer matches the template (for example, other script removed a patched element), the affected patch is skipped with a console error.
 - When a patched element or its marker comments appear twice (other script cloned them, or invalid HTML such as a `<div>` inside a `<p>` made the parser copy the element), neither copy is updated and a console error is logged.

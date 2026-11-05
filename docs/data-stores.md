@@ -78,7 +78,7 @@ The page renderers take the store data by name, after `slots`: `renderRoot(n, ct
 
 ## Shipping data to the browser
 
-A page render ships a store when the generated code of a [client-side patching](dom-patch.md) partial it actually renders reads it. Like [script auto-include](dom-patch.md#script-auto-include), a partial in an untaken `b-if` branch or an empty `b-for` ships nothing, and a store read only on the server, or only in parts of a partial that are not patched (inside a `b-for`), is not shipped.
+A page render ships a store when the generated code of a [client-side patching](dom-patch.md) partial it actually renders reads it. Like [script auto-include](dom-patch.md#script-auto-include), a partial in an untaken `b-if` branch or an empty `b-for` ships nothing, and a store read only on the server, or only in parts of a partial that are not patched (inside a non-reactive `b-for`), is not shipped.
 
 A shipped store becomes a JSON tag in the auto-include block, ahead of the scripts, with its store file as a module dependency:
 
@@ -107,7 +107,7 @@ widgets.data['42'].name;
 - On a page that did not ship the store, `data` is `undefined`.
 - Read `data` from module code: module scripts run once the document is parsed, and the store tags come before the scripts.
 
-In a patching partial, a store is a variable like a `b-attr`: `{{ widgets.data[widget_id].name }}` updates when `widget_id` or the store changes. A store can drive a [reactive `b-if`](dom-patch.md#reactive-b-if).
+In a patching partial, a store is a variable like a `b-attr`: `{{ widgets.data[widget_id].name }}` updates when `widget_id` or the store changes. A store can drive a [reactive `b-if`](dom-patch.md#reactive-b-if) or a [reactive `b-for`](dom-patch.md#reactive-b-for).
 
 ---
 
@@ -134,7 +134,7 @@ flush();
 
 `set` and `setAt` throw on a page that did not ship the store, which includes a store read only in parts of a partial that are not patched. They also throw during a flush, including from code a patch runs, such as an `attributeChangedCallback`; make the change from a microtask instead.
 
-A change updates only what [client-side patching](dom-patch.md#what-updates-in-the-browser) patches. Everything else keeps showing the store as it was rendered: `b-name` partials, `b-for` content, non-reactive `b-if` sets, slot content and `b-part` call contents. The compiler does not warn about these.
+A change updates only what [client-side patching](dom-patch.md#what-updates-in-the-browser) patches. Everything else keeps showing the store as it was rendered: `b-name` partials, non-reactive `b-for` loops and `b-if` sets, slot content and `b-part` call contents. The compiler does not warn about these.
 
 ---
 

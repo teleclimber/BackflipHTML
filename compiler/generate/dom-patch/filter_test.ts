@@ -5,7 +5,7 @@ import type {
 	SlotTNode, PartialRefTNode, TNode,
 } from "../../types.ts";
 import { interpretBackcode } from "../../backcode.ts";
-import type { BackcodeSite, IfSetSite } from "./collect.ts";
+import type { BackcodeSite, IfSetSite, LoopSite } from "./collect.ts";
 import { qualifies } from "./filter.ts";
 
 // Every variable a site can name is one of the partial's declared attributes, so
@@ -42,7 +42,7 @@ Deno.test("rejects a site whose expression names no variable", () => {
 	assertEquals(qualifies(makeAttrSite(`'static'`, [])), false);
 });
 
-Deno.test("rejects sites inside a b-for", () => {
+Deno.test("rejects sites inside a non-reactive b-for", () => {
 	assertEquals(qualifies(makePrintSite('x', ['x'], true)), false);
 	assertEquals(qualifies(makeAttrSite('foo', ['foo'], true)), false);
 });
@@ -129,7 +129,7 @@ Deno.test("if-set: a condition with no variables disqualifies", () => {
 	assertEquals(qualifies(ifSet([branch('a'), branch('1 == 1')])), false);
 });
 
-Deno.test("if-set: inside a b-for is skipped", () => {
+Deno.test("if-set: inside a non-reactive b-for is skipped", () => {
 	assertEquals(qualifies(ifSet([branch('a')], { inForLoop: true })), false);
 });
 
@@ -178,6 +178,54 @@ Deno.test("if-set: an unparseable expression in the subtree disqualifies", () =>
 	const print: PrintTNode = { type: 'print', data: { expr: undefined, errs: ['bad'], vars: [] } };
 	const el: ElementTNode = { type: 'element', tagName: 'p', attrs: [], tnodes: [print] };
 	assertEquals(qualifies(ifSet([branch('a', [el])])), false);
+});
+
+// --- loops ---
+
+function loopSite(over: Partial<ForTNode> = {}, flags: Partial<LoopSite> = {}): LoopSite {
+	const node: ForTNode = { type: 'for', iterable: interpretBackcode('xs'), key: interpretBackcode('x.id'), valName: 'x', tnodes: [], ...over };
+	return { kind: 'loop', node, container: [node], parentElement: null, liveVars: [...node.iterable.vars], inForLoop: false, ...flags };
+}
+
+Deno.test("loop: a keyed loop over a variable qualifies", () => {
+	assertEquals(qualifies(loopSite()), true);
+});
+
+Deno.test("loop: without a key it does not qualify", () => {
+	assertEquals(qualifies(loopSite({ key: undefined })), false);
+});
+
+Deno.test("loop: a key that did not parse does not qualify", () => {
+	assertEquals(qualifies(loopSite({ key: interpretBackcode('x.') })), false);
+});
+
+Deno.test("loop: an iterable naming no variable does not qualify", () => {
+	assertEquals(qualifies(loopSite({ iterable: interpretBackcode(`'ab'`) })), false);
+});
+
+Deno.test("loop: inside a non-reactive loop it does not qualify", () => {
+	assertEquals(qualifies(loopSite({}, { inForLoop: true })), false);
+});
+
+const li = (attrs: AttrPart[], tnodes: TNode[] = []): ElementTNode => ({ type: 'element', tagName: 'li', attrs, tnodes });
+
+for (const [label, body] of [
+	['a slot', [{ type: 'slot', name: 'default' }]],
+	['a partial reference', [{ type: 'partial-ref', kind: 'custom-element', file: null, partialName: 'x-y', slots: {}, bindings: [] }]],
+	['an asset part', [li([{ type: 'asset', name: 'src', ref: { name: 'images', subpath: 'a.png' } } as unknown as AttrPart])]],
+	['a dynamic asset', [li([{ type: 'dynamic', name: 'src', expr: interpretBackcode('x'), isBoolean: false, isAsset: true }])]],
+	['a raw asset reference', [li([{ type: 'static', raw: ' src="@images/a.png"' }])]],
+	['a disqualifier in a nested loop', [{ type: 'for', iterable: interpretBackcode('x'), key: interpretBackcode('y'), valName: 'y', tnodes: [{ type: 'slot', name: 'default' }] }]],
+] as [string, TNode[]][]) {
+	Deno.test(`loop: ${label} in the body does not qualify`, () => {
+		assertEquals(qualifies(loopSite({ tnodes: body })), false);
+	});
+}
+
+Deno.test("loop: nested loops and sets in the body qualify", () => {
+	const inner: ForTNode = { type: 'for', iterable: interpretBackcode('x'), key: interpretBackcode('y'), valName: 'y', tnodes: [] };
+	const set: IfTNode = { type: 'if', branches: [branch('x')] };
+	assertEquals(qualifies(loopSite({ tnodes: [inner, set] })), true);
 });
 
 Deno.test("if-set: a nested b-for qualifies, body and all", () => {

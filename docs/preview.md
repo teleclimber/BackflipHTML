@@ -25,6 +25,7 @@ The preview system infers what data each partial needs by examining how variable
 | `{{ title }}` (printed) | The variable name as a string: `"title"` |
 | `b-if="visible"` (boolean) | `true` (shows the truthy branch) |
 | `b-for="item in items"` (iterable) | Array of 3 items |
+| `b-key="item.id"` (loop key) | Unique per item: `"id 1"`, `"id 2"`, `"id 3"` |
 | `b-bind:href="url"` (attribute) | Sensible defaults: `href` → `"#"`, `class` → `"sample-class"`, `src` → placeholder image URL |
 | `b-data:user="currentUser"` (passed) | Shape resolved from the called partial's data requirements |
 | `user.name` (property chain) | Nested object: `{ name: "name" }` |

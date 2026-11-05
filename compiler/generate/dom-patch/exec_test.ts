@@ -28,7 +28,7 @@ function computeVars(sites: BfidSite[], sets: IfSetPatchSite[]): string[] {
 }
 
 function patchBranch(sites: BfidSite[] = [], sets: IfSetPatchSite[] = []): PatchBranch {
-	return { sites, sets, vars: computeVars(sites, sets) };
+	return { sites, sets, loops: [], vars: computeVars(sites, sets) };
 }
 
 function printSite(target: PatchTarget, code: string, startId: string, endId: string): BfidSite {

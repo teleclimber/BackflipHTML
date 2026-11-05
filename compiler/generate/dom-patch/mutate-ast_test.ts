@@ -3,7 +3,7 @@ import { assertEquals } from "jsr:@std/assert";
 import type { ElementTNode, IfBranch, PrintTNode, TNode } from "../../types.ts";
 import { interpretBackcode } from "../../backcode.ts";
 import { makeSequentialBfidGen } from "./bfid.ts";
-import { ensureBfid, ensureBranchMarker, ensureCommentsAround } from "./mutate-ast.ts";
+import { ensureBfid, ensureOpeningMarker, ensureCommentsAround } from "./mutate-ast.ts";
 
 function el(attrs: any[] = []): ElementTNode {
 	return { type: 'element', tagName: 'div', attrs, tnodes: [] };
@@ -106,16 +106,16 @@ Deno.test("ensureCommentsAround does not mistake a branch marker for half of a p
 		['bfid:s0:0', 'bfid:bf0', 'print', 'bfid:bf1', 'bfid:other']);
 });
 
-Deno.test("ensureBranchMarker puts the marker first in the branch, once", () => {
+Deno.test("ensureOpeningMarker puts the marker first in the branch, once", () => {
 	const branch: IfBranch = { tnodes: [{ type: 'raw', raw: '<p>A</p>' }] };
-	ensureBranchMarker(branch, 'bfid:s0:0');
-	ensureBranchMarker(branch, 'bfid:s0:0');
+	ensureOpeningMarker(branch, 'bfid:s0:0');
+	ensureOpeningMarker(branch, 'bfid:s0:0');
 	assertEquals(branch.tnodes, [{ type: 'comment', text: 'bfid:s0:0' }, { type: 'raw', raw: '<p>A</p>' }]);
 });
 
-Deno.test("ensureBranchMarker marks an empty branch", () => {
+Deno.test("ensureOpeningMarker marks an empty branch", () => {
 	const branch: IfBranch = { tnodes: [] };
-	ensureBranchMarker(branch, 'bfid:s0:1');
+	ensureOpeningMarker(branch, 'bfid:s0:1');
 	assertEquals(branch.tnodes, [{ type: 'comment', text: 'bfid:s0:1' }]);
 });
 

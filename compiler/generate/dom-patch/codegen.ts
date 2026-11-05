@@ -1,6 +1,6 @@
 import { backcodeToJS } from '../js/nodes2js.js';
-import { branchMarker, commentMarker } from './bfid.js';
-import type { BackcodeSite, IfSetSite } from './collect.js';
+import { branchMarker, commentMarker, itemMarker } from './bfid.js';
+import type { BackcodeSite, IfSetSite, LoopSite } from './collect.js';
 import type { GenerateMode } from '../../types.js';
 
 /**
@@ -46,11 +46,31 @@ export interface IfSetPatchSite {
 	branches: (PatchBranch | null)[];
 }
 
+/**
+ * A qualifying `b-for`, ready for codegen. `loopId` (the leading marker's bfid) names
+ * its module-level `bffor_<loopId>` snapshot, the `nodeToJS` literal of the whole
+ * `ForTNode`, taken after all AST mutation like a set's. The runtime reads the iterable
+ * and loop names from it, and renders an added item from it.
+ */
+export interface LoopPatchSite {
+	/** Anchor for the loop's markers, which every item's branch patches against too. */
+	target: PatchTarget;
+	loop: LoopSite;
+	loopId: string;
+	endId: string;
+	snapshot: string;
+	/** Vars anywhere in the loop, other than its own names, for the declared-var check and store shipping. Not emitted. */
+	subtreeVars: string[];
+	/** What each item patches. */
+	item: PatchBranch;
+}
+
 /** A subtree that is wholly present or wholly absent; emitted as a branch descriptor. */
 export interface PatchBranch {
 	sites: BfidSite[];
 	sets: IfSetPatchSite[];
-	/** Vars this branch reads: its sites', and its sets' condition and subtree vars. Not emitted. */
+	loops: LoopPatchSite[];
+	/** Inputs this branch reads, anywhere in it, not counting names an enclosing loop binds. Not emitted. */
 	vars: string[];
 }
 
@@ -66,8 +86,8 @@ export function classNameFor(partialName: string): string {
 }
 
 /**
- * Emit the body of one partial's module: the module-level `bfif_<setId>` snapshot
- * consts (from every set in the tree), the `export class BackflipMyElement` shell
+ * Emit the body of one partial's module: the module-level `bfif_<setId>` and
+ * `bffor_<loopId>` snapshot consts (from every set and loop in the tree), the `export class BackflipMyElement` shell
  * carrying the declared attributes and the root branch descriptor, and — for 'base'
  * and 'full' — the HTMLElement subclass that drives it, plus its
  * `customElements.define` for 'full'. The runtime does the patching.
@@ -83,13 +103,15 @@ export function generateClassForPartial(
 	mode: GenerateMode,
 	stores: string[] = [],
 ): string | null {
-	const patches = root.sites.length > 0 || root.sets.length > 0;
+	const patches = root.sites.length > 0 || root.sets.length > 0 || root.loops.length > 0;
 	if (!patches && mode === 'render') return null;
 
-	// A snapshot names the sets nested in it, so each must come after those. The
-	// depth-first set order, reversed, puts every set after its descendants.
-	const consts = allBranches(root).flatMap(b => b.sets).reverse()
-		.map(s => `const ${ifConstName(s.setId)} = ${s.snapshot};`);
+	// A snapshot names the sets and loops nested in it, so each must come after those.
+	// The depth-first order, reversed, puts each after its descendants.
+	const consts = allBranches(root).flatMap(b => [
+		...b.sets.map(s => `const ${ifConstName(s.setId)} = ${s.snapshot};`),
+		...b.loops.map(l => `const ${forConstName(l.loopId)} = ${l.snapshot};`),
+	]).reverse();
 
 	const parts: string[] = [];
 	if (consts.length) parts.push(consts.join('\n'), '');
@@ -148,11 +170,15 @@ export function allBranches(branch: PatchBranch): PatchBranch[] {
 			if (child) out.push(...allBranches(child));
 		}
 	}
+	for (const l of branch.loops) out.push(...allBranches(l.item));
 	return out;
 }
 
 /** The module-level const holding a set's snapshot, keyed off its leading marker's bfid. */
 export function ifConstName(setId: string): string { return `bfif_${setId}`; }
+
+/** The module-level const holding a loop's snapshot, keyed off its leading marker's bfid. */
+export function forConstName(loopId: string): string { return `bffor_${loopId}`; }
 
 // --- the shell ----------------------------------------------------------------
 
@@ -181,7 +207,7 @@ function genShell(
 
 // --- descriptors ----------------------------------------------------------------
 //
-// The literal shapes are the runtime's `BranchDesc`, `SetDesc` and `SiteDesc`.
+// The literal shapes are the runtime's `BranchDesc`, `SetDesc`, `LoopDesc` and `SiteDesc`.
 
 function genBranchDesc(branch: PatchBranch, depth: number): string {
 	const ind = '\t'.repeat(depth);
@@ -189,7 +215,20 @@ function genBranchDesc(branch: PatchBranch, depth: number): string {
 		'{',
 		`${ind}\tsites: ${genList(branch.sites.map(genSiteDesc), depth + 1)},`,
 		`${ind}\tsets: ${genList(branch.sets.map(s => genSetDesc(s, depth + 2)), depth + 1)},`,
+		...(branch.loops.length > 0 ? [`${ind}\tloops: ${genList(branch.loops.map(l => genLoopDesc(l, depth + 2)), depth + 1)},`] : []),
 		`${ind}}`,
+	].join('\n');
+}
+
+// `depth` is the indent of the line the loop's `{` opens on; the rest of it sits one deeper.
+function genLoopDesc(l: LoopPatchSite, depth: number): string {
+	const ind = '\t'.repeat(depth + 1);
+	return [
+		`{ bfid: ${bfidLiteral(l.target)}, markers: ${markersLiteral(l.loopId, l.endId)},`,
+		`${ind}itemMarker: '${itemMarker(l.loopId)}',`,
+		`${ind}snapshot: ${forConstName(l.loopId)},`,
+		`${ind}key: ${backcodeToJS(l.loop.node.key!)},`,
+		`${ind}item: ${genBranchDesc(l.item, depth + 1)} }`,
 	].join('\n');
 }
 

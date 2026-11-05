@@ -103,11 +103,13 @@ Deno.test("stores render: JS and PHP agree, shipping only stores read by rendere
     assertStringIncludes(js, "-->Widget &amp; co<!--");
     assertStringIncludes(js, '<p class="owner">Bob &lt;/script&gt;</p>');
     // widgets: read by my-widget's patch sites → shipped once, with its file.
-    // tags: read only inside a b-for → not shipped. users: server-only partials → not shipped.
-    assertEquals(Object.keys(a.payloads), ["widgets"]);
+    // tags: read by my-tagger's reactive b-for → shipped. users: server-only partials → not shipped.
+    assertEquals(Object.keys(a.payloads), ["widgets", "tags"]);
     assertEquals(a.payloads.widgets, STORES.widgets);
+    assertEquals(a.payloads.tags, STORES.tags);
     assertEquals(js.match(/modulepreload" href="\/static\/stores\/widgets.js"/g)?.length, 1);
-    assertEquals(js.includes("stores/tags.js") || js.includes("users"), false);
+    assertEquals(js.match(/modulepreload" href="\/static\/stores\/tags.js"/g)?.length, 1);
+    assertEquals(js.includes("users"), false);
     // The tags precede every script in the block.
     assertEquals(js.indexOf("data-bf-store") < js.indexOf("<link rel=\"modulepreload\""), true);
 });

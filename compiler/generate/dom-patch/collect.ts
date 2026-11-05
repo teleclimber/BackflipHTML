@@ -51,19 +51,39 @@ export interface IfSetSite {
 	inForLoop: boolean;
 }
 
-export type Site = BackcodeSite | IfSetSite;
+/**
+ * A whole `b-for` loop, tracked as one patch site. Anchored like a set: `container` is
+ * where its marker comments get spliced and `parentElement` the nearest enclosing
+ * element, which every item shares. `liveVars` are the iterable's variables.
+ */
+export interface LoopSite {
+	kind: 'loop';
+	node: ForTNode;
+	container: TNode[];
+	parentElement: ElementTNode | null;
+	liveVars: string[];
+	inForLoop: boolean;
+}
+
+export type Site = BackcodeSite | IfSetSite | LoopSite;
 
 export function isIfSetSite(s: Site): s is IfSetSite {
-	return 'kind' in s;
+	return 'kind' in s && s.kind === 'if-set';
+}
+
+export function isLoopSite(s: Site): s is LoopSite {
+	return 'kind' in s && s.kind === 'loop';
 }
 
 /**
  * One patch-branch's worth of the AST, before any bfid/marker is allocated.
  *
- * A `BranchScope` owns the sites and sets that are reachable from its root
- * without crossing into a nested **qualifying** `b-if` — each of those becomes
- * an `IfSetScope` whose branches are fresh child scopes. A non-qualifying set is
- * inert client-side, so its content is walked inline into the enclosing scope.
+ * A `BranchScope` owns the sites, sets and loops that are reachable from its root
+ * without crossing into a nested **qualifying** `b-if` or `b-for`. A qualifying set
+ * becomes an `IfSetScope` whose branches are fresh child scopes, and a qualifying loop
+ * a `LoopScope` with a fresh scope for its items. A non-qualifying set is inert
+ * client-side, so its content is walked inline into the enclosing scope. Nothing
+ * inside a non-qualifying loop is patched, since its copies can't be told apart.
  */
 export interface BranchScope {
 	/**
@@ -75,6 +95,14 @@ export interface BranchScope {
 	sites: BackcodeSite[];
 	/** Qualifying b-if sets this scope owns. */
 	sets: IfSetScope[];
+	/** Qualifying b-for loops this scope owns. */
+	loops: LoopScope[];
+}
+
+export interface LoopScope {
+	loop: LoopSite;
+	/** What each item patches. */
+	item: BranchScope;
 }
 
 export interface IfSetScope {
@@ -96,7 +124,7 @@ export function collectPatchTree(
 	root: CustomElementPartialRoot,
 	qualifies: (s: Site) => boolean,
 ): BranchScope {
-	const scope: BranchScope = { refElement: null, sites: [], sets: [] };
+	const scope: BranchScope = { refElement: null, sites: [], sets: [], loops: [] };
 	// Dynamic attrs on the definition's wrapping tag (rendered on the custom element itself).
 	if (root.definitionAttrs) {
 		for (const a of root.definitionAttrs) {
@@ -140,10 +168,16 @@ function walkNode(
 			return;
 		}
 		case 'for': {
-			// A for-iterable never qualifies, and every site inside the loop is
-			// `inForLoop` (also non-qualifying). b-for/b-if don't create a DOM element,
-			// so the nearest enclosing element for descendants is unchanged.
-			walkList(n.tnodes, true, scope, parentElement, qualifies);
+			// b-for/b-if don't create a DOM element, so the nearest enclosing element for
+			// descendants is unchanged.
+			const loop: LoopSite = { kind: 'loop', node: n, container, parentElement, liveVars: [...n.iterable.vars], inForLoop };
+			if (qualifies(loop)) {
+				const item: BranchScope = { refElement: parentElement, sites: [], sets: [], loops: [] };
+				walkList(n.tnodes, false, item, parentElement, qualifies);
+				scope.loops.push({ loop, item });
+			} else {
+				walkList(n.tnodes, true, scope, parentElement, qualifies);
+			}
 			return;
 		}
 		case 'if': {
@@ -153,7 +187,7 @@ function walkNode(
 				// child scope whose ref element is the set's nearest enclosing element —
 				// exactly what renderIf_ resolves and hands the child as `ref_elem`.
 				const branches = n.branches.map(b => {
-					const child: BranchScope = { refElement: parentElement, sites: [], sets: [] };
+					const child: BranchScope = { refElement: parentElement, sites: [], sets: [], loops: [] };
 					walkList(b.tnodes, inForLoop, child, parentElement, qualifies);
 					return child;
 				});

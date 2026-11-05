@@ -366,6 +366,42 @@ Deno.test("a b-for over a member path mocks shaped elements at that path", async
 	assertEquals(result, { page: { items: [{ name: 'name' }, { name: 'name' }, { name: 'name' }] } });
 });
 
+// --- b-key ---
+
+async function mockOf(html: string): Promise<Record<string, unknown>> {
+	const { compiled } = await compileFile(html);
+	const { inferDataShape } = await import('../compiler/data-shape.ts');
+	return generateMockData(inferDataShape(compiled.partials.get('list')!));
+}
+
+Deno.test("b-key: a property it reads is unique per item, and the others stay plain", async () => {
+	assertEquals(await mockOf(`<div b-name="list"><p b-for="w in ws" b-key="w.id">{{ w.name }}</p></div>`), {
+		ws: [{ id: 'id 1', name: 'name' }, { id: 'id 2', name: 'name' }, { id: 'id 3', name: 'name' }],
+	});
+});
+
+Deno.test("b-key: a nested property it reads is unique per item", async () => {
+	assertEquals(await mockOf(`<div b-name="list"><p b-for="w in ws" b-key="w.meta.id">{{ w.meta.title }}</p></div>`), {
+		ws: [1, 2, 3].map(n => ({ meta: { id: `id ${n}`, title: 'title' } })),
+	});
+});
+
+Deno.test("b-key: on the item itself, the items are unique", async () => {
+	assertEquals(await mockOf(`<div b-name="list"><p b-for="w in ws" b-key="w">x</p></div>`), { ws: ['ws 1', 'ws 2', 'ws 3'] });
+});
+
+Deno.test("b-key: a value also read as a boolean or an attribute stays unique", async () => {
+	const mock = await mockOf(`<div b-name="list"><p b-for="w in ws" b-key="w.id" :href="w.id"><b b-if="w.id">x</b></p></div>`);
+	assertEquals((mock.ws as { id: unknown }[]).map(w => w.id), ['id 1', 'id 2', 'id 3']);
+});
+
+Deno.test("b-key: in nested loops, each list's keys are unique", async () => {
+	const mock = await mockOf(`<div b-name="list"><div b-for="r in rows" b-key="r.id"><p b-for="c in r.cells" b-key="c.id">x</p></div></div>`);
+	const rows = mock.rows as { id: string, cells: { id: string }[] }[];
+	assertEquals(rows.map(r => r.id), ['id 1', 'id 2', 'id 3']);
+	assertEquals(rows[0].cells.map(c => c.id), ['id 1', 'id 2', 'id 3']);
+});
+
 // --- Store mocks ---
 
 async function compileWithStores(...htmls: string[]): Promise<CompiledFile> {

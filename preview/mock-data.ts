@@ -177,7 +177,7 @@ function generateValue(
 		// Generate from own properties
 		if (shape.properties) {
 			for (const [prop, propShape] of shape.properties) {
-				obj[prop] = generateValue(propShape, prop, depth + 1, ctx);
+				obj[prop] = generateValue(propShape, prop, depth + 1, ctx, readsKey(propShape) ? index : undefined);
 			}
 		}
 
@@ -196,6 +196,11 @@ function generateValue(
 	// Passed value resolved to a simple shape (no properties) — use its usages
 	if (passedShape) {
 		return generateValue(passedShape, name, depth, ctx, index);
+	}
+
+	// A b-key has to be unique in its list, whatever else reads the value.
+	if (shape.usages.has('key') && index !== undefined) {
+		return `${name} ${index + 1}`;
 	}
 
 	// Boolean
@@ -223,6 +228,11 @@ function generateValue(
 
 	// Fallback
 	return name;
+}
+
+// Whether this value, or a property inside it, is read by a b-key.
+function readsKey(shape: DataShape): boolean {
+	return shape.usages.has('key') || [...(shape.properties?.values() ?? [])].some(readsKey);
 }
 
 function generateArray(

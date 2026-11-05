@@ -137,7 +137,7 @@ Deno.test("a non-qualifying nested set is walked inline (no child boundary)", ()
 	assertEquals(scope.sites[0].site.kind, 'print');
 });
 
-Deno.test("sites inside a b-for are not collected (v1 limitation)", () => {
+Deno.test("sites inside a non-qualifying b-for are not collected", () => {
 	const innerEl = elem('li', [dyn('title', 'x')]);
 	const forNode: ForTNode = {
 		type: 'for', iterable: interpretBackcode('items'), valName: 'item', tnodes: [innerEl],
@@ -145,15 +145,57 @@ Deno.test("sites inside a b-for are not collected (v1 limitation)", () => {
 	const scope = tree(root(forNode));
 	assertEquals(scope.sites.length, 0);
 	assertEquals(scope.sets.length, 0);
+	assertEquals(scope.loops.length, 0);
 });
 
-Deno.test("an if-set inside a b-for does not become a set (inForLoop disqualifies)", () => {
+Deno.test("an if-set inside a non-qualifying b-for does not become a set", () => {
 	const ifNode: IfTNode = { type: 'if', branches: [{ condition: interpretBackcode('a'), tnodes: [] }] };
 	const forNode: ForTNode = {
 		type: 'for', iterable: interpretBackcode('items'), valName: 'item', tnodes: [ifNode],
 	};
 	const scope = tree(root(forNode));
 	assertEquals(scope.sets.length, 0);
+});
+
+function keyedFor(...tnodes: any[]): ForTNode {
+	return { type: 'for', iterable: interpretBackcode('items'), key: interpretBackcode('item'), valName: 'item', tnodes };
+}
+
+Deno.test("a qualifying b-for becomes a loop whose item owns the sites inside it", () => {
+	const scope = tree(root(keyedFor(elem('li', [dyn('title', 'item')]))));
+	assertEquals(scope.sites.length, 0);
+	assertEquals(scope.loops.length, 1);
+	assertEquals(scope.loops[0].item.sites.length, 1);
+});
+
+Deno.test("a loop's item scope shares the loop's nearest enclosing element", () => {
+	const loop = keyedFor();
+	const ul = elem('ul', [], [loop]);
+	const scope = tree(root(ul));
+	assertEquals(scope.loops[0].loop.parentElement, ul);
+	assertEquals(scope.loops[0].loop.container, ul.tnodes);
+	assertEquals(scope.loops[0].item.refElement, ul);
+});
+
+Deno.test("an if-set inside a qualifying b-for becomes a set of the item", () => {
+	const ifNode: IfTNode = { type: 'if', branches: [{ condition: interpretBackcode('item.on'), tnodes: [] }] };
+	const scope = tree(root(keyedFor(ifNode)));
+	assertEquals(scope.sets.length, 0);
+	assertEquals(scope.loops[0].item.sets.length, 1);
+});
+
+Deno.test("a qualifying b-for nests, in a loop and in a set's branch", () => {
+	const inLoop = tree(root(keyedFor(keyedFor())));
+	assertEquals(inLoop.loops[0].item.loops.length, 1);
+	const ifNode: IfTNode = { type: 'if', branches: [{ condition: interpretBackcode('a'), tnodes: [keyedFor()] }] };
+	const inSet = tree(root(ifNode));
+	assertEquals(inSet.loops.length, 0);
+	assertEquals(inSet.sets[0].branches[0].loops.length, 1);
+});
+
+Deno.test("a b-for inside a non-qualifying b-for does not become a loop", () => {
+	const scope = tree(root({ type: 'for', iterable: interpretBackcode('items'), valName: 'item', tnodes: [keyedFor()] }));
+	assertEquals(scope.loops.length, 0);
 });
 
 Deno.test("collects dynamic attrs on the definition's wrapping tag (definition-root-attr)", () => {

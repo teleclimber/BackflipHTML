@@ -245,17 +245,22 @@ function* streamRender(n :RNode, ctx:any, slots: SlotMap | undefined, rs: Render
 	}
 }
 
+/** The context of one loop item: `ctx` with the loop's names bound. */
+export function forItemCtx(names: { valName?: string, indexName?: string }, ctx: any, item: unknown, index: number): any {
+	const val_ctx :any = {};
+	if (names.valName) val_ctx[names.valName] = item;
+	if (names.indexName) val_ctx[names.indexName] = index;
+	return Object.assign({}, ctx, val_ctx);
+}
+
 function* streamRenderFor(for_node: ForRNode, ctx:any, slots: SlotMap | undefined, rs: RenderState) :Generator<string> {
 	const iterable = execFn(for_node.iterable, ctx);
 	if( !isIterable(iterable) ) throw new Error("iterable not iterable.");
 
 	let index = 0;
 	for( const it of iterable ) {
-		const val_ctx :any = {};
-		if (for_node.valName) val_ctx[for_node.valName] = it;
-		if (for_node.indexName) val_ctx[for_node.indexName] = index;
+		const inner_ctx = forItemCtx(for_node, ctx, it, index);
 		index++;
-		const inner_ctx = Object.assign({}, ctx, val_ctx);
 		for (const nn of for_node.nodes) {
 			yield* streamRender(nn, inner_ctx, slots, rs);
 		}
