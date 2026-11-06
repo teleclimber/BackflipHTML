@@ -1,6 +1,8 @@
 # BackflipHTML
 
-BackflipHTML is an HTML templating system. You write HTML with special `b-*` directive attributes and `{{ expression }}` interpolations using a subset of JavaScript, and the system compiles it into JS modules. A lightweight runtime generates HTML from these modules.
+BackflipHTML is an HTML templating system. You write HTML with special `b-*` directive attributes and `{{ expression }}` interpolations using a subset of JavaScript called "Backcode", and the system compiles it into JS modules. A lightweight runtime generates HTML from these modules.
+
+Partials rendered as custom elements can also get a browser module (dom-patch) that updates the server-rendered HTML in place when the element's attributes or stores change.
 
 ## How it works
 
@@ -14,20 +16,28 @@ HTML template string
         ▼
    RootTNode AST (expressions as parsed AST objects)
         │
-        ▼
-  [ compiler/generate/js/ ]
-  converts TNode tree →
-  JS source string
-        │
-        ▼
-  Emitted JS module
-  (RNode-shaped object)
-        │
-        ▼
-  [ runtime/js/ ]
-  walks tree + JS context
-  → Generator<string> chunks
-    or collected HTML string
+        ├──────────────────────────────┐
+        │                              ▼
+        │                 [ compiler/generate/dom-patch/ ]
+        │                 for partials with b-generate:
+        │ ◄── AST with ── marks patch sites in the AST,
+        │     data-bfid   describes them as data
+        │     markers                  │
+        ▼                              ▼
+  [ compiler/generate/js/ ]      Emitted patcher module
+  converts TNode tree →          (one per custom element)
+  JS source string                     │
+        │                              │
+        ▼                              │
+  Emitted JS module                    │
+  (RNode-shaped object)                │
+        │                              │
+        ▼                              ▼
+  [ runtime/js/ ]                [ runtime/dom-patch/ ]  (browser)
+  walks tree + JS context        patches the server-rendered
+  → Generator<string> chunks     element when its attributes or
+    or collected HTML string     stores change; renders new DOM
+                                 with runtime/js
 ```
 
 The compile step only needs to run once per template. The resulting module can be cached and reused, with only the lightweight runtime render pass running per request.
@@ -165,5 +175,3 @@ To see what Deno actually pulls in:
 ```bash
 deno info preview/server.ts
 ```
-
-

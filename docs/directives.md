@@ -193,9 +193,17 @@ See [Data stores](data-stores.md).
 
 ---
 
-## Expression language
+## Expression language ("Backcode")
 
 Expressions in directives and `{{ }}` interpolations are handled by `backcode.ts`, which uses `acorn` to parse them as a safe subset of JavaScript.
+
+Backcode limits what a template can do, so that every expression is:
+
+- **Free of side effects.** An expression only reads data. It never changes its inputs or anything else, so rendering a template has no effect beyond its output.
+- **Deterministic.** The same data always renders the same HTML. Nothing depends on the clock, randomness or locale, so rendered output can be cached, and a custom element updated in the browser matches what the server rendered.
+- **Confined to its data.** A template reaches only the data passed to it. It can't import code or call into the server-side app, which keeps templates from reaching what they shouldn't, and means the same template also runs in the browser.
+
+Because nothing is hidden from it, the compiler also knows exactly what each expression reads. It uses that to report undeclared variables, generate preview mock data, and decide which parts of a custom element to patch when an attribute or store changes.
 
 **Allowed:**
 
@@ -214,14 +222,6 @@ Expressions in directives and `{{ }}` interpolations are handled by `backcode.ts
 | Arithmetic operators | `price * qty - discount`, `total / count`, `n % 2` |
 | Logical operators | `user && user.name`, `nickname || name` |
 | Ternary | `admin ? name : "guest"` |
-
-Operators follow JavaScript semantics:
-
-- `+` works for both numeric addition and string concatenation.
-- `-`, `*`, `/` and `%` convert both sides to numbers. Division by zero gives `Infinity` or `NaN`, never an error.
-- `===` and `!==` compare without type conversion.
-- `&&` and `||` return one of their operands, not a boolean: `nickname || name` is `nickname` when it is truthy, else `name`. The right side is evaluated only when needed, so `user && user.name` does not read `name` from a missing `user`.
-- Relational operators follow JavaScript's Abstract Relational Comparison: two strings compare lexicographically, otherwise both sides are coerced to numbers and any `NaN` makes the result `false`.
 
 **Not allowed:** function calls, other operators (`??`, `?.`, `**`, bitwise operators, etc.), object/array literals, assignment, or any other construct not listed above.
 
