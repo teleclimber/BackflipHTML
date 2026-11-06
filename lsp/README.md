@@ -7,9 +7,9 @@
 - **Diagnostics** — red underlines for template compilation errors and store file errors, and warnings on CSS files whose syntax stopped the analyzer
 - **Go to Definition** — click a `b-part` reference to jump to the `b-name` definition, or click a custom element partial tag (e.g. `<my-card>`) to jump to its definition; from a store variable, jump to its `b-store:` declaration, and from there to the store file
 - **Find All References** — from a `b-name` definition, find all `b-part` usages; from an `@name/subpath` asset reference, find every use of that asset across templates and stylesheets
-- **Completion** — asset directory names and file paths, `b-part` targets, custom element partial tags, the slot names a `b-in` can fill, and `b-store:NAME` on partial definition tags, each offered while being typed
+- **Completion** — asset directory names and file paths, `b-generate` values, `b-part` targets, custom element partial tags, the slot names a `b-in` can fill, and `b-store:NAME` on partial definition tags, each offered while being typed
 - **Document Symbols** — lists partials in the editor outline/breadcrumbs, each spanning its whole definition so breadcrumbs track the cursor anywhere inside a partial
-- **Hover (HTML)** — hover over `b-part`, `b-name`, `b-in`, `b-slot`, `b-data:`, `b-store:` attributes, store variables, asset paths, custom element partial tags (e.g. `<my-card>`), or HTML elements to see directive info and matching CSS rules; a definition's hover lists its references as links that jump to them
+- **Hover (HTML)** — hover over `b-generate`, `b-part`, `b-name`, `b-in`, `b-slot`, `b-data:`, `b-store:` attributes, a declared `b-attr` passed at a call site, store variables, asset paths, custom element partial tags (e.g. `<my-card>`), or HTML elements to see directive info and matching CSS rules; a definition's hover lists its references as links that jump to them
 - **Hover (CSS)** — hover over a selector in a CSS file to see which partials contain matching elements
 
 Both CSS hovers also name the pseudos that were stripped before matching, and what kind of thing each one is — see [Relaxed pseudos in CSS hover](#relaxed-pseudos-in-css-hover).
@@ -96,8 +96,9 @@ resolves a call the tag is actually inside, custom element calls included.
 
 ### Completion
 
-Four things complete: an asset path (see [Asset references](#asset-references)),
-a `b-part` target, a custom element partial tag, and a slot name in `b-in`.
+Six things complete: an asset path (see [Asset references](#asset-references)),
+a `b-generate` value, a `b-part` target, a slot name in `b-in`, a `b-store:NAME`
+on a partial definition tag, and a custom element partial tag.
 `src/completion.ts` tries each probe in turn and answers with the first that has
 something to offer; the probes match disjoint positions, so at most one does.
 
@@ -270,7 +271,7 @@ File changes trigger recompilation with a 300ms debounce. The server runs its ow
 | `src/resolve.ts` | Cursor position → the element/directive under it, from the compiled tree |
 | `src/asset-attr.ts` | Cursor position → the asset attribute and `@name/subpath` under it, from the line's text |
 | `src/tag-context.ts` | Cursor position → the tag it is in and the partial call containing that tag, from the document's text |
-| `src/completion.ts` | Completion: asset paths, `b-part` targets, custom element tags, `b-in` slot names, `b-store:` names |
+| `src/completion.ts` | Completion: asset paths, `b-generate` values, `b-part` targets, custom element tags, `b-in` slot names, `b-store:` names |
 | `src/stores.ts` | Cursor position → the store under it: a `b-store:` attribute, or a store variable in an expression |
 | `src/hover.ts` | Hover information for directives and CSS selectors |
 | `src/definition.ts` | Go-to-definition for `b-part` → `b-name`, and for stores |

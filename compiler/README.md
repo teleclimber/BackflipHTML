@@ -22,7 +22,7 @@ The AST is a tree of `TNode`s under a `RootTNode`. Each variant models one struc
 - `RawTNode` — pre-rendered HTML text (escaped at parse time as needed).
 - `CommentTNode` — an HTML comment (`<!--text-->`), emitted verbatim. Not produced by the parser; inserted by the [`dom-patch`](generate/dom-patch/README.md) pass as range markers around patchable children.
 - `PrintTNode` — `{{ expr }}` interpolation (escaped at render time).
-- `ElementTNode` — an HTML element: `tagName`, `attrs: AttrPart[]` (mixed `static` / `dynamic` / `asset`), and `tnodes` (body content). Carries source locations (`openTagLoc`, `closeTagLoc`, `loc`) for LSP and Phase 5 flatten.
+- `ElementTNode` — an HTML element: `tagName`, `attrs: AttrPart[]` (mixed `static` / `dynamic` / `asset`), and `tnodes` (body content). Carries source locations (`openTagLoc`, `closeTagLoc`, `loc`) for the LSP and for `flattenStatics` (`flatten.ts`), which gives the attribute bindings it leaves behind the element's open-tag location.
 - `ForTNode` / `IfTNode` (with `IfBranch`) — flow control, holding nested `tnodes`.
 - `SlotTNode` — slot insertion point.
 - `PartialRefTNode` — discriminated by `kind: 'b-part' | 'custom-element'`. The `BPartCallTNode` variant references another partial; its wrapping element (if any) is an enclosing `ElementTNode` in the tree. The `CustomElementCallTNode` variant carries `callerAttrs: AttrPart[]` for the call-site attrs that the runtime merges with the definition's `definitionAttrs`.
@@ -95,7 +95,7 @@ Orchestrates compilation of all HTML files in a directory. Manages cross-file pa
 
 ### Data shape inference (`data-shape.ts`)
 
-Infers the types and usage patterns of template variables by analyzing how they appear in the AST. Tracks whether variables are used as iterables, booleans, printed values, attribute bindings, or passed to child partials. Used by the preview system to generate mock data.
+Infers the types and usage patterns of template variables by analyzing how they appear in the AST. Tracks whether variables are used as iterables, booleans, printed values, attribute bindings, or passed to child partials. The compiler uses it to check each call against the partial it targets (unbound variables, `b-data:` names the partial does not use), to check how `b-attr` variables are used, and to report variables a partial that generates client JS does not declare. The preview uses it to generate mock data, and the LSP to describe variables on hover.
 
 ### Stores (`stores.ts`)
 
@@ -110,7 +110,7 @@ Loads and validates `backflip.json` project configuration files. See [`docs/conf
 Convert the AST into JavaScript:
 
 - **[`generate/js/`](generate/js/README.md)** — produces JavaScript ES modules
-- **[`generate/dom-patch/`](generate/dom-patch/README.md)** — produces browser-side patcher classes for custom-element partials with reactive attributes; mutates the AST so server-rendered HTML carries the matching `data-bfid` markers
+- **[`generate/dom-patch/`](generate/dom-patch/README.md)** — produces the browser modules that patch custom element partials using `b-generate` or `b-script`; mutates the AST so server-rendered HTML carries the matching `data-bfid` markers
 
 ## Usage docs
 
@@ -132,9 +132,21 @@ Test files:
 | File | Covers |
 |------|--------|
 | `compiler_test.ts` | HTML parsing, directive recognition, AST structure |
+| `attrs_test.ts` | Directive attribute recognition and the attribute names an element renders |
+| `helpers_test.ts` | Directive value parsing (`b-for`, `b-part`), text lowering, custom element tag names, slot collection |
+| `b_key_test.ts` | `b-key` parsing and errors |
+| `backcode_test.ts` | Expression validation and the backcode visitor |
+| `loc_test.ts` | Source location helpers |
+| `walk_test.ts` | Tree traversal |
+| `flatten_test.ts` | Static flattening |
+| `assets_test.ts` | Asset references and their resolution |
 | `partials_test.ts` | Cross-file compilation, dependency resolution, cycle detection |
 | `partial-graph_test.ts` | The call graph: bodies, fills, callers, entry points, cycles |
+| `partial-refs_test.ts` | Call sites and the definitions they resolve to |
 | `data-shape_test.ts` | Variable usage inference |
 | `data-shape-integration_test.ts` | Data shape across partials |
+| `stores_test.ts` | Reading store files |
+| `stores_compile_test.ts` | `b-store:` compile results and errors |
+| `config_test.ts` | `backflip.json` loading and validation, resolved dirs and dom-patch script URLs |
 | `generate/js/generatejs_test.ts` | Expression → JS function, and what the generated function evaluates to |
 | `generate/js/nodes2js_test.ts` | AST → JS module |

@@ -37,7 +37,7 @@ backflip <input-dir> <output-dir> --lang <js|dom-patch>
 - `<input-dir>` — directory of `.html` template files (scanned recursively)
 - `<output-dir>` — must be empty (when provided via CLI); output files mirror the input directory structure
 - `--lang js` — generate JavaScript modules (`.js`)
-- `--lang dom-patch` — generate browser-side patcher classes (`.js`) for custom-element partials with reactive attributes (see [Client-side patching](dom-patch.md))
+- `--lang dom-patch` — generate the browser modules (`.js`) that patch custom element partials using `b-generate` or `b-script` (see [Client-side patching](dom-patch.md))
 
 **Examples:**
 

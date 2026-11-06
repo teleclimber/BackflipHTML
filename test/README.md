@@ -12,17 +12,13 @@ deno task test
 
 This runs `deno test --allow-read --allow-write --allow-env --allow-run=deno` and covers all tests in the project (compiler, runtime, preview, and these integration tests).
 
-## Requirements
-
-- **CLI tests** spawn `deno` subprocesses
-
 ## Test files
 
 | File | Covers |
 |------|--------|
 | `integration_test.ts` | JS pipeline: compile → generate JS → evaluate → render. Tests same-file and cross-file partial composition. |
 | `integration_error_test.ts` | Compilation error detection: structural errors, invalid directives, missing partials. |
-| `cli_test.ts` | CLI argument parsing, config-based compilation, output directory handling. |
+| `cli_test.ts` | CLI argument parsing, config-based compilation, output directory handling. Spawns `deno` subprocesses. |
 | `dom_patch_autoinclude_test.ts` | Script auto-include: the module each `b-generate` mode contributes, its URL, and where the renderer injects it. |
 | `dom_patch_if_test.ts` | Reactive `b-if` and nested set descriptors, plus the runtime (`runtime/js/render.js`, `runtime/dom-patch/patch.js`) the CLI copies beside generated modules. |
 | `dom_patch_generate_test.ts` | `b-generate="full"` end to end: CLI build → server render → the generated module patching that HTML in jsdom. |

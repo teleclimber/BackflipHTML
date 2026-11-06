@@ -102,7 +102,7 @@ Patching does not try to detect or repair direct changes. Some cause a console e
 
 Each partial that generates JS gets **its own module**, named after its tag (`my-widget.js`) at the root of the [dom-patch output dir](#build-output). It exports:
 
-- `BackflipMyWidget` — the patch class. Constructed with the element, it reads the declared attributes and patches the rendered DOM. Always exported. In `render` mode your component calls its `update()` when an attribute changes or the element is connected again; the DOM updates on the next microtask.
+- `BackflipMyWidget` — the patch class. Constructed with the element, it reads the declared attributes and the stores it uses, and patches the rendered DOM. Always exported. In `render` mode your component calls its `update()` when an attribute changes or the element is connected again; the DOM updates on the next microtask.
 - `BackflipMyWidgetElement` — the `HTMLElement` subclass driving it, for `base` and `full`.
 
 With `b-script` present and no `b-generate`, the mode is `base`. Nothing is generated when a partial has neither.

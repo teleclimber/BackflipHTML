@@ -8,7 +8,7 @@ Partials are reusable HTML fragments. You define them in `.html` files, then inc
 
 Every top-level element in a template file must have a `b-name` attribute. The compiler will report an error for any top-level element that lacks `b-name`.
 
-You can have `<html>` tags, but do not include the `<DOCTYPE !html>`.
+You can have `<html>` tags, but do not include the `<!DOCTYPE html>`.
 
 You point the compiler at a directory and it processes all `.html` files within it.
 
@@ -315,7 +315,7 @@ The result is **a single rendered element**, with attributes from the call site 
 </article>
 ```
 
-This differs from `b-name`/`b-part` partials, which always emit both the wrapping caller element *and* the partial's own wrapping element.
+This differs from `b-name`/`b-part` partials, which emit both the wrapping caller element *and* the partial's own wrapping element, unless either one is a `<b-unwrap>`.
 
 ### Rules
 

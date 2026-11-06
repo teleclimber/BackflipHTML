@@ -167,7 +167,7 @@ Use it when you need a directive target but don't want an extra wrapper element 
 
 ## `b-generate` — client-side patching
 
-On a [custom element partial](partials.md#custom-element-partials) definition tag, `b-generate` has Backflip generate the JavaScript that patches the element's rendered HTML in the browser when one of its declared attributes changes. The value — `full`, `base` or `render` — says how much is generated and how much you write yourself.
+On a [custom element partial](partials.md#custom-element-partials) definition tag, `b-generate` has Backflip generate the JavaScript that patches the element's rendered HTML in the browser when one of its declared attributes or stores changes. The value — `full`, `base` or `render` — says how much is generated and how much you write yourself.
 
 ```html
 <my-widget b-attr:count b-generate="full">

@@ -15,7 +15,7 @@ This is a separate Node.js package used by the [LSP server](../lsp/README.md) to
 
 The package parses no HTML of its own. Everything it knows comes from the compiler's `TNode` trees, so a match is reported as the `ElementTNode` (or custom-element call) the compiler produced, and element identity and source locations come from the compiler.
 
-Two consequences worth knowing:
+Worth knowing:
 
 - **Pass unflattened trees.** `flattenStatics` collapses a fully static element into a raw HTML string; a selector cannot match a string. The codegen path flattens, the CSS path must not.
 - **Only compiled markup is analysed.** Content the compiler rejects or ignores — most commonly a top-level element with no `b-name` — has no tree, so it has no matches either, and it is not an ancestor of anything.
@@ -55,9 +55,8 @@ Two shapes of `stylesheet-parse` failure come from css-tree:
 A selector can be valid CSS and still be one the matcher cannot read: a pseudo
 nobody has categorized, a supported name with an argument css-select refuses
 (`:nth-child(2 of svg|circle)`), a top-level `&` with no parent to resolve
-against. Most selectors that used to land here no longer do — the pseudos
-css-select chokes on come off before compiling, see
-[Pseudo relaxation](#pseudo-relaxation) — and what is left is treated as an
+against. The pseudos Backflip cannot answer come off before compiling (see
+[Pseudo relaxation](#pseudo-relaxation)), so what is left here is treated as an
 error in the authored CSS rather than guessed at.
 
 Those come through the same `failures` channel, as `reason: 'selector-parse'`,
@@ -82,10 +81,9 @@ This is not cosmetic. `csstree.generate` normalizes whitespace, and one of those
 normalizations produces text css-select cannot read: `:nth-child(2 of .x)` comes
 back as `:nth-child(2 of.x)`. That is legal CSS — `.` cannot continue an
 identifier — but css-select matches the `of` clause with a regex demanding
-whitespace on both sides, so it threw, `compileSelector` swallowed the throw, and
-the rule matched nothing at all. The same round-trip also dropped the author's
-spacing around combinators (`.a + .b` became `.a+.b`), which is what the LSP
-shows on hover.
+whitespace on both sides, so it cannot compile the regenerated text. The same
+round-trip also drops the author's spacing around combinators (`.a + .b` becomes
+`.a+.b`), and the selector text is what the LSP shows on hover.
 
 A comment is not a separator in CSS, so it is replaced with nothing rather than
 with a space: `.a/* x */.b` is the compound `.a.b`. Whitespace that surrounded a
@@ -170,7 +168,7 @@ The tree is the compiler's, so directive attributes (`b-if`, `b-part`, `:class`,
 
 ### Pseudo relaxation
 
-Backflip analyzes templates. There is no browser, no user, no session — whether an element is hovered, focused, visited or checked is not a property of the template but a state the page passes through over its life. A rule mentioning one of those used to match **nothing at all**.
+Backflip analyzes templates. There is no browser, no user, no session — whether an element is hovered, focused, visited or checked is not a property of the template but a state the page passes through over its life. Matched as written, a rule mentioning one of those would match **nothing at all**.
 
 So the pseudos Backflip cannot answer are **stripped from the selector before matching**, and the rule is reported against the element the remainder targets. `relaxSelector()` does the rewriting; `pseudo-categories.ts` is the list that decides what comes off, and `MatchedRule.strippedPseudos` reports what did, with a category for each.
 
