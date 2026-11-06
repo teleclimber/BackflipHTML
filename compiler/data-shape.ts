@@ -284,7 +284,7 @@ function collectFromExprProperty(
 	};
 
 	// Walk up the chain
-	applyShapeToObject(objectNode, propShape, scoped, shapes);
+	applyShapeToObject(objectNode, propShape, context, attrName, scoped, shapes);
 }
 
 // An index expression is used as a key: converted to a string, like a printed value.
@@ -293,26 +293,36 @@ function collectFromIndex(property: acorn.AnyNode, scoped: Set<string>, shapes: 
 }
 
 /**
- * Apply a shape (with properties/usages) to the object expression, handling
- * nested member expressions by wrapping in additional property layers.
+ * Apply a shape (with properties/usages) to the value an object expression
+ * reads, handling nested member expressions by wrapping in additional property
+ * layers. `context` is how the whole surrounding expression is used.
  */
 function applyShapeToObject(
 	objectNode: acorn.AnyNode,
 	shapeToApply: DataShape,
+	context: UsageKind,
+	attrName: string | undefined,
 	scoped: Set<string>,
 	shapes: Map<string, DataShape>,
 ): void {
-	visitBackcode(objectNode, shapeApplier, shapeToApply, scoped, shapes);
+	visitBackcode(objectNode, shapeApplier, shapeToApply, context, attrName, scoped, shapes);
 }
 
-// Only a path (an identifier, or a member chain rooted at one) carries a shape.
-// For any other object expression nothing is recorded, including its variables.
-const shapeApplier: BackcodeVisitor<void, [shapeToApply: DataShape, scoped: Set<string>, shapes: Map<string, DataShape>]> = {
-	Identifier(id, shapeToApply, scoped, shapes) {
+// A path (an identifier, or a member chain rooted at one) takes the shape. A
+// ternary passes it on to both branches. Any other expression computes a new
+// value, so its variables are recorded as operands, as in `collectFromExpr`.
+const shapeApplier: BackcodeVisitor<void, [
+	shapeToApply: DataShape,
+	context: UsageKind,
+	attrName: string | undefined,
+	scoped: Set<string>,
+	shapes: Map<string, DataShape>,
+]> = {
+	Identifier(id, shapeToApply, _context, _attrName, scoped, shapes) {
 		if (scoped.has(id.name)) return;
 		mergeShapeInto(getOrCreateShape(shapes, id.name), shapeToApply);
 	},
-	MemberExpression(mem, shapeToApply, scoped, shapes) {
+	MemberExpression(mem, shapeToApply, context, attrName, scoped, shapes) {
 		if (mem.computed) {
 			// e.g. items[0].name — items is indexed, and we apply property shape
 			const wrapper: DataShape = {
@@ -322,7 +332,7 @@ const shapeApplier: BackcodeVisitor<void, [shapeToApply: DataShape, scoped: Set<
 			const indexVars = indexVarsOf(mem.property, scoped);
 			if (indexVars) wrapper.indexVars = indexVars;
 			mergeShapeInto(wrapper, shapeToApply);
-			applyShapeToObject(mem.object, wrapper, scoped, shapes);
+			applyShapeToObject(mem.object, wrapper, context, attrName, scoped, shapes);
 			collectFromIndex(mem.property, scoped, shapes);
 		} else {
 			const parentPropName = (mem.property as acorn.Identifier).name;
@@ -330,13 +340,22 @@ const shapeApplier: BackcodeVisitor<void, [shapeToApply: DataShape, scoped: Set<
 				usages: new Set(),
 				properties: new Map([[parentPropName, shapeToApply]]),
 			};
-			applyShapeToObject(mem.object, wrapper, scoped, shapes);
+			applyShapeToObject(mem.object, wrapper, context, attrName, scoped, shapes);
 		}
 	},
+	ConditionalExpression(cond, shapeToApply, context, attrName, scoped, shapes) {
+		collectFromExpr(cond.test, 'boolean', undefined, scoped, shapes);
+		applyShapeToObject(cond.consequent, shapeToApply, context, attrName, scoped, shapes);
+		applyShapeToObject(cond.alternate, shapeToApply, context, attrName, scoped, shapes);
+	},
+	UnaryExpression(un, _shapeToApply, context, attrName, scoped, shapes) {
+		collectFromExpr(un, context, attrName, scoped, shapes);
+	},
+	BinaryExpression(bin, _shapeToApply, context, attrName, scoped, shapes) {
+		collectFromExpr(bin, context, attrName, scoped, shapes);
+	},
 	Literal() {},
-	UnaryExpression() {},
-	ConditionalExpression() {},
-	BinaryExpression() {},
+	// An invalid expression is reported when it is parsed; it records no shape.
 	unsupported() {},
 };
 
@@ -360,7 +379,7 @@ function collectFromExprIndexed(
 	if (passedInfo) {
 		indexedShape.passedTo = [passedInfo];
 	}
-	applyShapeToObject(objectNode, indexedShape, scoped, shapes);
+	applyShapeToObject(objectNode, indexedShape, context, attrName, scoped, shapes);
 }
 
 // --- Parsed expression helper ---
@@ -403,23 +422,14 @@ function applyElementShape(
 	scoped: Set<string>,
 	shapes: Map<string, DataShape>,
 ): void {
-	const withElement = (): DataShape => ({ usages: new Set(), elementShape });
 	if (!iterable.expr) {
 		// No AST available — fall back to vars list
 		for (const v of iterable.vars) {
-			if (!scoped.has(v)) mergeShapeInto(getOrCreateShape(shapes, v), withElement());
+			if (!scoped.has(v)) mergeShapeInto(getOrCreateShape(shapes, v), { usages: new Set(), elementShape });
 		}
 		return;
 	}
-	const apply = (node: acorn.AnyNode): void => {
-		if (node.type === 'ConditionalExpression') {
-			apply(node.consequent);
-			apply(node.alternate);
-		} else {
-			applyShapeToObject(node, withElement(), scoped, shapes);
-		}
-	};
-	apply(iterable.expr.expression);
+	applyShapeToObject(iterable.expr.expression, { usages: new Set(), elementShape }, 'iterable', undefined, scoped, shapes);
 }
 
 // --- TNode tree walking ---

@@ -368,6 +368,77 @@ Deno.test("inferDataShape: ternary in attribute records attribute name on branch
 	assertEquals([...int.attributes!], ['href']);
 });
 
+// --- Member access on an expression that is not a path ---
+
+Deno.test("inferFreeVars: finds variables in the object of a member access that is not a path", () => {
+	for (const [code, vars] of [
+		['(a ? b : c).name', ['a', 'b', 'c']],
+		['(a + b).length', ['a', 'b']],
+		['(!a).x', ['a']],
+		['(a ? b : c)[i]', ['a', 'b', 'c', 'i']],
+		['((p ? a : b).c ? d : e).f', ['a', 'b', 'd', 'e', 'p']],
+	] as const) {
+		assertEquals(inferFreeVars(makeRoot([makePrintReal(code)])), [...vars], code);
+	}
+});
+
+Deno.test("inferDataShape: member of a ternary applies the property shape to both branches", () => {
+	const shapes = inferDataShape(makeRoot([makePrintReal('(show ? a : b).name')]));
+	assertUsages(shapes.get('show')!, ['boolean']);
+	assertUsages(shapes.get('a')!, []);
+	assertUsages(shapes.get('a')!.properties!.get('name')!, ['printed']);
+	assertUsages(shapes.get('b')!.properties!.get('name')!, ['printed']);
+});
+
+Deno.test("inferDataShape: index into a ternary marks both branches indexed", () => {
+	const shapes = inferDataShape(makeRoot([makePrintReal('(show ? a : b)[i]')]));
+	assertUsages(shapes.get('show')!, ['boolean']);
+	assertEquals(shapes.get('a')!.indexed, true);
+	assertEquals(shapes.get('a')!.indexVars, ['i']);
+	assertEquals(shapes.get('b')!.indexed, true);
+	assertUsages(shapes.get('i')!, ['printed']);
+});
+
+Deno.test("inferDataShape: nested ternaries in member objects resolve to their branch paths", () => {
+	const shapes = inferDataShape(makeRoot([makePrintReal('((p ? a : b).c ? d : e).f')]));
+	assertUsages(shapes.get('p')!, ['boolean']);
+	assertUsages(shapes.get('a')!.properties!.get('c')!, ['boolean']);
+	assertUsages(shapes.get('b')!.properties!.get('c')!, ['boolean']);
+	assertUsages(shapes.get('d')!.properties!.get('f')!, ['printed']);
+	assertUsages(shapes.get('e')!.properties!.get('f')!, ['printed']);
+});
+
+Deno.test("inferDataShape: member of a computed value records its operands in the surrounding context", () => {
+	const printed = inferDataShape(makeRoot([makePrintReal('(a + b).length')]));
+	assertUsages(printed.get('a')!, ['printed']);
+	assertUsages(printed.get('b')!, ['printed']);
+	assertEquals(printed.get('a')!.properties, undefined);
+
+	const attr = inferDataShape(makeRoot([makeAttrBindReal([{ name: 'title', code: '(a + b).length' }])]));
+	assertUsages(attr.get('a')!, ['attribute']);
+	assertEquals([...attr.get('a')!.attributes!], ['title']);
+
+	const negated = inferDataShape(makeRoot([makePrintReal('(!a).x')]));
+	assertUsages(negated.get('a')!, ['boolean']);
+	assertEquals(negated.get('a')!.properties, undefined);
+});
+
+Deno.test("inferDataShape: member of a literal records nothing", () => {
+	assertEquals(inferDataShape(makeRoot([makePrintReal('"abc".length')])).size, 0);
+});
+
+Deno.test("inferDataShape: b-for over a member of a ternary puts elementShape on each branch path", () => {
+	const shapes = inferDataShape(makeRoot([
+		makeForReal('x', '(flag ? a : b).list', [makePrintReal('x.name')]),
+	]));
+	assertUsages(shapes.get('flag')!, ['boolean']);
+	for (const name of ['a', 'b']) {
+		const list = shapes.get(name)!.properties!.get('list')!;
+		assertUsages(list, ['iterable']);
+		assertUsages(list.elementShape!.properties!.get('name')!, ['printed']);
+	}
+});
+
 Deno.test("inferDataShape: iterable usage from b-for", () => {
 	const root = makeRoot([makeForReal('item', 'items', [])]);
 	const shapes = inferDataShape(root);
