@@ -53,7 +53,7 @@ You can also reference assets dynamically using `b-bind` or the `:` shorthand. T
 <img :src~="'@images/' + user.avatar" />
 ```
 
-For dynamic bindings, the path replacement happens at runtime by the language specific renderer.
+For dynamic bindings, the path replacement happens at runtime in the renderer.
 
 ### `srcset` Attribute
 

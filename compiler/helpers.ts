@@ -40,7 +40,6 @@ export function parseBPartValue(value: string): { partialName: string; file: str
 // `names in iterable`, where names is optionally parenthesized. Names can't contain
 // `in`, so the first ` in ` ends them and the iterable keeps any later ones.
 const B_FOR_RE = /^\s*(?:\(([^()]*)\)|([^()]*?))\s+in\s+(\S.*)$/s;
-// No `$`: names become PHP closure parameters.
 const LOOP_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 // A loop name that binds nothing.
 const SKIP_NAME = '_';

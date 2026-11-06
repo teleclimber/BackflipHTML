@@ -14,13 +14,11 @@ import * as fs from "node:fs/promises";
 import { compileDirectory } from "../compiler/partials.ts";
 import { applyDomPatch } from "../compiler/generate/dom-patch/nodes2patch.ts";
 import { fileToJsModule } from "../compiler/generate/js/nodes2js.ts";
-import { fileToPhpFile } from "../compiler/generate/php/nodes2php.ts";
 import { renderRoot, type RootRNode } from "../runtime/js/render.ts";
 
 const TMPDIR = "/tmp/claude-1000/dom-patch-if";
 const REPO_ROOT = new URL("../", import.meta.url).pathname;
 const CLI_PATH = path.join(REPO_ROOT, "cli.ts");
-const RENDER_PHP = path.join(REPO_ROOT, "runtime/php/render.php");
 
 // A reactive custom element whose b-if set qualifies, plus a page that uses it.
 const APP_HTML = `<mode-badge b-attr:mode b-script="@scripts/mode-badge.js">
@@ -260,23 +258,3 @@ Deno.test("integration JS: the server render carries only the winning branch's m
 	}
 });
 
-Deno.test("integration PHP: the server render carries only the winning branch's marker", async () => {
-	const { root, file } = await compileBranchesApp();
-	try {
-		const phpPath = path.join(root, "app.php");
-		await fs.writeFile(phpPath, fileToPhpFile(file, "app.html"));
-		const harness = `<?php
-require '${RENDER_PHP}';
-$partials = require '${phpPath}';
-foreach (${JSON.stringify(PAGES)} as $p) { echo backflip_renderRoot($partials[$p], []) . "\\0"; }
-`;
-		const harnessPath = path.join(root, "harness.php");
-		await fs.writeFile(harnessPath, harness);
-		const out = await new Deno.Command("php", { args: [harnessPath], stdout: "piped", stderr: "piped" }).output();
-		assertEquals(out.code, 0, `php failed: ${new TextDecoder().decode(out.stderr)}`);
-		const pages = new TextDecoder().decode(out.stdout).split("\0").slice(0, -1);
-		assertEquals(pages.map(renderedBranches), [[0], [1], [2]]);
-	} finally {
-		await fs.rm(root, { recursive: true, force: true });
-	}
-});

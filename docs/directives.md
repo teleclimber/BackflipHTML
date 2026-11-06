@@ -36,8 +36,6 @@ An optional second name, after the value, is bound to the 0-based position of th
 <li b-for="(post, i) in posts">{{ i + 1 }}. {{ post.title }}</li>
 ```
 
-The index counts positions in both runtimes: in PHP, an associative array gives `0, 1, 2…`, not its keys.
-
 Write `_` for a name you don't need. It binds nothing, so `b-for="_, i in widgets"` binds only `i`, and `b-for="_ in widgets"` repeats the element without binding anything.
 
 `b-key`, on the same tag, is an expression that identifies an item across [client-side updates](dom-patch.md). It can read the loop's names and must be unique in the list. It is required on every `b-for` in a partial that generates client JS, and ignored elsewhere. It renders nothing.
@@ -217,7 +215,7 @@ Expressions in directives and `{{ }}` interpolations are handled by `backcode.ts
 | Logical operators | `user && user.name`, `nickname || name` |
 | Ternary | `admin ? name : "guest"` |
 
-Operators follow JavaScript semantics, and the JS and PHP backends produce identical results:
+Operators follow JavaScript semantics:
 
 - `+` works for both numeric addition and string concatenation.
 - `-`, `*`, `/` and `%` convert both sides to numbers. Division by zero gives `Infinity` or `NaN`, never an error.

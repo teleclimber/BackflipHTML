@@ -126,7 +126,7 @@ Deno.test("loadConfig - accepts multiple output entries", async () => {
 		root: ".",
 		output: [
 			{ lang: "js", path: "dist/js" },
-			{ lang: "php", path: "dist/php" }
+			{ lang: "dom-patch", path: "dist/bfdom" }
 		]
 	}));
 	const { config, errors } = await loadConfig(dir);
@@ -134,21 +134,19 @@ Deno.test("loadConfig - accepts multiple output entries", async () => {
 		root: ".",
 		output: [
 			{ lang: "js", path: "dist/js" },
-			{ lang: "php", path: "dist/php" }
+			{ lang: "dom-patch", path: "dist/bfdom" }
 		]
 	});
 	assertEquals(errors, []);
 });
 
-Deno.test("loadConfig - accepts output with lang php", async () => {
+Deno.test("loadConfig - throws on output lang php", async () => {
 	const dir = await makeTempDir("lang_php");
 	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({
 		root: ".",
 		output: [{ lang: "php", path: "out" }]
 	}));
-	const { config, errors } = await loadConfig(dir);
-	assertEquals(config, { root: ".", output: [{ lang: "php", path: "out" }] });
-	assertEquals(errors, []);
+	await assertRejects(() => loadConfig(dir), Error, 'output[0].lang must be "js" or "dom-patch"');
 });
 
 Deno.test("loadConfig - throws on invalid JSON", async () => {
@@ -194,7 +192,7 @@ Deno.test("loadConfig - throws on invalid output lang value", async () => {
 	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({
 		root: ".", output: [{ lang: "python", path: "dist" }]
 	}));
-	await assertRejects(() => loadConfig(dir), Error, 'output[0].lang must be "js", "php", or "dom-patch"');
+	await assertRejects(() => loadConfig(dir), Error, 'output[0].lang must be "js" or "dom-patch"');
 });
 
 Deno.test("loadConfig - throws when output is not an array", async () => {
@@ -216,7 +214,7 @@ Deno.test("loadConfig - throws on duplicate output paths", async () => {
 	await fs.writeFile(path.join(dir, CONFIG_FILENAME), JSON.stringify({
 		root: ".", output: [
 			{ lang: "js", path: "dist" },
-			{ lang: "php", path: "dist" }
+			{ lang: "dom-patch", path: "dist" }
 		]
 	}));
 	await assertRejects(() => loadConfig(dir), Error, 'duplicate output path "dist"');

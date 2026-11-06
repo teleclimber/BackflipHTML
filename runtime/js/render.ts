@@ -75,8 +75,7 @@ class PageCollector {
 }
 
 // A store's data as JSON that cannot end its <script> tag: `<`, `>` and `&` are
-// escaped, and so are U+2028 and U+2029, matching PHP's json_encode with JSON_HEX_TAG
-// and JSON_HEX_AMP.
+// escaped, and so are U+2028 and U+2029.
 function storeJson(name: string, data: unknown): string {
 	let json: string | undefined;
 	try {

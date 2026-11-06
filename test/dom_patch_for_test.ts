@@ -1,6 +1,6 @@
 /**
  * End-to-end tests for reactive `b-for`: build a project with the real CLI, render the
- * page with the JS and PHP runtimes, then run the generated module, the store file and
+ * page with the JS runtime, then run the generated module, the store file and
  * the runtime against that HTML in jsdom.
  *
  * Like `dom_patch_generate_test.ts`, this file must not import the compiler (jsdom
@@ -17,7 +17,6 @@ import { linkAsScript } from "./link-as-script.ts";
 
 const TMPDIR = "/tmp/claude-1000/dom-patch-for";
 const CLI_PATH = new URL("../cli.ts", import.meta.url).pathname;
-const RENDER_PHP = new URL("../runtime/php/render.php", import.meta.url).pathname;
 
 // Let the microtask that patches the DOM after a change run.
 const settled = () => new Promise(resolve => setTimeout(resolve));
@@ -33,7 +32,7 @@ async function buildProject(appHtml: string, storeNames: string[] = ["items"]): 
 	for (const name of storeNames) await fs.writeFile(path.join(workDir, "static", "stores", `${name}.js`), STORE_JS(name));
 	await fs.writeFile(path.join(workDir, "backflip.json"), JSON.stringify({
 		root: "templates",
-		output: [{ lang: "dom-patch", path: "static/bfdom" }, { lang: "js", path: "dist" }, { lang: "php", path: "php" }],
+		output: [{ lang: "dom-patch", path: "static/bfdom" }, { lang: "js", path: "dist" }],
 		assets: [{ name: "static", path: "static", prefix: "/static/" }],
 		stores: "static/stores",
 	}));
@@ -51,22 +50,6 @@ async function renderJs(workDir: string, stores: Record<string, unknown>): Promi
 	const mod = await import(path.join(workDir, "dist", "app.js"));
 	return renderRoot(mod.page as RootRNode, {}, undefined, stores);
 }
-
-async function renderPhp(workDir: string, stores: Record<string, unknown>): Promise<string> {
-	const harnessPath = path.join(workDir, "harness.php");
-	await fs.writeFile(harnessPath, `<?php
-require '${RENDER_PHP}';
-$partials = require '${path.join(workDir, "php", "app.php")}';
-$stores = json_decode(${JSON.stringify(JSON.stringify(stores))}, true);
-echo backflip_renderRoot($partials['page'], [], [], $stores);
-`);
-	const out = await new Deno.Command("php", { args: [harnessPath], stdout: "piped", stderr: "piped" }).output();
-	const stderr = new TextDecoder().decode(out.stderr);
-	if (out.code !== 0) throw new Error(`php failed (${out.code}): ${stderr}`);
-	return new TextDecoder().decode(out.stdout);
-}
-
-const RUNTIMES = { js: renderJs, php: renderPhp };
 
 // A store as generated code sees it.
 interface Store {
@@ -102,8 +85,8 @@ async function pageFor(workDir: string, html: string, tagName: string) {
 	};
 }
 
-// Run `test` against the page each runtime renders, from one build.
-function bothRuntimes(
+// Run `test` against the page the JS runtime renders.
+function pageTest(
 	name: string,
 	appHtml: string,
 	stores: Record<string, unknown>,
@@ -113,10 +96,8 @@ function bothRuntimes(
 	Deno.test(name, async () => {
 		const workDir = await buildProject(appHtml, Object.keys(stores));
 		try {
-			for (const render of Object.values(RUNTIMES)) {
-				const html = await render(workDir, stores);
-				await test(await pageFor(workDir, html, tagName), html);
-			}
+			const html = await renderJs(workDir, stores);
+			await test(await pageFor(workDir, html, tagName), html);
 		} finally {
 			await fs.rm(workDir, { recursive: true, force: true });
 		}
@@ -144,18 +125,7 @@ const LIST = (...xs: unknown[]) => ({ list: xs });
 const row = (id: number, cls: string, text: string) => `<li data-id="${id}" class="${cls}">${text}</li>`;
 const shown = (...rows: string[]) => `<ul><li>head</li>${rows.join("")}<li>tail</li></ul>`;
 
-Deno.test("b-for: JS and PHP render the same markers", async () => {
-	const workDir = await buildProject(LIST_HTML);
-	try {
-		const stores = { items: LIST(A, B) };
-		const strip = (html: string) => html.replace(/<script type="application\/json".*?<\/script>/, "");
-		assertEquals(strip(await renderPhp(workDir, stores)), strip(await renderJs(workDir, stores)));
-	} finally {
-		await fs.rm(workDir, { recursive: true, force: true });
-	}
-});
-
-bothRuntimes("b-for: the module patches nothing at init, and items keep their nodes", LIST_HTML, { items: LIST(A, B) }, "my-list", async ({ el, start, content }, html) => {
+pageTest("b-for: the module patches nothing at init, and items keep their nodes", LIST_HTML, { items: LIST(A, B) }, "my-list", async ({ el, start, content }, html) => {
 	assertStringIncludes(html, `data-bf-store="items"`);
 	assertStringIncludes(html, `<link rel="modulepreload" href="/static/stores/items.js">`);
 	const before = [...el.querySelectorAll("li")];
@@ -167,7 +137,7 @@ bothRuntimes("b-for: the module patches nothing at init, and items keep their no
 	assertEquals(content(), shown(row(1, "first", "a!"), row(2, "rest", "b!")));
 });
 
-bothRuntimes("b-for: changed items update in place", LIST_HTML, { items: LIST(A, B) }, "my-list", async ({ el, start, store, content }) => {
+pageTest("b-for: changed items update in place", LIST_HTML, { items: LIST(A, B) }, "my-list", async ({ el, start, store, content }) => {
 	start();
 	const before = [...el.querySelectorAll("li")];
 	store().setAt(["list", 1, "name"], "B");
@@ -176,14 +146,14 @@ bothRuntimes("b-for: changed items update in place", LIST_HTML, { items: LIST(A,
 	assertEquals([...el.querySelectorAll("li")], before);
 });
 
-bothRuntimes("b-for: an attribute change reaches every item", LIST_HTML, { items: LIST(A, B) }, "my-list", async ({ el, start, content }) => {
+pageTest("b-for: an attribute change reaches every item", LIST_HTML, { items: LIST(A, B) }, "my-list", async ({ el, start, content }) => {
 	start();
 	el.setAttribute("suffix", "?");
 	await settled();
 	assertEquals(content(), shown(row(1, "first", "a?"), row(2, "rest", "b?")));
 });
 
-bothRuntimes("b-for: items are added, removed and moved by key, even when the data is all new objects", LIST_HTML, { items: LIST(A, B) }, "my-list", async ({ el, start, store, content }) => {
+pageTest("b-for: items are added, removed and moved by key, even when the data is all new objects", LIST_HTML, { items: LIST(A, B) }, "my-list", async ({ el, start, store, content }) => {
 	start();
 	const [, a, b] = el.querySelectorAll("li");
 
@@ -213,7 +183,7 @@ bothRuntimes("b-for: items are added, removed and moved by key, even when the da
 	assertEquals(content(), shown(row(2, "first", "b!")));
 });
 
-bothRuntimes("b-for: an empty list renders nothing, and items can arrive later", LIST_HTML, { items: LIST() }, "my-list", async ({ start, store, content }) => {
+pageTest("b-for: an empty list renders nothing, and items can arrive later", LIST_HTML, { items: LIST() }, "my-list", async ({ start, store, content }) => {
 	start();
 	assertEquals(content(), shown());
 	store().set(LIST(A, B));
@@ -225,7 +195,7 @@ bothRuntimes("b-for: an empty list renders nothing, and items can arrive later",
 
 const TWO_HTML = LIST_HTML.replace(`<my-list suffix="!"></my-list>`, `<my-list id="one" suffix="!"></my-list><my-list id="two" suffix="?"></my-list>`);
 
-bothRuntimes("b-for: each instance of a partial keeps its own items", TWO_HTML, { items: LIST(A) }, "my-list", async ({ doc, start, store, content }) => {
+pageTest("b-for: each instance of a partial keeps its own items", TWO_HTML, { items: LIST(A) }, "my-list", async ({ doc, start, store, content }) => {
 	start();
 	store().set(LIST(A, B));
 	await settled();
@@ -242,7 +212,7 @@ const SLOT_HTML = `<my-panel b-store:items b-attr:t b-generate="full">
 	<body><my-panel id="outer" t="o"><my-panel id="inner" t="i">x</my-panel></my-panel></body>
 </b-unwrap>`;
 
-bothRuntimes("b-for: an instance nested through a slot keeps its own items", SLOT_HTML, { items: LIST(A) }, "my-panel", async ({ doc, start, store }) => {
+pageTest("b-for: an instance nested through a slot keeps its own items", SLOT_HTML, { items: LIST(A) }, "my-panel", async ({ doc, start, store }) => {
 	const errors = await capturingErrors(async () => {
 		start();
 		store().set(LIST(B, A));
@@ -272,7 +242,7 @@ const MULTI_HTML = `<my-multi b-store:items b-generate="full">
 
 const multi = (...names: string[]) => `<dl>${names.map(n => `<dt>${n}</dt> ${n}-text <dd title="${n}">x</dd>`).join(" ")}</dl>`.replace(/<\/dd> <dt>/g, "</dd><dt>");
 
-bothRuntimes("b-for: a multi-root item with text and whitespace adds, removes, moves and updates as one", MULTI_HTML, { items: LIST(A, B) }, "my-multi", async ({ el, start, store, content }) => {
+pageTest("b-for: a multi-root item with text and whitespace adds, removes, moves and updates as one", MULTI_HTML, { items: LIST(A, B) }, "my-multi", async ({ el, start, store, content }) => {
 	start();
 	const [dtA] = el.querySelectorAll("dt");
 
@@ -292,7 +262,7 @@ const TEXT_HTML = `<my-text b-store:items b-generate="full"><p><b-unwrap b-for="
 	<body><my-text></my-text></body>
 </b-unwrap>`;
 
-bothRuntimes("b-for: a text-only item, with no element at all, works", TEXT_HTML, { items: LIST(A, B) }, "my-text", async ({ start, store, content }) => {
+pageTest("b-for: a text-only item, with no element at all, works", TEXT_HTML, { items: LIST(A, B) }, "my-text", async ({ start, store, content }) => {
 	const errors = await capturingErrors(async () => {
 		start();
 		store().set(LIST(B, { id: 1, name: "A" }, C));
@@ -310,7 +280,7 @@ const OPTIONAL_HTML = `<my-opt b-store:items b-generate="full"><ul><b-unwrap b-f
 
 const OFF = { id: 1, name: "a", on: false }, ON = { id: 2, name: "b", on: true };
 
-bothRuntimes("b-for: an item that renders nothing still holds its place", OPTIONAL_HTML, { items: LIST(OFF, ON) }, "my-opt", async ({ start, store, content }) => {
+pageTest("b-for: an item that renders nothing still holds its place", OPTIONAL_HTML, { items: LIST(OFF, ON) }, "my-opt", async ({ start, store, content }) => {
 	const errors = await capturingErrors(async () => {
 		start();
 		assertEquals(content(), "<ul><li>b</li></ul>");
@@ -330,7 +300,7 @@ const TABLE_HTML = `<my-table b-store:items b-generate="full"><table><tbody><tr 
 	<body><my-table></my-table></body>
 </b-unwrap>`;
 
-bothRuntimes("b-for: an added row is parsed in its table", TABLE_HTML, { items: LIST(A) }, "my-table", async ({ start, store, content }) => {
+pageTest("b-for: an added row is parsed in its table", TABLE_HTML, { items: LIST(A) }, "my-table", async ({ start, store, content }) => {
 	start();
 	store().set(LIST(A, B));
 	await settled();
@@ -343,7 +313,7 @@ const NO_TBODY_HTML = `<my-bare b-store:items b-generate="full"><table><tr b-for
 	<body><my-bare></my-bare></body>
 </b-unwrap>`;
 
-bothRuntimes("b-for: a row directly under a table is reported and not updated, since the parser's tbody splits the markers", NO_TBODY_HTML, { items: LIST(A) }, "my-bare", async ({ start, store, content }) => {
+pageTest("b-for: a row directly under a table is reported and not updated, since the parser's tbody splits the markers", NO_TBODY_HTML, { items: LIST(A) }, "my-bare", async ({ start, store, content }) => {
 	const errors = await capturingErrors(async () => {
 		start();
 		store().set(LIST(B));
@@ -370,7 +340,7 @@ const NESTED_HTML = `<my-grid b-store:items b-generate="full">
 const R1 = { id: 1, title: "x", cells: [A, B] }, R2 = { id: 2, title: "y", cells: [A] };
 const section = (t: string, ...cells: string[]) => `<section><h3>${t}</h3>${cells.map(c => `<i>${c}${t}</i>`).join("")}</section>`;
 
-bothRuntimes("b-for: a loop in a loop keeps inner items within their outer item", NESTED_HTML, { items: LIST(R1, R2) }, "my-grid", async ({ el, start, store, content }) => {
+pageTest("b-for: a loop in a loop keeps inner items within their outer item", NESTED_HTML, { items: LIST(R1, R2) }, "my-grid", async ({ el, start, store, content }) => {
 	const errors = await capturingErrors(async () => {
 		start();
 		const [first] = el.querySelectorAll("section");
@@ -408,7 +378,7 @@ const IN_SET_HTML = `<my-maybe b-store:items b-generate="full">
 	<body><my-maybe></my-maybe></body>
 </b-unwrap>`;
 
-bothRuntimes("b-for: a loop in a b-if branch patches, also once the branch is rendered in the browser", IN_SET_HTML, { items: { open: false, list: [A] } }, "my-maybe", async ({ start, store, content }) => {
+pageTest("b-for: a loop in a b-if branch patches, also once the branch is rendered in the browser", IN_SET_HTML, { items: { open: false, list: [A] } }, "my-maybe", async ({ start, store, content }) => {
 	const errors = await capturingErrors(async () => {
 		start();
 		assertEquals(content(), "<em>closed</em>");
@@ -428,7 +398,7 @@ bothRuntimes("b-for: a loop in a b-if branch patches, also once the branch is re
 	assertEquals(errors, []);
 });
 
-bothRuntimes("b-for: a loop in a server-rendered b-if branch pairs its items at init", IN_SET_HTML, { items: { open: true, list: [A, B] } }, "my-maybe", async ({ el, start, store, content }) => {
+pageTest("b-for: a loop in a server-rendered b-if branch pairs its items at init", IN_SET_HTML, { items: { open: true, list: [A, B] } }, "my-maybe", async ({ el, start, store, content }) => {
 	start();
 	const [a] = el.querySelectorAll("p");
 	store().set({ open: true, list: [B, A] });
@@ -445,7 +415,7 @@ const SET_IN_ITEM_HTML = `<my-flags b-store:items b-generate="full">
 	<body><my-flags></my-flags></body>
 </b-unwrap>`;
 
-bothRuntimes("b-for: a b-if in an item swaps and patches within that item, and survives a move", SET_IN_ITEM_HTML, { items: LIST(OFF, ON) }, "my-flags", async ({ start, store, content }) => {
+pageTest("b-for: a b-if in an item swaps and patches within that item, and survives a move", SET_IN_ITEM_HTML, { items: LIST(OFF, ON) }, "my-flags", async ({ start, store, content }) => {
 	const errors = await capturingErrors(async () => {
 		start();
 		assertEquals(content(), "<div><i>a off</i></div><div><b>b on</b></div>");
@@ -472,7 +442,7 @@ const STATIC_HTML = `<my-kid b-attr:v b-generate="full"><u>{{ v }}</u></my-kid>
 	<body><my-static t="1"></my-static></body>
 </b-unwrap>`;
 
-bothRuntimes("b-for: a loop holding a custom element is not patched, and its store is not shipped for it", STATIC_HTML, { items: LIST(A, B) }, "my-static", async ({ el, start, content }, html) => {
+pageTest("b-for: a loop holding a custom element is not patched, and its store is not shipped for it", STATIC_HTML, { items: LIST(A, B) }, "my-static", async ({ el, start, content }, html) => {
 	assertEquals(html.includes(`data-bf-store="items"`), false);
 	start();
 	assertEquals(content().includes("<u>a</u>"), true);
@@ -482,7 +452,7 @@ bothRuntimes("b-for: a loop holding a custom element is not patched, and its sto
 	assertEquals(el.querySelectorAll("my-kid").length, 2);
 });
 
-bothRuntimes("b-for: duplicate keys in the rendered data are reported, and the list stays as rendered", LIST_HTML, { items: LIST(A, { ...B, id: 1 }) }, "my-list", async ({ start, store, content }) => {
+pageTest("b-for: duplicate keys in the rendered data are reported, and the list stays as rendered", LIST_HTML, { items: LIST(A, { ...B, id: 1 }) }, "my-list", async ({ start, store, content }) => {
 	const errors = await capturingErrors(async () => {
 		start();
 		store().set(LIST(B));
@@ -493,10 +463,11 @@ bothRuntimes("b-for: duplicate keys in the rendered data are reported, and the l
 	assertEquals(content(), shown(row(1, "first", "a!"), row(1, "rest", "b!")));
 });
 
-Deno.test("b-for: a PHP array with non-sequential keys renders, and is reported as not an array in the browser", async () => {
+// A Set renders on the server but reaches the browser as JSON `{}`.
+Deno.test("b-for: a non-array iterable renders, and is reported as not an array in the browser", async () => {
 	const workDir = await buildProject(LIST_HTML);
 	try {
-		const html = await renderPhp(workDir, { items: { list: { "42": A, "7": B } } });
+		const html = await renderJs(workDir, { items: { list: new Set([A, B]) } });
 		const { start, content } = await pageFor(workDir, html, "my-list");
 		const errors = await capturingErrors(async () => {
 			start();
@@ -504,7 +475,7 @@ Deno.test("b-for: a PHP array with non-sequential keys renders, and is reported 
 		});
 		assertEquals(errors.length, 1);
 		assertStringIncludes(String(errors[0][1]), "only an array can be patched");
-		assertEquals(content(), shown(row(2, "first", "b!"), row(1, "rest", "a!")));
+		assertEquals(content(), shown(row(1, "first", "a!"), row(2, "rest", "b!")));
 	} finally {
 		await fs.rm(workDir, { recursive: true, force: true });
 	}

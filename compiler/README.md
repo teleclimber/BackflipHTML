@@ -1,6 +1,6 @@
 # Compiler
 
-The compiler takes HTML templates with `b-*` directive attributes and `{{ expression }}` interpolations and produces a language-agnostic AST (abstract syntax tree). Code generators then convert the AST into JavaScript or PHP source files.
+The compiler takes HTML templates with `b-*` directive attributes and `{{ expression }}` interpolations and produces an AST (abstract syntax tree). Code generators then convert the AST into JavaScript modules.
 
 ## Components
 
@@ -84,7 +84,7 @@ counts, from one list.
 
 Handles expressions used in directives and `{{ }}` interpolations. Uses `acorn` to parse expressions as a safe subset of JavaScript. Validates that only allowed constructs are used and extracts the list of variable names each expression depends on.
 
-Every pass over an expression (validation, the JS and PHP generators, data-shape inference) is a `BackcodeVisitor`, with a handler for each allowed node type. Adding a node type to `BackcodeNode` is a type error in each pass until it handles the node.
+Every pass over an expression (validation, the JS generator, data-shape inference) is a `BackcodeVisitor`, with a handler for each allowed node type. Adding a node type to `BackcodeNode` is a type error in each pass until it handles the node.
 
 ### Cross-file compilation (`partials.ts`)
 
@@ -107,10 +107,9 @@ Loads and validates `backflip.json` project configuration files. See [`docs/conf
 
 ### Code generators ([`generate/`](generate/))
 
-Convert the language-agnostic AST into target-language source files. Each generator works the same way — one module handles individual expressions, another walks the full tree and emits a source file — just in different languages:
+Convert the AST into JavaScript:
 
 - **[`generate/js/`](generate/js/README.md)** — produces JavaScript ES modules
-- **[`generate/php/`](generate/php/README.md)** — produces PHP files
 - **[`generate/dom-patch/`](generate/dom-patch/README.md)** — produces browser-side patcher classes for custom-element partials with reactive attributes; mutates the AST so server-rendered HTML carries the matching `data-bfid` markers
 
 ## Usage docs
@@ -137,16 +136,5 @@ Test files:
 | `partial-graph_test.ts` | The call graph: bodies, fills, callers, entry points, cycles |
 | `data-shape_test.ts` | Variable usage inference |
 | `data-shape-integration_test.ts` | Data shape across partials |
-| `generate/js/generatejs_test.ts` | Expression → JS function |
+| `generate/js/generatejs_test.ts` | Expression → JS function, and what the generated function evaluates to |
 | `generate/js/nodes2js_test.ts` | AST → JS module |
-| `generate/php/generatephp_test.ts` | Expression → PHP closure |
-| `generate/php/nodes2php_test.ts` | AST → PHP file |
-| `integration_tests/backcode_test.ts` | Cross-language runtime equivalence for compiled backcode expressions |
-
-### Cross-language runtime equivalence (`integration_tests/`)
-
-`backcode_test.ts` is the harness that compiles each test's backcode string with every code generator, runs it under each target runtime, and asserts that all runtimes produce the same value. JS is the reference language; non-JS runtimes (currently PHP) must match it. Test cases live in `backcode_cases.ts` — a flat list of `{ code, inputs, expected }` records covering operator semantics (`==`, `===`, `+`, arithmetic, `&&`/`||`, `!`, ternary, member access) and their compositions, focused on the kinds of inputs where JS and other languages tend to disagree (mixed-type equality, `+` concat vs add, `'0'` truthiness, etc.).
-
-The PHP runtime spawns one `php -r` subprocess per case; if `php` isn't in PATH the harness skips PHP with a warning instead of failing.
-
-To add another target language, create `integration_tests/backcode_runtime_<lang>.ts` exporting a `Runtime` (see `backcode_runtime.ts`), then import it from `backcode_test.ts` and push it into the `runtimes` list. No changes to the case fixture are needed — every existing case automatically covers the new language.

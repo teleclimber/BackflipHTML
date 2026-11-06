@@ -200,14 +200,14 @@ Enable generation with a `dom-patch` [output entry](configuration.md) (or `--lan
 
 ## Script auto-include
 
-The [JS](runtime-js.md) and [PHP](runtime-php.md) renderers include the scripts and stores of the custom elements a page actually renders; there is no manual `<script>` step.
+The [renderer](runtime-js.md) includes the scripts and stores of the custom elements a page actually renders; there is no manual `<script>` step.
 
 - An **entry** is injected as `<script src="…" type="module"></script>`: the generated module for `full`, your `b-script` module otherwise.
 - A **dependency** — the generated module for `base` and `render` — is injected as `<link rel="modulepreload" href="…">`, so the browser fetches it in parallel with the entry that imports it.
 - A store the generated code reads is **shipped**: its data as a JSON tag, and its store file as a dependency. See [Data stores → Shipping](data-stores.md#shipping-data-to-the-browser).
 - The block holds the store tags, then the dependencies, then the entries. Store tags are deduplicated by store name, scripts by URL, each in first-encounter order. The block goes immediately before the first `</body>` (case-insensitive), or at the end of the output when there is none. Streaming and non-streaming renders produce identical output.
 - Only rendered elements count: a custom element in an untaken `b-if` branch, or in a `b-for` over an empty list, contributes nothing. A page with none gets no block.
-- Only a page render (`renderRoot` / `streamRenderRoot` and their PHP equivalents) injects; a nested partial never emits its own block.
+- Only a page render (`renderRoot` / `streamRenderRoot`) injects; a nested partial never emits its own block.
 
 ### Module URLs
 

@@ -2,7 +2,7 @@
  * End-to-end integration tests for dom-patch script auto-include.
  *
  * Builds a template that uses a reactive custom element, runs the dom-patch
- * stamping + JS/PHP generation, renders, and asserts the renderer injects the
+ * stamping + JS generation, renders, and asserts the renderer injects the
  * generated dom-patch module as a <link rel="modulepreload"> derived from the
  * asset prefix covering the dom-patch output dir. Also covers the rendered-only
  * rule (untaken b-if branch), the b-script entry module end-to-end, and the CLI
@@ -16,12 +16,10 @@ import { compileDirectory } from "../compiler/partials.ts";
 import { applyDomPatch } from "../compiler/generate/dom-patch/nodes2patch.ts";
 import { resolveDomPatchScriptUrl, type BackflipConfig } from "../compiler/config.ts";
 import { fileToJsModule } from "../compiler/generate/js/nodes2js.ts";
-import { fileToPhpFile } from "../compiler/generate/php/nodes2php.ts";
 import { renderRoot, streamRenderRoot, type RootRNode } from "../runtime/js/render.ts";
 
 const TMPDIR = "/tmp/claude-1000/dom-patch-autoinclude";
 const CLI_PATH = new URL("../cli.ts", import.meta.url).pathname;
-const RENDER_PHP = new URL("../runtime/php/render.php", import.meta.url).pathname;
 
 // A reactive custom element (`count-badge`) and a page partial that uses it.
 const APP_HTML = `<count-badge b-attr:count b-generate="base">
@@ -121,70 +119,6 @@ Deno.test("integration JS streaming: untaken b-if branch excludes the script", a
 
 	const untaken = Array.from(streamRenderRoot(rnode, { show: false })).join("");
 	assertEquals(untaken.includes("<link"), false);
-});
-
-Deno.test("integration PHP: reactive custom element injects resolved script before </body>", async () => {
-	const root = await writeTemplates({ "app.html": APP_HTML });
-	try {
-		const { directory } = await compileDirectory(root);
-		for (const [, file] of directory.files) {
-			applyDomPatch(file, { scriptUrlFor: tag => resolveDomPatchScriptUrl("/proj", COVERED_CONFIG, `${tag}.js`) ?? undefined });
-		}
-		const phpPath = path.join(root, "app.php");
-		await fs.writeFile(phpPath, fileToPhpFile(directory.files.get("app.html")!, "app.html"));
-
-		const harness = `<?php
-require '${RENDER_PHP}';
-$partials = require '${phpPath}';
-echo backflip_renderRoot($partials['page'], []);
-`;
-		const harnessPath = path.join(root, "harness.php");
-		await fs.writeFile(harnessPath, harness);
-		const cmd = new Deno.Command("php", { args: [harnessPath], stdout: "piped", stderr: "piped" });
-		const out = await cmd.output();
-		const stdout = new TextDecoder().decode(out.stdout);
-		const stderr = new TextDecoder().decode(out.stderr);
-		assertEquals(out.code, 0, `php failed: ${stderr}`);
-		assertEquals(stdout.match(/<link rel="modulepreload"/g)?.length, 1);
-		assertStringIncludes(stdout, '<link rel="modulepreload" href="/bfdom/count-badge.js"></body>');
-	} finally {
-		await fs.rm(root, { recursive: true, force: true });
-	}
-});
-
-Deno.test("integration PHP streaming: injects resolved script before </body> and equals batch", async () => {
-	const root = await writeTemplates({ "app.html": APP_HTML });
-	try {
-		const { directory } = await compileDirectory(root);
-		for (const [, file] of directory.files) {
-			applyDomPatch(file, { scriptUrlFor: tag => resolveDomPatchScriptUrl("/proj", COVERED_CONFIG, `${tag}.js`) ?? undefined });
-		}
-		const phpPath = path.join(root, "app.php");
-		await fs.writeFile(phpPath, fileToPhpFile(directory.files.get("app.html")!, "app.html"));
-
-		// Print streaming output and batch output separated by a NUL so we can
-		// compare them and assert streaming injects the script too.
-		const harness = `<?php
-require '${RENDER_PHP}';
-$partials = require '${phpPath}';
-$stream = '';
-foreach (backflip_streamRenderRoot($partials['page'], []) as $chunk) { $stream .= $chunk; }
-echo $stream . "\\0" . backflip_renderRoot($partials['page'], []);
-`;
-		const harnessPath = path.join(root, "harness.php");
-		await fs.writeFile(harnessPath, harness);
-		const cmd = new Deno.Command("php", { args: [harnessPath], stdout: "piped", stderr: "piped" });
-		const out = await cmd.output();
-		const stdout = new TextDecoder().decode(out.stdout);
-		const stderr = new TextDecoder().decode(out.stderr);
-		assertEquals(out.code, 0, `php failed: ${stderr}`);
-		const [streamed, batched] = stdout.split("\0");
-		assertEquals(streamed.match(/<link rel="modulepreload"/g)?.length, 1);
-		assertStringIncludes(streamed, '<link rel="modulepreload" href="/bfdom/count-badge.js"></body>');
-		assertEquals(streamed, batched);
-	} finally {
-		await fs.rm(root, { recursive: true, force: true });
-	}
 });
 
 Deno.test("integration CLI: warns and stamps nothing when output dir is not under an asset prefix", async () => {

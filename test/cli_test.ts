@@ -46,6 +46,17 @@ Deno.test("CLI args: blocks when output directory is not empty", async () => {
     }
 });
 
+Deno.test("CLI args: rejects --lang php", async () => {
+    const outDir = path.join(TMPDIR, "cli-test-php");
+    try {
+        const { code, stderr } = await runCli([TEMPLATES_DIR, outDir, "--lang", "php"]);
+        assertEquals(code, 1);
+        assertEquals(stderr.includes("--lang <js|dom-patch> is required"), true, `Expected usage error in stderr: ${stderr}`);
+    } finally {
+        await fs.rm(outDir, { recursive: true, force: true });
+    }
+});
+
 Deno.test("Config: auto-cleans output directory when not empty", async () => {
     const workDir = path.join(TMPDIR, "cli-test-config");
     const outDir = path.join(workDir, "out");
@@ -86,10 +97,10 @@ Deno.test("Config: auto-cleans output directory when not empty", async () => {
     }
 });
 
-Deno.test("Config: compiles multiple outputs (js and php)", async () => {
+Deno.test("Config: compiles multiple outputs", async () => {
     const workDir = path.join(TMPDIR, "cli-test-multi");
-    const jsOut = path.join(workDir, "js-out");
-    const phpOut = path.join(workDir, "php-out");
+    const outA = path.join(workDir, "out-a");
+    const outB = path.join(workDir, "out-b");
     await fs.mkdir(workDir, { recursive: true });
 
     const assetsLink = path.join(workDir, "images");
@@ -98,8 +109,8 @@ Deno.test("Config: compiles multiple outputs (js and php)", async () => {
     const config = {
         root: TEMPLATES_DIR,
         output: [
-            { lang: "js", path: "js-out" },
-            { lang: "php", path: "php-out" },
+            { lang: "js", path: "out-a" },
+            { lang: "js", path: "out-b" },
         ],
         assets: [{ name: "images", path: "images", prefix: "/img/" }],
     };
@@ -109,14 +120,13 @@ Deno.test("Config: compiles multiple outputs (js and php)", async () => {
         const { code, stdout, stderr } = await runCli([], workDir);
         assertEquals(code, 0, `Expected exit 0, got ${code}. stderr: ${stderr}`);
 
-        // Both output dirs should exist and contain files
-        const jsEntries = await fs.readdir(jsOut);
-        const phpEntries = await fs.readdir(phpOut);
-        assertEquals(jsEntries.length > 0, true, "js output dir should have files");
-        assertEquals(phpEntries.length > 0, true, "php output dir should have files");
+        // Both output dirs should exist and contain the same files
+        const entriesA = await fs.readdir(outA);
+        assertEquals(entriesA.length > 0, true, "first output dir should have files");
+        assertEquals((await fs.readdir(outB)).sort(), entriesA.sort());
 
-        assertEquals(stdout.includes("js"), true, `Expected 'js' in stdout: ${stdout}`);
-        assertEquals(stdout.includes("php"), true, `Expected 'php' in stdout: ${stdout}`);
+        assertEquals(stdout.includes(outA), true, `Expected '${outA}' in stdout: ${stdout}`);
+        assertEquals(stdout.includes(outB), true, `Expected '${outB}' in stdout: ${stdout}`);
     } finally {
         await fs.rm(workDir, { recursive: true, force: true });
     }

@@ -1,6 +1,6 @@
 # JavaScript Code Generator
 
-Converts the compiler's language-agnostic AST into JavaScript ES modules.
+Converts the compiler's AST into JavaScript ES modules.
 
 The work is split into two layers:
 

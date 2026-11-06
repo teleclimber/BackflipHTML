@@ -4,7 +4,6 @@ import { fileURLToPath } from 'node:url';
 import { compileDirectory } from './compiler/partials.ts';
 import { loadConfig, resolveConfigRoot, resolveAssetDirs, resolveStoreDirs, resolveDomPatchOutputDirs, resolveDomPatchScriptUrl, type OutputConfig } from './compiler/config.ts';
 import { fileToJsModule } from './compiler/generate/js/nodes2js.ts';
-import { fileToPhpFile } from './compiler/generate/php/nodes2php.ts';
 import { applyDomPatch, moduleFileName, RUNTIME_FILES } from './compiler/generate/dom-patch/nodes2patch.ts';
 import { resolveAssetRefs } from './compiler/helpers.ts';
 import { flattenCompiledFile } from './compiler/flatten.ts';
@@ -12,13 +11,13 @@ import { discoverAssetFileInfos, collectAllAssetReferences, validateAssetFiles, 
 
 const HELP = `Usage:
   backflip                                                       Use backflip.json config
-  backflip <input-dir> <output-dir> --lang <js|php|dom-patch>    Compile and generate files
+  backflip <input-dir> <output-dir> --lang <js|dom-patch>        Compile and generate files
   backflip <input-dir> --check [--json]                          Check for errors
   backflip --check [--json]                                      Check using backflip.json
   backflip --assets-report [--json] [--unused-only]              Report asset usage
 
 Options:
-  --lang <js|php|dom-patch>  Output language (required for generate mode unless in config)
+  --lang <js|dom-patch>      Output kind (required for generate mode unless in config)
   --check                    Check for errors only, no output written
   --assets-report            Show asset usage report (exits 1 if unused assets found)
   --unused-only              Only show unused assets (use with --assets-report)
@@ -76,8 +75,8 @@ const compileOpts = { assetMap, assetDirs, storeDirs };
 if (cliOutputDir || cliLang) {
     if (!cliOutputDir || !cliLang) {
         // partial CLI override — handled below in generate-mode validation
-    } else if (cliLang !== 'js' && cliLang !== 'php' && cliLang !== 'dom-patch') {
-        printUsageAndExit('--lang <js|php|dom-patch> is required');
+    } else if (cliLang !== 'js' && cliLang !== 'dom-patch') {
+        printUsageAndExit('--lang <js|dom-patch> is required');
     } else {
         outputs = [{ lang: cliLang, path: cliOutputDir }];
     }
@@ -158,7 +157,7 @@ if (args.check) {
 } else {
     if (outputs.length === 0) {
         if (cliOutputDir && !cliLang) {
-            printUsageAndExit('--lang <js|php|dom-patch> is required');
+            printUsageAndExit('--lang <js|dom-patch> is required');
         }
         if (!cliOutputDir && cliLang) {
             printUsageAndExit('Missing <output-dir> argument');
@@ -208,7 +207,7 @@ if (args.check) {
         }
     }
 
-    // Dom-patch must run before js/php codegen — it mutates each CompiledFile in
+    // Dom-patch must run before js codegen — it mutates each CompiledFile in
     // place (appending `data-bfid="..."` static attrs to qualifying elements) so
     // the server-rendered HTML carries the ids the runtime class queries on.
     // One module per custom-element partial, keyed by its file name at the output root.
@@ -265,14 +264,11 @@ if (args.check) {
         }
         for (const [relPath, compiledFile] of result.files) {
             if (out.lang === 'dom-patch') continue;   // written above, per partial
-            const ext = out.lang === 'php' ? '.php' : '.js';
-            const outRelPath = relPath.replace(/\.html$/, ext);
+            const outRelPath = relPath.replace(/\.html$/, '.js');
             const outPath = join(out.path, outRelPath);
             const resolved = assetMap ? resolveAssetRefs(compiledFile, assetMap) : compiledFile;
             const flattened = flattenCompiledFile(resolved);
-            const generated = out.lang === 'js'
-                ? fileToJsModule(flattened, relPath, assetMap)
-                : fileToPhpFile(flattened, relPath, assetMap);
+            const generated = fileToJsModule(flattened, relPath, assetMap);
             Deno.mkdirSync(dirname(outPath), { recursive: true });
             Deno.writeTextFileSync(outPath, generated);
             count++;

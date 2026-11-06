@@ -22,11 +22,11 @@ Create a `backflip.json` file at the root of your project:
 | Field    | Required | Description                                          |
 |----------|----------|------------------------------------------------------|
 | `root`   | Yes      | Relative path to the directory containing `.html` templates |
-| `output` | No       | Array of output entries; each entry has `lang` (`"js"`, `"php"`, or `"dom-patch"`) and `path` (relative output directory). The CLI compiles for every entry. |
+| `output` | No       | Array of output entries; each entry has `lang` (`"js"` or `"dom-patch"`) and `path` (relative output directory). The CLI compiles for every entry. |
 | `assets` | No       | Array of asset directory configurations (see [Assets](assets.md)) |
 | `stores` | No       | A directory, or an array of directories, holding store files (see [Data stores](data-stores.md)). A store directory inside an asset directory is served, so the browser can load its store files. |
 
-Each output entry produces a separate set of files in its own directory. You can target a single language or multiple at once. Output paths must be unique within the array.
+Each output entry produces a separate set of files in its own directory. Output paths must be unique within the array.
 
 ### `stores`
 
@@ -49,7 +49,7 @@ backflip              # compile using config
 backflip --check      # check for errors using config
 ```
 
-CLI arguments override config `output` entries when both are present (the CLI form `<input> <output> --lang <js|php|dom-patch>` defines a single-output run).
+CLI arguments override config `output` entries when both are present (the CLI form `<input> <output> --lang <js|dom-patch>` defines a single-output run).
 
 When the output directories come from `backflip.json`, each is automatically emptied before writing. When provided via CLI arguments, the output directory must be empty.
 

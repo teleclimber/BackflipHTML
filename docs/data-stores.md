@@ -68,7 +68,7 @@ Stores follow the [partial scope](partials.md#partial-scope) rules:
 
 ## Passing stores to the renderer
 
-The page renderers take the store data by name, after `slots`: `renderRoot(n, ctx, slots, stores)` in [JS](runtime-js.md#stores), `backflip_renderRoot($node, $ctx, $slots, $stores)` in [PHP](runtime-php.md#stores), and the same for the streaming renderers. JS `render(...)` also takes `stores`, but never ships them.
+The page renderers take the store data by name, after `slots`: `renderRoot(n, ctx, slots, stores)` (see [JS runtime](runtime-js.md#stores)), and the same for `streamRenderRoot`. JS `render(...)` also takes `stores`, but never ships them.
 
 - Every rendered partial that declares a store gets it, whether or not it generates client JS. The server never runs the store file.
 - The root partial gets `ctx` plus its own declared stores.

@@ -1,7 +1,6 @@
 export { compileDirectory, compileFiles } from './compiler/partials.js';
 export type { CompiledDirectory } from './compiler/partials.js';
 export { fileToJsModule } from './compiler/generate/js/nodes2js.js';
-export { fileToPhpFile } from './compiler/generate/php/nodes2php.js';
 export { BackflipError } from './compiler/errors.js';
 export { loadConfig, resolveConfigRoot, resolveAssetDirs, resolveStoreDirs, resolveDomPatchOutputDirs, CONFIG_FILENAME } from './compiler/config.js';
 export { buildStoreTable, readStoreFiles, readStoreFile, STORE_BASE_MEMBERS } from './compiler/stores.js';

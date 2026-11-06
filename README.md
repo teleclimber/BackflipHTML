@@ -1,8 +1,6 @@
 # BackflipHTML
 
-BackflipHTML is an HTML templating system that supports generating output in multiple languages. You write HTML with special `b-*` directive attributes and `{{ expression }}` interpolations using a subset of JavaScript, and the system compiles it into JS or PHP files. A lightweight runtime generates HTML from these outputs.
-
-(For now only JS and PHP are supported. Go is coming later. Other languages can be supported fairly easily.)
+BackflipHTML is an HTML templating system. You write HTML with special `b-*` directive attributes and `{{ expression }}` interpolations using a subset of JavaScript, and the system compiles it into JS modules. A lightweight runtime generates HTML from these modules.
 
 ## How it works
 
@@ -16,21 +14,20 @@ HTML template string
         ▼
    RootTNode AST (expressions as parsed AST objects)
         │
-        ├─────────────────────────────┐
-        ▼                             ▼
-  [ compiler/generate/js/ ]     [ compiler/generate/php/ ]
-  converts TNode tree →         converts TNode tree →
-  JS source string              PHP source file
-        │                                 │
-        ▼                                 ▼
-  Emitted JS module             Emitted .php file
-  (RNode-shaped object)         (array of node trees)
-        │                                 │
-        ▼                                 ▼
-  [ runtime/js/ ]               [ runtime/php/ ]
-  walks tree + JS context       walks tree + PHP array context
-  → Generator<string> chunks    → Generator chunks
-    or collected HTML string      or collected HTML string
+        ▼
+  [ compiler/generate/js/ ]
+  converts TNode tree →
+  JS source string
+        │
+        ▼
+  Emitted JS module
+  (RNode-shaped object)
+        │
+        ▼
+  [ runtime/js/ ]
+  walks tree + JS context
+  → Generator<string> chunks
+    or collected HTML string
 ```
 
 The compile step only needs to run once per template. The resulting module can be cached and reused, with only the lightweight runtime render pass running per request.
@@ -39,11 +36,11 @@ The compile step only needs to run once per template. The resulting module can b
 
 ### [`compiler/`](compiler/README.md)
 
-Parses HTML templates into a language-agnostic AST and generates JS or PHP source files from it.
+Parses HTML templates into an AST and generates JS modules from it.
 
 ### [`runtime/`](runtime/README.md)
 
-Streaming HTML renderers in JS and PHP that execute compiled templates with a data context.
+A streaming HTML renderer that executes compiled templates with a data context, and the browser runtime for client-side patching.
 
 ## Developer Tooling Subprojects
 
@@ -81,7 +78,6 @@ Tools that show how a subsystem reaches its results, for people working on that 
 - [CLI](docs/cli.md) — compiling templates from the command line
 - [Configuration](docs/configuration.md) — `backflip.json` reference
 - [JS runtime](docs/runtime-js.md) — JavaScript runtime API and usage
-- [PHP runtime](docs/runtime-php.md) — PHP runtime API and usage
 - [Dual-runtime support](docs/dual-runtime.md) — using from Deno vs Node.js
 
 ### Developer Tooling Docs
@@ -130,7 +126,7 @@ deno task test
 
 End-to-end integration tests for the full compile → generate → render pipeline.
 
-PHP integration tests require `php` in PATH. CLI tests spawn `deno` subprocesses.
+CLI tests spawn `deno` subprocesses.
 
 ### LSP, CSS, and dev explainers
 

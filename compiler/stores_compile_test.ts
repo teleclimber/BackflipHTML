@@ -2,7 +2,6 @@ import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
 import { compileFiles } from './partials.ts';
 import { applyDomPatch } from './generate/dom-patch/nodes2patch.ts';
 import { fileToJsModule } from './generate/js/nodes2js.ts';
-import { fileToPhpFile } from './generate/php/nodes2php.ts';
 import { resolveAssetRefs } from './helpers.ts';
 import type { CustomElementPartialRoot, NamedPartialRoot } from './types.ts';
 
@@ -235,7 +234,7 @@ Deno.test("shipped: not for a store read by a partial that generates no client J
 
 // --- render nodes --------------------------------------------------------------
 
-Deno.test("render nodes: JS and PHP roots carry their name and { name, shipped, src } per store", async () => {
+Deno.test("render nodes: JS roots carry their name and { name, shipped, src } per store", async () => {
 	const { directory } = await compile(`<my-widget b-store:widgets b-generate="full"><h3>{{ widgets.data.title }}</h3></my-widget>\n<b-unwrap b-name="page" b-store:users b-store:widgets>{{ users.data.a }}</b-unwrap>\n`);
 	const file = directory.files.get('t.html')!;
 	applyDomPatch(file);
@@ -243,7 +242,4 @@ Deno.test("render nodes: JS and PHP roots carry their name and { name, shipped, 
 	const js = fileToJsModule(resolved, 't.html');
 	assertStringIncludes(js, `stores: [{ name: 'widgets', shipped: true, src: '/static/stores/widgets.js' }]`);
 	assertStringIncludes(js, `{ type:"root", name: 'page', stores: [{ name: 'users', shipped: false }, { name: 'widgets', shipped: false, src: '/static/stores/widgets.js' }], nodes:`);
-	const php = fileToPhpFile(resolved, 't.html');
-	assertStringIncludes(php, `'stores' => [['name' => 'widgets', 'shipped' => true, 'src' => '/static/stores/widgets.js']]`);
-	assertStringIncludes(php, `['type' => 'root', 'name' => 'page', 'stores' => [['name' => 'users', 'shipped' => false], ['name' => 'widgets', 'shipped' => false, 'src' => '/static/stores/widgets.js']], 'nodes' =>`);
 });

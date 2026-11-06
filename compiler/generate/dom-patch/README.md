@@ -6,9 +6,9 @@ Modules are written flat at the dom-patch output root, named after the partial's
 
 ## How it fits
 
-Unlike the [`js/`](../js/README.md) and [`php/`](../php/README.md) generators (which only read the AST), dom-patch **mutates** the un-flattened AST on its way through. For every qualifying attribute site it appends a `data-bfid="..."` static attribute to the owning element so the runtime can find it via `querySelector`. For a qualifying `{{ print }}` it inserts a pair of marker **comment** nodes around the print (and a `data-bfid` on the parent element). The mutated AST then flows to the other generators, so the server-rendered HTML carries the same markers.
+Unlike the [`js/`](../js/README.md) generator (which only reads the AST), dom-patch **mutates** the un-flattened AST on its way through. For every qualifying attribute site it appends a `data-bfid="..."` static attribute to the owning element so the runtime can find it via `querySelector`. For a qualifying `{{ print }}` it inserts a pair of marker **comment** nodes around the print (and a `data-bfid` on the parent element). The mutated AST then flows to the JS generator, so the server-rendered HTML carries the same markers.
 
-Because of this, the CLI calls `applyDomPatch()` on each `CompiledFile` **before** running flatten + js/php codegen. The preview server does the same before rendering (see `preview/preview.ts`), so previewed HTML carries the same `data-bfid` markers as a real build.
+Because of this, the CLI calls `applyDomPatch()` on each `CompiledFile` **before** running flatten + js codegen. The preview server does the same before rendering (see `preview/preview.ts`), so previewed HTML carries the same `data-bfid` markers as a real build.
 
 ## Patching owns its DOM
 
@@ -89,7 +89,7 @@ The range is worked out from the item marker on each lookup. The marker moves wi
 
 ### Pairing items with the DOM
 
-The server generates the HTML and the data together, so the data at init is what was rendered, and the Nth key belongs to the Nth item marker. Keys are computed only in the browser, so they never appear in the HTML and the runtimes never have to agree on them. Pairing writes nothing. A mismatch (not an array, a bad or repeated key, a count that differs from the markers) is reported, and the loop stays as rendered from then on, since no later data could be trusted to pair with this DOM.
+The server generates the HTML and the data together, so the data at init is what was rendered, and the Nth key belongs to the Nth item marker. Keys are computed only in the browser, so they never appear in the HTML and the server never computes them. Pairing writes nothing. A mismatch (not an array, a bad or repeated key, a count that differs from the markers) is reported, and the loop stays as rendered from then on, since no later data could be trusted to pair with this DOM.
 
 ### Updating
 
@@ -157,7 +157,7 @@ A **patch-branch** owns patching for a DOM subtree that is either wholly present
 - **Ref element.** Each patch-branch patches against one element — the custom element for the root, and the element a set or loop is anchored to for each of its branches or items — so every site it owns resolves to that element or a descendant of it. An item also has an [item range](#item-scope) within that element.
 - **Updating.** A patch-branch does not know what changed. `update(data)` evaluates everything it owns: each set works out its winning branch and either swaps it in or updates the live branch's patch-branch, each loop brings its items in line and updates them, then each site compares its value with what it shows.
 - **Errors.** An expression that throws is reported with `console.error` and stays local: a site shows an empty value, a set keeps its current branch. Each is evaluated again on the next update.
-- **Writes only on change.** Each site remembers the value it shows, in DOM form: an attribute's text or presence, or a print's text. It is read from the DOM the first time the site is patched, so the server render (or, for a swapped-in branch, the client render) is the starting point rather than the data. A recomputed value equal to it writes nothing and does not look up the element; a set likewise re-renders only when its winning branch changes. Where the server and the JS runtime turn a value into different text (PHP prints a boolean `true` as `1`), the site is rewritten once, at init.
+- **Writes only on change.** Each site remembers the value it shows, in DOM form: an attribute's text or presence, or a print's text. It is read from the DOM the first time the site is patched, so the server render (or, for a swapped-in branch, the client render) is the starting point rather than the data. A recomputed value equal to it writes nothing and does not look up the element; a set likewise re-renders only when its winning branch changes.
 - **Snapshots.** Every set and loop — nested included — gets its own module-level `bfif_<setId>` or `bffor_<loopId>` snapshot, which a swap or an added item renders. A snapshot refers to each qualifying set or loop nested in it by that name rather than repeating its content (the `ifRef` and `forRef` options of `nodeToJS`), so the consts are emitted innermost-first. A var-free nested `b-if` has no const and stays inline. Snapshots are taken only after pass 1 has spliced every marker at every depth, so a re-rendered parent branch still carries the anchors its nested patch-branches need.
 
 A missing anchor or marker pair means the rendered DOM diverged from the compiled template; it is reported with `console.error` and that patch is skipped. So is an anchor found twice within one instance (a script's clone, or a copy made by the HTML parser), or a marker repeated among its parent's children: patching one copy would hide the problem. A site or set whose lookup failed keeps its state and is retried on every update. One already patched is looked up only when its value changes, so a duplicate made later goes unreported until then.
@@ -187,7 +187,7 @@ Patching targets server-rendered DOM, so an element created with `document.creat
 
 Every var reaching codegen must be one of the partial's declared inputs, a `b-attr` or a `b-store`; the generator asserts this before emitting a module, since a name that slipped through would compile into a patch writing `undefined` into the page.
 
-`applyDomPatch(file, opts?)` mutates the CompiledFile in place and returns `{ modules }` — one `{ tagName, js }` per partial in the file that generates client JS. `moduleFileName(tagName)` names its file. It also marks each store a module's patching reads as `shipped` on the partial's root, which tells the renderers to send it to the browser. `opts` is `{ bfidGen?, scriptUrlFor?, assetMap? }`:
+`applyDomPatch(file, opts?)` mutates the CompiledFile in place and returns `{ modules }` — one `{ tagName, js }` per partial in the file that generates client JS. `moduleFileName(tagName)` names its file. It also marks each store a module's patching reads as `shipped` on the partial's root, which tells the renderer to send it to the browser. `opts` is `{ bfidGen?, scriptUrlFor?, assetMap? }`:
 
 - `bfidGen` — deterministic id generator (`makeSequentialBfidGen()`) in tests; production uses the default crypto-random generator. One generator is shared across a file's partials, so ids stay distinct across its modules.
 - `scriptUrlFor(tagName)` — public URL of that partial's module. When it returns a URL, the partial's root is stamped with a script the renderer auto-includes: an `'entry'` for `b-generate="full"` (the module registers the element itself), a `'dependency'` otherwise. Partials that produce no module are left untouched. When the option is absent, generation is unchanged and nothing is stamped.
@@ -205,6 +205,6 @@ Both import `runtime/dom-patch/flush.ts`, which holds the list of elements to sy
 
 ## Script auto-include
 
-`scriptUrlFor` stamps each generating partial's root with its module's URL and kind; the JS and PHP generators carry the stamp into the emitted root node, and the renderers include the scripts of the custom elements they actually render. The caller supplies the URLs: the CLI derives them from the asset prefix covering the output dir.
+`scriptUrlFor` stamps each generating partial's root with its module's URL and kind; the JS generator carries the stamp into the emitted root node, and the renderer includes the scripts of the custom elements they actually render. The caller supplies the URLs: the CLI derives them from the asset prefix covering the output dir.
 
 Inclusion follows what rendered server-side, yet reactive `b-if` sets toggle branches client-side and reactive `b-for` loops add items. This stays correct because **a partial reference of any kind disqualifies its whole set or loop** (see [b-if sets](#b-if-sets) and [b-for loops](#b-for-loops)): a branch or item rendered later can never introduce a custom element whose script was not included.
