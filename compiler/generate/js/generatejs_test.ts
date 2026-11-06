@@ -83,3 +83,23 @@ Deno.test("plus expressions JS", () => {
 		assertEquals(generated, expected);
 	});
 });
+Deno.test("logical, strict equality and arithmetic expressions JS", () => {
+	const cases: [string, string][] = [
+		["a && b", "(a && b)"],
+		["a || b", "(a || b)"],
+		["a && b || c", "((a && b) || c)"],
+		["a || b && c", "(a || (b && c))"],
+		["u && u.name", "(u && u.name)"],
+		["a === b", "(a === b)"],
+		["a !== b", "(a !== b)"],
+		["a - b", "(a - b)"],
+		["a * b - c / d", "((a * b) - (c / d))"],
+		["a % 2 === 0", "((a % 2) === 0)"],
+		["!(a && b)", "!(a && b)"],
+	];
+	cases.forEach(([input, expected]) => {
+		const result = interpretBackcode(input);
+		assertEquals(result.errs, []);
+		assertEquals(generateStatement(result.expr!), expected);
+	});
+});

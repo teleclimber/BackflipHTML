@@ -39,7 +39,18 @@ const phpGenerator: BackcodeVisitor<string> = {
 		if (node.operator === '>') return `backflip_jsLessThan(${right}, ${left})`;
 		if (node.operator === '<=') return `backflip_jsLessOrEq(${left}, ${right})`;
 		if (node.operator === '>=') return `backflip_jsLessOrEq(${right}, ${left})`;
+		if (node.operator === '===') return `backflip_jsStrictEq(${left}, ${right})`;
+		if (node.operator === '!==') return `!backflip_jsStrictEq(${left}, ${right})`;
+		if (node.operator === '-') return `backflip_jsMinus(${left}, ${right})`;
+		if (node.operator === '*') return `backflip_jsTimes(${left}, ${right})`;
+		if (node.operator === '/') return `backflip_jsDivide(${left}, ${right})`;
+		if (node.operator === '%') return `backflip_jsRemainder(${left}, ${right})`;
 		return '(' + left + ' ' + node.operator + ' ' + right + ')';
+	},
+	// The right operand is a closure, so it is evaluated only when it decides the result.
+	LogicalExpression: (node) => {
+		const fn = node.operator === '&&' ? 'backflip_jsAnd' : 'backflip_jsOr';
+		return `${fn}(${generatePhpNode(node.left)}, fn() => ${generatePhpNode(node.right)})`;
 	},
 	unsupported: (node) => {
 		throw new Error(`invalid node: ${node.type}`);

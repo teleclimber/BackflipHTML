@@ -1,0 +1,34 @@
+<b-unwrap b-name="or-default">
+    <span>{{ nickname || name }}</span>
+</b-unwrap>
+
+<b-unwrap b-name="and-guard">
+    <span>{{ user && user.name || 'anonymous' }}</span>
+</b-unwrap>
+
+<b-unwrap b-name="and-if">
+    <p b-if="loggedIn && user.admin">Admin</p>
+    <p b-else>Visitor</p>
+</b-unwrap>
+
+<b-unwrap b-name="or-attr">
+    <a :title="label || 'Untitled'">link</a>
+</b-unwrap>
+
+<b-unwrap b-name="strict-eq-if">
+    <p b-if="status === 'active'">Active</p>
+    <p b-else-if="status !== ''">Other</p>
+    <p b-else>None</p>
+</b-unwrap>
+
+<b-unwrap b-name="arith-total">
+    <span>{{ price * qty - discount }}</span>
+</b-unwrap>
+
+<b-unwrap b-name="arith-average">
+    <span>{{ total / count }}</span>
+</b-unwrap>
+
+<b-unwrap b-name="arith-parity">
+    <li b-for="n in numbers">{{ n % 2 === 0 ? 'even' : 'odd' }}</li>
+</b-unwrap>

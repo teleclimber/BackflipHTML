@@ -210,14 +210,22 @@ Expressions in directives and `{{ }}` interpolations are handled by `backcode.ts
 | Member access | `user.name` |
 | Computed member access | `items[0]` |
 | Unary operators | `!hidden`, `-offset`, `+value` |
-| Equality operators | `a == b`, `a != b` |
+| Equality operators | `a == b`, `a != b`, `a === b`, `a !== b` |
 | Relational operators | `a < b`, `a > b`, `a <= b`, `a >= b` |
 | Plus operator | `a + b`, `'Hello, ' + name` |
+| Arithmetic operators | `price * qty - discount`, `total / count`, `n % 2` |
+| Logical operators | `user && user.name`, `nickname || name` |
 | Ternary | `admin ? name : "guest"` |
 
-The `+` operator works for both numeric addition and string concatenation. Relational operators follow JavaScript's Abstract Relational Comparison: two strings compare lexicographically, otherwise both sides are coerced to numbers and any `NaN` makes the result `false`. The JS and PHP backends produce identical results.
+Operators follow JavaScript semantics, and the JS and PHP backends produce identical results:
 
-**Not allowed:** function calls, other binary operators (`===`, `&&`, `||`, etc.), object/array literals, assignment, or any other construct not listed above.
+- `+` works for both numeric addition and string concatenation.
+- `-`, `*`, `/` and `%` convert both sides to numbers. Division by zero gives `Infinity` or `NaN`, never an error.
+- `===` and `!==` compare without type conversion.
+- `&&` and `||` return one of their operands, not a boolean: `nickname || name` is `nickname` when it is truthy, else `name`. The right side is evaluated only when needed, so `user && user.name` does not read `name` from a missing `user`.
+- Relational operators follow JavaScript's Abstract Relational Comparison: two strings compare lexicographically, otherwise both sides are coerced to numbers and any `NaN` makes the result `false`.
+
+**Not allowed:** function calls, other operators (`??`, `?.`, `**`, bitwise operators, etc.), object/array literals, assignment, or any other construct not listed above.
 
 ---
 

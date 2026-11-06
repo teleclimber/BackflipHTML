@@ -23,6 +23,8 @@ const jsGenerator: BackcodeVisitor<string> = {
 		'(' + generateNode(node.test) + ' ? ' + generateNode(node.consequent) + ' : ' + generateNode(node.alternate) + ')',
 	BinaryExpression: (node) =>
 		'(' + generateNode(node.left) + ' ' + node.operator + ' ' + generateNode(node.right) + ')',
+	LogicalExpression: (node) =>
+		'(' + generateNode(node.left) + ' ' + node.operator + ' ' + generateNode(node.right) + ')',
 	unsupported: (node) => {
 		throw new Error(`invalid node: ${node.type}`);
 	},

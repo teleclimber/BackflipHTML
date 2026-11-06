@@ -956,6 +956,108 @@ Deno.test("plus: in attribute binding", () => {
 });
 
 // ---------------------------------------------------------------------------
+// operators.html — &&, ||, ===, !==, -, *, /, %
+// ---------------------------------------------------------------------------
+
+Deno.test("operators: ||: falls back when the left side is empty", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("operators.html").or_default, { nickname: "", name: "Ada" })),
+        "<span>Ada</span>"
+    );
+});
+
+Deno.test("operators: ||: keeps a truthy left side", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("operators.html").or_default, { nickname: "Addy", name: "Ada" })),
+        "<span>Addy</span>"
+    );
+});
+
+Deno.test("operators: &&: guards a member read on a missing value", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("operators.html").and_guard, { user: null })),
+        "<span>anonymous</span>"
+    );
+});
+
+Deno.test("operators: &&: reads the member when present", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("operators.html").and_guard, { user: { name: "Ada" } })),
+        "<span>Ada</span>"
+    );
+});
+
+Deno.test("operators: &&: in b-if, both sides truthy", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("operators.html").and_if, { loggedIn: true, user: { admin: true } })),
+        "<p>Admin</p>"
+    );
+});
+
+Deno.test("operators: &&: in b-if, short-circuits on a falsy left side", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("operators.html").and_if, { loggedIn: false, user: null })),
+        "<p>Visitor</p>"
+    );
+});
+
+Deno.test("operators: ||: in an attribute", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("operators.html").or_attr, { label: "" })),
+        '<a title="Untitled">link</a>'
+    );
+});
+
+Deno.test("operators: ===: matches without coercion", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("operators.html").strict_eq_if, { status: "active" })),
+        "<p>Active</p>"
+    );
+});
+
+Deno.test("operators: !==: other value", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("operators.html").strict_eq_if, { status: "paused" })),
+        "<p>Other</p>"
+    );
+});
+
+Deno.test("operators: !==: empty string", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("operators.html").strict_eq_if, { status: "" })),
+        "<p>None</p>"
+    );
+});
+
+Deno.test("operators: arithmetic: * and -", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("operators.html").arith_total, { price: 10, qty: 3, discount: 5 })),
+        "<span>25</span>"
+    );
+});
+
+Deno.test("operators: arithmetic: / with a fractional result", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("operators.html").arith_average, { total: 7, count: 2 })),
+        "<span>3.5</span>"
+    );
+});
+
+Deno.test("operators: arithmetic: / with a whole result", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("operators.html").arith_average, { total: 9, count: 3 })),
+        "<span>3</span>"
+    );
+});
+
+Deno.test("operators: arithmetic: % in a b-for", () => {
+    assertEquals(
+        normalize(renderRoot(getModule("operators.html").arith_parity, { numbers: [1, 2, 3] })),
+        "<li>odd</li><li>even</li><li>odd</li>"
+    );
+});
+
+// ---------------------------------------------------------------------------
 // Asset integration tests
 // ---------------------------------------------------------------------------
 

@@ -13,9 +13,9 @@ const RENDER_PHP_PATH = new URL("../../runtime/php/render.php", import.meta.url)
  *   null            literal "null"
  *   bool            "true" / "false"
  *   int             "int:<digits>"
- *   float           "float:<digits>" / "nan" / "inf" / "-inf"
+ *   float           "float:" + json_encode (shortest round-trip digits) / "nan" / "inf" / "-inf"
  *   string          "str:" + JSON-encoded string body
- *   array/object    "arr:" + json_encode (rare; not in current corpus)
+ *   array/object    "arr:" + json_encode
  *
  * This avoids JSON syntax ambiguities (e.g. PHP `5.0` and `5` both rendering
  * as `5`, or `null` vs literal string `"null"` distinguishable only by quotes).
@@ -30,7 +30,7 @@ function bf_dump($v) {
 	if (is_float($v)) {
 		if (is_nan($v)) return 'nan';
 		if (is_infinite($v)) return $v > 0 ? 'inf' : '-inf';
-		return 'float:' . $v;
+		return 'float:' . json_encode($v);
 	}
 	if (is_string($v)) return 'str:' . json_encode($v);
 	if (is_array($v)) return 'arr:' . json_encode($v);

@@ -104,3 +104,36 @@ Deno.test("generatePhpFunction", () => {
 		"function() { return 42; }"
 	);
 });
+
+Deno.test("logical expressions PHP: the right operand is a closure so it short-circuits", () => {
+	const cases: [string, string][] = [
+		["a && b",          "backflip_jsAnd($a, fn() => $b)"],
+		["a || b",          "backflip_jsOr($a, fn() => $b)"],
+		["u && u.name",     "backflip_jsAnd($u, fn() => $u['name'])"],
+		["a && b || c",     "backflip_jsOr(backflip_jsAnd($a, fn() => $b), fn() => $c)"],
+		["a ? b || c : d",  "(backflip_isTruthy($a) ? backflip_jsOr($b, fn() => $c) : $d)"],
+	];
+	cases.forEach(([input, expected]) => {
+		const result = interpretBackcode(input);
+		assertEquals(result.errs, []);
+		assertEquals(generatePhpStatement(result.expr!), expected);
+	});
+});
+
+Deno.test("strict equality and arithmetic expressions PHP", () => {
+	const cases: [string, string][] = [
+		["a === b",         "backflip_jsStrictEq($a, $b)"],
+		["a !== b",         "!backflip_jsStrictEq($a, $b)"],
+		["a - b",           "backflip_jsMinus($a, $b)"],
+		["a * b",           "backflip_jsTimes($a, $b)"],
+		["a / b",           "backflip_jsDivide($a, $b)"],
+		["a % b",           "backflip_jsRemainder($a, $b)"],
+		["a * b - c",       "backflip_jsMinus(backflip_jsTimes($a, $b), $c)"],
+		["a % 2 === 0",     "backflip_jsStrictEq(backflip_jsRemainder($a, 2), 0)"],
+	];
+	cases.forEach(([input, expected]) => {
+		const result = interpretBackcode(input);
+		assertEquals(result.errs, []);
+		assertEquals(generatePhpStatement(result.expr!), expected);
+	});
+});

@@ -869,3 +869,105 @@ Deno.test("php: a b-for value name does not reach a partial called inside the lo
     ]]`;
     assertEquals(await renderPhpNodes(root, { items: ["a", "b"] }), "");
 });
+
+// ---------------------------------------------------------------------------
+// operators.html — &&, ||, ===, !==, -, *, /, %
+// ---------------------------------------------------------------------------
+
+Deno.test("php: operators: ||: falls back when the left side is empty", async () => {
+    assertEquals(
+        normalize(await renderPhp("operators.html", "or_default", { nickname: "", name: "Ada" })),
+        "<span>Ada</span>"
+    );
+});
+
+Deno.test("php: operators: ||: keeps a truthy left side", async () => {
+    assertEquals(
+        normalize(await renderPhp("operators.html", "or_default", { nickname: "Addy", name: "Ada" })),
+        "<span>Addy</span>"
+    );
+});
+
+Deno.test("php: operators: &&: guards a member read on a missing value", async () => {
+    assertEquals(
+        normalize(await renderPhp("operators.html", "and_guard", { user: null })),
+        "<span>anonymous</span>"
+    );
+});
+
+Deno.test("php: operators: &&: reads the member when present", async () => {
+    assertEquals(
+        normalize(await renderPhp("operators.html", "and_guard", { user: { name: "Ada" } })),
+        "<span>Ada</span>"
+    );
+});
+
+Deno.test("php: operators: &&: in b-if, both sides truthy", async () => {
+    assertEquals(
+        normalize(await renderPhp("operators.html", "and_if", { loggedIn: true, user: { admin: true } })),
+        "<p>Admin</p>"
+    );
+});
+
+Deno.test("php: operators: &&: in b-if, short-circuits on a falsy left side", async () => {
+    assertEquals(
+        normalize(await renderPhp("operators.html", "and_if", { loggedIn: false, user: null })),
+        "<p>Visitor</p>"
+    );
+});
+
+Deno.test("php: operators: ||: in an attribute", async () => {
+    assertEquals(
+        normalize(await renderPhp("operators.html", "or_attr", { label: "" })),
+        '<a title="Untitled">link</a>'
+    );
+});
+
+Deno.test("php: operators: ===: matches without coercion", async () => {
+    assertEquals(
+        normalize(await renderPhp("operators.html", "strict_eq_if", { status: "active" })),
+        "<p>Active</p>"
+    );
+});
+
+Deno.test("php: operators: !==: other value", async () => {
+    assertEquals(
+        normalize(await renderPhp("operators.html", "strict_eq_if", { status: "paused" })),
+        "<p>Other</p>"
+    );
+});
+
+Deno.test("php: operators: !==: empty string", async () => {
+    assertEquals(
+        normalize(await renderPhp("operators.html", "strict_eq_if", { status: "" })),
+        "<p>None</p>"
+    );
+});
+
+Deno.test("php: operators: arithmetic: * and -", async () => {
+    assertEquals(
+        normalize(await renderPhp("operators.html", "arith_total", { price: 10, qty: 3, discount: 5 })),
+        "<span>25</span>"
+    );
+});
+
+Deno.test("php: operators: arithmetic: / with a fractional result", async () => {
+    assertEquals(
+        normalize(await renderPhp("operators.html", "arith_average", { total: 7, count: 2 })),
+        "<span>3.5</span>"
+    );
+});
+
+Deno.test("php: operators: arithmetic: / with a whole result", async () => {
+    assertEquals(
+        normalize(await renderPhp("operators.html", "arith_average", { total: 9, count: 3 })),
+        "<span>3</span>"
+    );
+});
+
+Deno.test("php: operators: arithmetic: % in a b-for", async () => {
+    assertEquals(
+        normalize(await renderPhp("operators.html", "arith_parity", { numbers: [1, 2, 3] })),
+        "<li>odd</li><li>even</li><li>odd</li>"
+    );
+});

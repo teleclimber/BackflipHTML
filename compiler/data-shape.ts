@@ -253,6 +253,12 @@ const shapeCollector: BackcodeVisitor<void, [
 		collectFromExpr(bin.left, context, attrName, scoped, shapes, undefined);
 		collectFromExpr(bin.right, context, attrName, scoped, shapes, undefined);
 	},
+	LogicalExpression(log, context, attrName, scoped, shapes, passedInfo) {
+		// The left operand is tested, and is the result when it decides it.
+		collectFromExpr(log.left, 'boolean', undefined, scoped, shapes);
+		collectFromExpr(log.left, context, attrName, scoped, shapes, passedInfo);
+		collectFromExpr(log.right, context, attrName, scoped, shapes, passedInfo);
+	},
 	// An invalid expression is reported when it is parsed; it records no shape.
 	unsupported() {},
 };
@@ -309,7 +315,7 @@ function applyShapeToObject(
 }
 
 // A path (an identifier, or a member chain rooted at one) takes the shape. A
-// ternary passes it on to both branches. Any other expression computes a new
+// ternary passes it on to both branches, and `&&`/`||` to both operands. Any other expression computes a new
 // value, so its variables are recorded as operands, as in `collectFromExpr`.
 const shapeApplier: BackcodeVisitor<void, [
 	shapeToApply: DataShape,
@@ -353,6 +359,11 @@ const shapeApplier: BackcodeVisitor<void, [
 	},
 	BinaryExpression(bin, _shapeToApply, context, attrName, scoped, shapes) {
 		collectFromExpr(bin, context, attrName, scoped, shapes);
+	},
+	LogicalExpression(log, shapeToApply, context, attrName, scoped, shapes) {
+		collectFromExpr(log.left, 'boolean', undefined, scoped, shapes);
+		applyShapeToObject(log.left, shapeToApply, context, attrName, scoped, shapes);
+		applyShapeToObject(log.right, shapeToApply, context, attrName, scoped, shapes);
 	},
 	Literal() {},
 	// An invalid expression is reported when it is parsed; it records no shape.

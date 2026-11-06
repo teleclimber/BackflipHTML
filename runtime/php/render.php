@@ -197,6 +197,73 @@ function backflip_jsLessOrEq(mixed $a, mixed $b): bool
 }
 
 /**
+ * JS `&&`: `$a` when it is falsy, else the value of `$b`. `$b` is a closure so
+ * it runs only in that case.
+ */
+function backflip_jsAnd(mixed $a, callable $b): mixed
+{
+    return backflip_isTruthy($a) ? $b() : $a;
+}
+
+/**
+ * JS `||`: `$a` when it is truthy, else the value of `$b`. `$b` is a closure so
+ * it runs only in that case.
+ */
+function backflip_jsOr(mixed $a, callable $b): mixed
+{
+    return backflip_isTruthy($a) ? $a : $b();
+}
+
+/**
+ * JS `===`. Numbers compare by value, so an int equals the float of the same
+ * value, and NaN equals nothing. Anything else needs the same type and value.
+ * PHP arrays compare by value, where JS compares objects by identity.
+ */
+function backflip_jsStrictEq(mixed $a, mixed $b): bool
+{
+    if ((is_int($a) || is_float($a)) && (is_int($b) || is_float($b))) {
+        return $a == $b;
+    }
+    return $a === $b;
+}
+
+/**
+ * JS `-`, `*`, `/` and `%`: both operands go through ToNumber, and the result
+ * follows IEEE doubles (division by zero gives INF or NAN, never an error).
+ * Integer results stay ints, as with PHP's own `-` and `*`.
+ */
+function backflip_jsMinus(mixed $a, mixed $b): int|float
+{
+    return backflip_jsToNumber($a) - backflip_jsToNumber($b);
+}
+
+function backflip_jsTimes(mixed $a, mixed $b): int|float
+{
+    return backflip_jsToNumber($a) * backflip_jsToNumber($b);
+}
+
+function backflip_jsDivide(mixed $a, mixed $b): int|float
+{
+    $x = backflip_jsToNumber($a);
+    $y = backflip_jsToNumber($b);
+    if (is_int($x) && is_int($y) && $y !== 0 && $x % $y === 0) {
+        return intdiv($x, $y);
+    }
+    return fdiv($x, $y);
+}
+
+/** JS `%`: the sign follows the dividend, as with PHP's `%` and fmod(). */
+function backflip_jsRemainder(mixed $a, mixed $b): int|float
+{
+    $x = backflip_jsToNumber($a);
+    $y = backflip_jsToNumber($b);
+    if (is_int($x) && is_int($y) && $y !== 0) {
+        return $x % $y;
+    }
+    return fmod($x, $y);
+}
+
+/**
  * Extract vars from ctx (null for missing keys), then call the closure.
  *
  * $fnData = ['fn' => Closure, 'vars' => ['user', 'post']]

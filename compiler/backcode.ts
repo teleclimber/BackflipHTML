@@ -17,7 +17,8 @@ export type BackcodeNode =
 	| acorn.MemberExpression
 	| acorn.UnaryExpression
 	| acorn.ConditionalExpression
-	| acorn.BinaryExpression;
+	| acorn.BinaryExpression
+	| acorn.LogicalExpression;
 
 type BackcodeNodeType = BackcodeNode['type'];
 
@@ -28,6 +29,7 @@ const BACKCODE_NODE_TYPES: Record<BackcodeNodeType, true> = {
 	UnaryExpression: true,
 	ConditionalExpression: true,
 	BinaryExpression: true,
+	LogicalExpression: true,
 };
 
 export function isBackcodeNode(node: acorn.AnyNode): node is BackcodeNode {
@@ -87,7 +89,8 @@ function getProgramExpression(prog :acorn.Program) :{expr: acorn.ExpressionState
 	return {expr:node, err:undefined};
 }
 
-const ALLOWED_BINARY_OPERATORS = new Set(['==', '!=', '+', '<', '>', '<=', '>=']);
+const ALLOWED_BINARY_OPERATORS = new Set(['==', '!=', '===', '!==', '+', '-', '*', '/', '%', '<', '>', '<=', '>=']);
+const ALLOWED_LOGICAL_OPERATORS = new Set(['&&', '||']);
 const ALLOWED_UNARY_OPERATORS = new Set(['!', '+', '-']);
 
 // Reports disallowed constructs into `errs` and collects free variables into `vars`.
@@ -116,6 +119,14 @@ const validator: BackcodeVisitor<void, [errs: string[], vars: string[]]> = {
 	BinaryExpression(node, errs, vars) {
 		if (!ALLOWED_BINARY_OPERATORS.has(node.operator)) {
 			errs.push(`unsupported binary operator: ${node.operator}`);
+			return;
+		}
+		visitBackcode(node.left, validator, errs, vars);
+		visitBackcode(node.right, validator, errs, vars);
+	},
+	LogicalExpression(node, errs, vars) {
+		if (!ALLOWED_LOGICAL_OPERATORS.has(node.operator)) {
+			errs.push(`unsupported logical operator: ${node.operator}`);
 			return;
 		}
 		visitBackcode(node.left, validator, errs, vars);

@@ -82,7 +82,9 @@ counts, from one list.
 
 ### Expression language (`backcode.ts`)
 
-Handles expressions used in directives and `{{ }}` interpolations. Uses `acorn` to parse expressions as a safe subset of JavaScript (identifiers, literals, member access, unary operators). Validates that only allowed constructs are used and extracts the list of variable names each expression depends on.
+Handles expressions used in directives and `{{ }}` interpolations. Uses `acorn` to parse expressions as a safe subset of JavaScript. Validates that only allowed constructs are used and extracts the list of variable names each expression depends on.
+
+Every pass over an expression (validation, the JS and PHP generators, data-shape inference) is a `BackcodeVisitor`, with a handler for each allowed node type. Adding a node type to `BackcodeNode` is a type error in each pass until it handles the node.
 
 ### Cross-file compilation (`partials.ts`)
 
@@ -143,7 +145,7 @@ Test files:
 
 ### Cross-language runtime equivalence (`integration_tests/`)
 
-`backcode_test.ts` is the harness that compiles each test's backcode string with every code generator, runs it under each target runtime, and asserts that all runtimes produce the same value. JS is the reference language; non-JS runtimes (currently PHP) must match it. Test cases live in `backcode_cases.ts` — a flat list of `{ code, inputs, expected }` records covering operator semantics (`==`, `+`, `!`, ternary, member access) and their compositions, focused on the kinds of inputs where JS and other languages tend to disagree (mixed-type equality, `+` concat vs add, `'0'` truthiness, etc.).
+`backcode_test.ts` is the harness that compiles each test's backcode string with every code generator, runs it under each target runtime, and asserts that all runtimes produce the same value. JS is the reference language; non-JS runtimes (currently PHP) must match it. Test cases live in `backcode_cases.ts` — a flat list of `{ code, inputs, expected }` records covering operator semantics (`==`, `===`, `+`, arithmetic, `&&`/`||`, `!`, ternary, member access) and their compositions, focused on the kinds of inputs where JS and other languages tend to disagree (mixed-type equality, `+` concat vs add, `'0'` truthiness, etc.).
 
 The PHP runtime spawns one `php -r` subprocess per case; if `php` isn't in PATH the harness skips PHP with a warning instead of failing.
 

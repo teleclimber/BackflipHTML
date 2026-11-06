@@ -140,10 +140,11 @@ A change updates only what [client-side patching](dom-patch.md#what-updates-in-t
 
 ## Lookups that miss
 
-A lookup that finds nothing throws, as any expression error does. On the server it fails the render. In the browser it is logged with `console.error` and affects only that value: a printed value or attribute goes empty and a boolean attribute is removed, a `b-if` keeps its current branch, and each is evaluated again on the partial's next update. The expression language has no `?.` or `&&`, so guard a lookup with a ternary:
+A lookup that finds nothing throws, as any expression error does. On the server it fails the render. In the browser it is logged with `console.error` and affects only that value: a printed value or attribute goes empty and a boolean attribute is removed, a `b-if` keeps its current branch, and each is evaluated again on the partial's next update. The expression language has no `?.`, so guard a lookup with a ternary, or with `&&` in a condition:
 
 ```html
 <h3>{{ widgets.data[widget_id] ? widgets.data[widget_id].name : '' }}</h3>
+<p b-if="widgets.data[widget_id] && widgets.data[widget_id].archived">Archived</p>
 ```
 
 Since templates cannot call store methods, shape the data on the server so it can be indexed: a map keyed by id rather than an array.

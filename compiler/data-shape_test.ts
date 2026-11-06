@@ -368,6 +368,63 @@ Deno.test("inferDataShape: ternary in attribute records attribute name on branch
 	assertEquals([...int.attributes!], ['href']);
 });
 
+// --- Logical operators ---
+
+Deno.test("inferDataShape: the left operand of && and || is a boolean and can be the result", () => {
+	for (const code of ['a && b', 'a || b']) {
+		const shapes = inferDataShape(makeRoot([makePrintReal(code)]));
+		assertUsages(shapes.get('a')!, ['boolean', 'printed']);
+		assertUsages(shapes.get('b')!, ['printed']);
+	}
+});
+
+Deno.test("inferDataShape: && in b-if records both operands as boolean", () => {
+	const shapes = inferDataShape(makeRoot([makeIfReal([{ conditionCode: 'a && b.ok', children: [] }])]));
+	assertUsages(shapes.get('a')!, ['boolean']);
+	assertUsages(shapes.get('b')!.properties!.get('ok')!, ['boolean']);
+});
+
+Deno.test("inferDataShape: || in an attribute records the attribute name on both operands", () => {
+	const shapes = inferDataShape(makeRoot([makeAttrBindReal([{ name: 'title', code: "label || fallback" }])]));
+	assertUsages(shapes.get('label')!, ['attribute', 'boolean']);
+	assertEquals([...shapes.get('label')!.attributes!], ['title']);
+	assertUsages(shapes.get('fallback')!, ['attribute']);
+	assertEquals([...shapes.get('fallback')!.attributes!], ['title']);
+});
+
+Deno.test("inferDataShape: || passed to a partial records passedTo on both operands", () => {
+	const shapes = inferDataShape(makeRoot([makePartialRefReal('card', [{ name: 'title', code: 'a || b' }])]));
+	assertUsages(shapes.get('a')!, ['boolean', 'passed']);
+	assertEquals(shapes.get('a')!.passedTo, [{ partial: 'card', as: 'title' }]);
+	assertUsages(shapes.get('b')!, ['passed']);
+	assertEquals(shapes.get('b')!.passedTo, [{ partial: 'card', as: 'title' }]);
+});
+
+Deno.test("inferDataShape: member of a logical expression applies the property shape to both operands", () => {
+	const shapes = inferDataShape(makeRoot([makePrintReal('(u && u.profile).name')]));
+	const u = shapes.get('u')!;
+	assertUsages(u, ['boolean']);
+	assertUsages(u.properties!.get('name')!, ['printed']);
+	assertUsages(u.properties!.get('profile')!.properties!.get('name')!, ['printed']);
+});
+
+Deno.test("inferDataShape: b-for over || puts elementShape on both operands", () => {
+	const shapes = inferDataShape(makeRoot([
+		makeForReal('x', 'items || fallback', [makePrintReal('x.name')]),
+	]));
+	assertUsages(shapes.get('items')!, ['boolean', 'iterable']);
+	assertUsages(shapes.get('items')!.elementShape!.properties!.get('name')!, ['printed']);
+	assertUsages(shapes.get('fallback')!.elementShape!.properties!.get('name')!, ['printed']);
+});
+
+Deno.test("inferDataShape: strict equality and arithmetic operands take the surrounding context", () => {
+	const printed = inferDataShape(makeRoot([makePrintReal('a * b - c / d % e')]));
+	for (const v of ['a', 'b', 'c', 'd', 'e']) assertUsages(printed.get(v)!, ['printed']);
+	const cond = inferDataShape(makeRoot([makeIfReal([{ conditionCode: 'a === b', children: [] }])]));
+	assertUsages(cond.get('a')!, ['boolean']);
+	assertUsages(cond.get('b')!, ['boolean']);
+});
+
 // --- Member access on an expression that is not a path ---
 
 Deno.test("inferFreeVars: finds variables in the object of a member access that is not a path", () => {

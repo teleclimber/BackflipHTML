@@ -87,8 +87,34 @@ Deno.test("interpretBackcode: relational composes with member access and ternary
 	assertEquals(ternary.vars, ['a', 'b', 'c', 'd']);
 });
 
+Deno.test("interpretBackcode: logical, strict equality and arithmetic operators are allowed", () => {
+	const cases: [string, string[]][] = [
+		['a && b', ['a', 'b']],
+		['a || b', ['a', 'b']],
+		['a.x && b[c] || d', ['a', 'b', 'c', 'd']],
+		['a === b', ['a', 'b']],
+		['a !== b', ['a', 'b']],
+		['a - b', ['a', 'b']],
+		['a * b', ['a', 'b']],
+		['a / b', ['a', 'b']],
+		['a % b', ['a', 'b']],
+		['(a - b) * c / d % e', ['a', 'b', 'c', 'd', 'e']],
+		['a && b ? c * 2 : d', ['a', 'b', 'c', 'd']],
+	];
+	for (const [code, vars] of cases) {
+		const result = interpretBackcode(code);
+		assertEquals(result.errs, [], `expected no errors for: ${code}`);
+		assertEquals(result.vars, vars, code);
+	}
+});
+
+Deno.test("interpretBackcode: ?? is not allowed", () => {
+	assertEquals(interpretBackcode('a ?? b').errs, ['unsupported logical operator: ??']);
+	assertEquals(interpretBackcode('a && (b ?? c)').errs, ['unsupported logical operator: ??']);
+});
+
 Deno.test("interpretBackcode: disallowed binary operators produce errors", () => {
-	['a === b', 'a !== b', 'a && b', 'a || b'].forEach(s => {
+	['a ** b', 'a & b', 'a | b', 'a ^ b', 'a << b', 'a >> b', 'a >>> b', 'a in b', 'a instanceof b'].forEach(s => {
 		const result = interpretBackcode(s);
 		assertEquals(result.errs.length > 0, true, `expected error for: ${s}`);
 	});
@@ -101,6 +127,7 @@ const namer: BackcodeVisitor<string> = {
 	UnaryExpression: (n) => `Unary(${visitBackcode(n.argument, namer)})`,
 	ConditionalExpression: (n) => `Conditional(${visitBackcode(n.test, namer)})`,
 	BinaryExpression: (n) => `Binary(${visitBackcode(n.left, namer)}, ${visitBackcode(n.right, namer)})`,
+	LogicalExpression: (n) => `Logical(${visitBackcode(n.left, namer)}, ${visitBackcode(n.right, namer)})`,
 	unsupported: (n) => `unsupported(${n.type})`,
 };
 
@@ -115,10 +142,10 @@ Deno.test("visitBackcode: dispatches each backcode node to its handler", () => {
 	assertEquals(nameOf('!a'), 'Unary(Identifier(a))');
 	assertEquals(nameOf('a ? b : c'), 'Conditional(Identifier(a))');
 	assertEquals(nameOf('a + 1'), 'Binary(Identifier(a), Literal(1))');
+	assertEquals(nameOf('a && b'), 'Logical(Identifier(a), Identifier(b))');
 });
 
 Deno.test("visitBackcode: other nodes go to unsupported", () => {
-	assertEquals(nameOf('a && b'), 'unsupported(LogicalExpression)');
 	assertEquals(nameOf('f(a)'), 'unsupported(CallExpression)');
 	assertEquals(nameOf('a + (b = 1)'), 'Binary(Identifier(a), unsupported(AssignmentExpression))');
 });
@@ -131,19 +158,21 @@ Deno.test("visitBackcode: extra arguments reach every handler", () => {
 		UnaryExpression: (n, d) => visitBackcode(n.argument, depth, d + 1),
 		ConditionalExpression: (n, d) => visitBackcode(n.test, depth, d + 1),
 		BinaryExpression: (n, d) => Math.max(visitBackcode(n.left, depth, d + 1), visitBackcode(n.right, depth, d + 1)),
+		LogicalExpression: (n, d) => Math.max(visitBackcode(n.left, depth, d + 1), visitBackcode(n.right, depth, d + 1)),
 		unsupported: (_n, d) => d,
 	};
 	assertEquals(visitBackcode(interpretBackcode('!(a.b + 1)').expr!.expression, depth, 0), 3);
 });
 
 Deno.test("BackcodeVisitor: a visitor missing a node handler is a type error", () => {
-	// @ts-expect-error BinaryExpression has no handler
+	// @ts-expect-error LogicalExpression has no handler
 	const partial: BackcodeVisitor<void> = {
 		Identifier() {},
 		Literal() {},
 		MemberExpression() {},
 		UnaryExpression() {},
 		ConditionalExpression() {},
+		BinaryExpression() {},
 		unsupported() {},
 	};
 	assertEquals(typeof partial.unsupported, 'function');
