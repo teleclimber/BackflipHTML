@@ -1,6 +1,6 @@
 import * as acorn from 'acorn';
 import type { RootTNode, TNode, ForTNode, IfTNode, PrintTNode, ElementTNode, PartialRefTNode } from './types.js';
-import type { Parsed } from './backcode.js';
+import { visitBackcode, type BackcodeVisitor, type Parsed } from './backcode.js';
 import { BackflipError } from './errors.js';
 import { forBoundNames } from './helpers.js';
 
@@ -186,6 +186,8 @@ function indexVarsOf(property: acorn.AnyNode, scoped: Set<string>): string[] | u
 
 // --- Acorn AST expression walking ---
 
+type PassedInfo = { partial: string; as: string };
+
 /**
  * Walk an acorn expression and record shape information on the appropriate
  * variable in the shapes map. `context` describes how the expression result
@@ -197,65 +199,63 @@ function collectFromExpr(
 	attrName: string | undefined,
 	scoped: Set<string>,
 	shapes: Map<string, DataShape>,
-	passedInfo?: { partial: string; as: string },
+	passedInfo?: PassedInfo,
 ): void {
-	switch (node.type) {
-		case 'Identifier': {
-			const id = node as acorn.Identifier;
-			if (scoped.has(id.name)) return;
-			const shape = getOrCreateShape(shapes, id.name);
-			shape.usages.add(context);
-			if (context === 'attribute' && attrName) {
-				if (!shape.attributes) shape.attributes = new Set();
-				shape.attributes.add(attrName);
-			}
-			if (passedInfo) {
-				if (!shape.passedTo) shape.passedTo = [];
-				shape.passedTo.push(passedInfo);
-			}
-			break;
-		}
-		case 'Literal':
-			// No variables to track
-			break;
-		case 'MemberExpression': {
-			const mem = node as acorn.MemberExpression;
-			if (mem.computed) {
-				// items[idx] — mark the object as indexed, walk both sides
-				collectFromExprIndexed(mem.object, indexVarsOf(mem.property, scoped), context, attrName, scoped, shapes, passedInfo);
-				collectFromIndex(mem.property, scoped, shapes);
-			} else {
-				// user.name — build property chain
-				const propName = (mem.property as acorn.Identifier).name;
-				collectFromExprProperty(mem.object, propName, context, attrName, scoped, shapes, passedInfo);
-			}
-			break;
-		}
-		case 'UnaryExpression': {
-			const un = node as acorn.UnaryExpression;
-			if (un.operator === '!') {
-				collectFromExpr(un.argument, 'boolean', undefined, scoped, shapes, passedInfo);
-			} else {
-				// + or - operators — treat as printed
-				collectFromExpr(un.argument, context, attrName, scoped, shapes, passedInfo);
-			}
-			break;
-		}
-		case 'ConditionalExpression': {
-			const cond = node as acorn.ConditionalExpression;
-			collectFromExpr(cond.test, 'boolean', undefined, scoped, shapes, undefined);
-			collectFromExpr(cond.consequent, context, attrName, scoped, shapes, passedInfo);
-			collectFromExpr(cond.alternate, context, attrName, scoped, shapes, passedInfo);
-			break;
-		}
-		case 'BinaryExpression': {
-			const bin = node as acorn.BinaryExpression;
-			collectFromExpr(bin.left as acorn.AnyNode, context, attrName, scoped, shapes, undefined);
-			collectFromExpr(bin.right, context, attrName, scoped, shapes, undefined);
-			break;
-		}
-	}
+	visitBackcode(node, shapeCollector, context, attrName, scoped, shapes, passedInfo);
 }
+
+const shapeCollector: BackcodeVisitor<void, [
+	context: UsageKind,
+	attrName: string | undefined,
+	scoped: Set<string>,
+	shapes: Map<string, DataShape>,
+	passedInfo: PassedInfo | undefined,
+]> = {
+	Identifier(id, context, attrName, scoped, shapes, passedInfo) {
+		if (scoped.has(id.name)) return;
+		const shape = getOrCreateShape(shapes, id.name);
+		shape.usages.add(context);
+		if (context === 'attribute' && attrName) {
+			if (!shape.attributes) shape.attributes = new Set();
+			shape.attributes.add(attrName);
+		}
+		if (passedInfo) {
+			if (!shape.passedTo) shape.passedTo = [];
+			shape.passedTo.push(passedInfo);
+		}
+	},
+	Literal() {},
+	MemberExpression(mem, context, attrName, scoped, shapes, passedInfo) {
+		if (mem.computed) {
+			// items[idx] — mark the object as indexed, walk both sides
+			collectFromExprIndexed(mem.object, indexVarsOf(mem.property, scoped), context, attrName, scoped, shapes, passedInfo);
+			collectFromIndex(mem.property, scoped, shapes);
+		} else {
+			// user.name — build property chain
+			const propName = (mem.property as acorn.Identifier).name;
+			collectFromExprProperty(mem.object, propName, context, attrName, scoped, shapes, passedInfo);
+		}
+	},
+	UnaryExpression(un, context, attrName, scoped, shapes, passedInfo) {
+		if (un.operator === '!') {
+			collectFromExpr(un.argument, 'boolean', undefined, scoped, shapes, passedInfo);
+		} else {
+			// + or - operators — treat as printed
+			collectFromExpr(un.argument, context, attrName, scoped, shapes, passedInfo);
+		}
+	},
+	ConditionalExpression(cond, context, attrName, scoped, shapes, passedInfo) {
+		collectFromExpr(cond.test, 'boolean', undefined, scoped, shapes, undefined);
+		collectFromExpr(cond.consequent, context, attrName, scoped, shapes, passedInfo);
+		collectFromExpr(cond.alternate, context, attrName, scoped, shapes, passedInfo);
+	},
+	BinaryExpression(bin, context, attrName, scoped, shapes) {
+		collectFromExpr(bin.left, context, attrName, scoped, shapes, undefined);
+		collectFromExpr(bin.right, context, attrName, scoped, shapes, undefined);
+	},
+	// An invalid expression is reported when it is parsed; it records no shape.
+	unsupported() {},
+};
 
 /**
  * Handle non-computed member expression: build a property shape on the root variable.
@@ -269,7 +269,7 @@ function collectFromExprProperty(
 	attrName: string | undefined,
 	scoped: Set<string>,
 	shapes: Map<string, DataShape>,
-	passedInfo?: { partial: string; as: string },
+	passedInfo?: PassedInfo,
 ): void {
 	const leafShape: DataShape = { usages: new Set([context]) };
 	if (context === 'attribute' && attrName) {
@@ -302,39 +302,43 @@ function applyShapeToObject(
 	scoped: Set<string>,
 	shapes: Map<string, DataShape>,
 ): void {
-	switch (objectNode.type) {
-		case 'Identifier': {
-			const id = objectNode as acorn.Identifier;
-			if (scoped.has(id.name)) return;
-			const existing = getOrCreateShape(shapes, id.name);
-			mergeShapeInto(existing, shapeToApply);
-			break;
-		}
-		case 'MemberExpression': {
-			const mem = objectNode as acorn.MemberExpression;
-			if (mem.computed) {
-				// e.g. items[0].name — items is indexed, and we apply property shape
-				const wrapper: DataShape = {
-					usages: new Set(),
-					indexed: true,
-				};
-				const indexVars = indexVarsOf(mem.property, scoped);
-				if (indexVars) wrapper.indexVars = indexVars;
-				mergeShapeInto(wrapper, shapeToApply);
-				applyShapeToObject(mem.object, wrapper, scoped, shapes);
-				collectFromIndex(mem.property, scoped, shapes);
-			} else {
-				const parentPropName = (mem.property as acorn.Identifier).name;
-				const wrapper: DataShape = {
-					usages: new Set(),
-					properties: new Map([[parentPropName, shapeToApply]]),
-				};
-				applyShapeToObject(mem.object, wrapper, scoped, shapes);
-			}
-			break;
-		}
-	}
+	visitBackcode(objectNode, shapeApplier, shapeToApply, scoped, shapes);
 }
+
+// Only a path (an identifier, or a member chain rooted at one) carries a shape.
+// For any other object expression nothing is recorded, including its variables.
+const shapeApplier: BackcodeVisitor<void, [shapeToApply: DataShape, scoped: Set<string>, shapes: Map<string, DataShape>]> = {
+	Identifier(id, shapeToApply, scoped, shapes) {
+		if (scoped.has(id.name)) return;
+		mergeShapeInto(getOrCreateShape(shapes, id.name), shapeToApply);
+	},
+	MemberExpression(mem, shapeToApply, scoped, shapes) {
+		if (mem.computed) {
+			// e.g. items[0].name — items is indexed, and we apply property shape
+			const wrapper: DataShape = {
+				usages: new Set(),
+				indexed: true,
+			};
+			const indexVars = indexVarsOf(mem.property, scoped);
+			if (indexVars) wrapper.indexVars = indexVars;
+			mergeShapeInto(wrapper, shapeToApply);
+			applyShapeToObject(mem.object, wrapper, scoped, shapes);
+			collectFromIndex(mem.property, scoped, shapes);
+		} else {
+			const parentPropName = (mem.property as acorn.Identifier).name;
+			const wrapper: DataShape = {
+				usages: new Set(),
+				properties: new Map([[parentPropName, shapeToApply]]),
+			};
+			applyShapeToObject(mem.object, wrapper, scoped, shapes);
+		}
+	},
+	Literal() {},
+	UnaryExpression() {},
+	ConditionalExpression() {},
+	BinaryExpression() {},
+	unsupported() {},
+};
 
 /**
  * Handle computed member expression object side: mark as indexed.
@@ -346,7 +350,7 @@ function collectFromExprIndexed(
 	attrName: string | undefined,
 	scoped: Set<string>,
 	shapes: Map<string, DataShape>,
-	passedInfo?: { partial: string; as: string },
+	passedInfo?: PassedInfo,
 ): void {
 	const indexedShape: DataShape = { usages: new Set([context]), indexed: true };
 	if (indexVars) indexedShape.indexVars = indexVars;
@@ -367,7 +371,7 @@ function collectFromParsed(
 	attrName: string | undefined,
 	scoped: Set<string>,
 	shapes: Map<string, DataShape>,
-	passedInfo?: { partial: string; as: string },
+	passedInfo?: PassedInfo,
 ): void {
 	if (!parsed.expr) {
 		// No AST available — fall back to vars list

@@ -1,21 +1,4 @@
 import * as acorn from 'acorn';
-//import * as walk from 'npm:acorn-walk';
-
-// what we need to support at a minimum:
-// - abc.def
-// - abc[ ...recusrive... ]
-// - equality [StmtExpr] == [StmtExpr]
-// - comparison > < >= <=
-// - && and || (maybe later)
-
-// nodes we want to interpret correctly:
-// - Program (just once at the beginning)
-// - ExpressionStatement (just once.)
-// - MemberExpression
-// - Identifier
-// - Literal
-// - UnaryExpression
-// - ConditionalExpression (ternary)
 
 export type Parsed = {
 	expr: acorn.ExpressionStatement | undefined,
@@ -23,18 +6,56 @@ export type Parsed = {
 	vars: string[]
 }
 
-//console.log(acorn.parse("abc.def.hghi", {ecmaVersion: 2020}));
+// --- Backcode node set and visitor ---
 
-// const result = interpretBackcode("abc.def['adf']");
-// console.log(result.vars, result.errs);
+// The acorn nodes backcode allows. Every walker over backcode is a
+// BackcodeVisitor, so adding a node here is a type error in each walker until
+// it handles the new node.
+export type BackcodeNode =
+	| acorn.Identifier
+	| acorn.Literal
+	| acorn.MemberExpression
+	| acorn.UnaryExpression
+	| acorn.ConditionalExpression
+	| acorn.BinaryExpression;
 
+type BackcodeNodeType = BackcodeNode['type'];
+
+const BACKCODE_NODE_TYPES: Record<BackcodeNodeType, true> = {
+	Identifier: true,
+	Literal: true,
+	MemberExpression: true,
+	UnaryExpression: true,
+	ConditionalExpression: true,
+	BinaryExpression: true,
+};
+
+export function isBackcodeNode(node: acorn.AnyNode): node is BackcodeNode {
+	return Object.hasOwn(BACKCODE_NODE_TYPES, node.type);
+}
+
+// One handler per backcode node, plus `unsupported` for any other node.
+// Expressions with errors still reach the walkers, so each one decides what an
+// unsupported node means to it. `A` is the extra arguments every handler takes.
+export type BackcodeVisitor<R, A extends unknown[] = []> = {
+	[T in BackcodeNodeType]: (node: Extract<BackcodeNode, { type: T }>, ...args: A) => R;
+} & {
+	unsupported: (node: acorn.AnyNode, ...args: A) => R;
+};
+
+export function visitBackcode<R, A extends unknown[]>(
+	node: acorn.AnyNode,
+	visitor: BackcodeVisitor<R, A>,
+	...args: A
+): R {
+	if (!isBackcodeNode(node)) return visitor.unsupported(node, ...args);
+	const handler = visitor[node.type] as (node: BackcodeNode, ...args: A) => R;
+	return handler(node, ...args);
+}
+
+// --- Parsing and validation ---
 
 export function interpretBackcode(code :string) :Parsed {
-	// what we want in return:
-	// - ast that can be used to generate code in various languages
-	// - validation that nothing disallowed is in there.
-	// - list of input vars
-	// - maybe expected return value? like bool...?
 	const ret :Parsed = {expr: undefined, errs:[], vars:[]};
 	let ast :acorn.Program | undefined;
 	try {
@@ -45,24 +66,15 @@ export function interpretBackcode(code :string) :Parsed {
 		ret.errs.push(e+'');
 		return ret;
 	}
-	// walk.full(ast, (node) => {
-	// 	console.log("node:", node.type);
-	// } );
 	const {expr, err} = getProgramExpression(ast);
 	if( err ) ret.errs.push(err);
 	if( !expr ) {
 		return ret;	// can't continue.
 	}
-	if( expr ) ret.expr = expr;
+	ret.expr = expr;
 	const collected :string[] = [];
-	interpretNode(expr.expression, true, ret.errs, collected)
-	const seen = new Set<string>();
-	for (const v of collected) {
-		if (!seen.has(v)) {
-			seen.add(v);
-			ret.vars.push(v);
-		}
-	}
+	visitBackcode(expr.expression, validator, ret.errs, collected);
+	ret.vars = [...new Set(collected)];
 	return ret;
 }
 
@@ -75,59 +87,41 @@ function getProgramExpression(prog :acorn.Program) :{expr: acorn.ExpressionState
 	return {expr:node, err:undefined};
 }
 
-function interpretNode(node:acorn.AnyNode, computed: boolean, errs: string[], vars: string[]) {
-	switch (node.type) {
-		case 'Identifier':
-			if( computed ) vars.push(node.name);
-			break;
-		case 'Literal':
-			// nothing to do?
-			break;
-		case 'MemberExpression':
-			interpretMemberExpression(node, computed, errs, vars);
-			break;
-		case 'UnaryExpression':
-			interpretUnaryExpression(node, computed, errs, vars);
-			break;
-		case 'ConditionalExpression':
-			interpretConditionalExpression(node, errs, vars);
-			break;
-		case 'BinaryExpression':
-			interpretBinaryExpression(node, errs, vars);
-			break;
-		default:
-			errs.push(`invalid node: ${node.type}`);
-			break;
-	}
-}
-
 const ALLOWED_BINARY_OPERATORS = new Set(['==', '!=', '+', '<', '>', '<=', '>=']);
+const ALLOWED_UNARY_OPERATORS = new Set(['!', '+', '-']);
 
-function interpretBinaryExpression(node:acorn.BinaryExpression, errs: string[], vars: string[]) {
-	if (!ALLOWED_BINARY_OPERATORS.has(node.operator)) {
-		errs.push(`unsupported binary operator: ${node.operator}`);
-		return;
-	}
-	interpretNode(node.left, true, errs, vars);
-	interpretNode(node.right, true, errs, vars);
-}
-
-function interpretUnaryExpression(node:acorn.UnaryExpression, computed:boolean, errs: string[], vars: string[]) {
-	if (node.operator !== '!' && node.operator !== '+' && node.operator !== '-') {
-		errs.push(`unsupported unary operator: ${node.operator}`);
-		return;
-	}
-	interpretNode(node.argument, computed, errs, vars);
-}
-
-function interpretMemberExpression(node:acorn.MemberExpression, computed:boolean, errs: string[], vars: string[]) {
-	// object and property..
-	interpretNode(node.object, computed, errs, vars);
-	interpretNode(node.property, node.computed, errs, vars);
-}
-
-function interpretConditionalExpression(node:acorn.ConditionalExpression, errs: string[], vars: string[]) {
-	interpretNode(node.test, true, errs, vars);
-	interpretNode(node.consequent, true, errs, vars);
-	interpretNode(node.alternate, true, errs, vars);
-}
+// Reports disallowed constructs into `errs` and collects free variables into `vars`.
+const validator: BackcodeVisitor<void, [errs: string[], vars: string[]]> = {
+	Identifier(node, _errs, vars) {
+		vars.push(node.name);
+	},
+	Literal() {},
+	MemberExpression(node, errs, vars) {
+		visitBackcode(node.object, validator, errs, vars);
+		// A non-computed property is a name, not a variable.
+		if (node.computed) visitBackcode(node.property, validator, errs, vars);
+	},
+	UnaryExpression(node, errs, vars) {
+		if (!ALLOWED_UNARY_OPERATORS.has(node.operator)) {
+			errs.push(`unsupported unary operator: ${node.operator}`);
+			return;
+		}
+		visitBackcode(node.argument, validator, errs, vars);
+	},
+	ConditionalExpression(node, errs, vars) {
+		visitBackcode(node.test, validator, errs, vars);
+		visitBackcode(node.consequent, validator, errs, vars);
+		visitBackcode(node.alternate, validator, errs, vars);
+	},
+	BinaryExpression(node, errs, vars) {
+		if (!ALLOWED_BINARY_OPERATORS.has(node.operator)) {
+			errs.push(`unsupported binary operator: ${node.operator}`);
+			return;
+		}
+		visitBackcode(node.left, validator, errs, vars);
+		visitBackcode(node.right, validator, errs, vars);
+	},
+	unsupported(node, errs) {
+		errs.push(`invalid node: ${node.type}`);
+	},
+};

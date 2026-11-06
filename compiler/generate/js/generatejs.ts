@@ -1,4 +1,4 @@
-import type { Parsed } from '../../backcode.js';
+import { visitBackcode, type BackcodeVisitor, type Parsed } from '../../backcode.js';
 import * as acorn from 'acorn';
 
 export function generateFunction(name:string, parsed :Parsed) :string {
@@ -8,29 +8,22 @@ export function generateStatement(node :acorn.ExpressionStatement) :string {
 	return generateNode(node.expression);
 }
 
-function generateNode(node:acorn.AnyNode) :string {
-	switch (node.type) {
-		case 'Identifier':
-			return node.name;
-		case 'Literal':
-			return node.raw!;	// there should be a raw!
-		case 'MemberExpression':
-			return generateMemberExpression(node);
-		case 'UnaryExpression':
-			return node.operator + generateNode(node.argument);
-		case 'ConditionalExpression':
-			return '(' + generateNode(node.test) + ' ? ' + generateNode(node.consequent) + ' : ' + generateNode(node.alternate) + ')';
-		case 'BinaryExpression':
-			return '(' + generateNode(node.left) + ' ' + node.operator + ' ' + generateNode(node.right) + ')';
-		default:
-			throw new Error(`invalid node: ${node.type}`);
-	}
+function generateNode(node: acorn.AnyNode): string {
+	return visitBackcode(node, jsGenerator);
 }
 
-function generateMemberExpression(node:acorn.MemberExpression) :string {
-	if( node.computed ) {
-		return generateNode(node.object) + '['+generateNode(node.property)+']';
-	} else {
-		return generateNode(node.object) + '.' + generateNode(node.property);
-	}
-}
+const jsGenerator: BackcodeVisitor<string> = {
+	Identifier: (node) => node.name,
+	Literal: (node) => node.raw!,
+	MemberExpression: (node) => node.computed
+		? generateNode(node.object) + '[' + generateNode(node.property) + ']'
+		: generateNode(node.object) + '.' + (node.property as acorn.Identifier).name,
+	UnaryExpression: (node) => node.operator + generateNode(node.argument),
+	ConditionalExpression: (node) =>
+		'(' + generateNode(node.test) + ' ? ' + generateNode(node.consequent) + ' : ' + generateNode(node.alternate) + ')',
+	BinaryExpression: (node) =>
+		'(' + generateNode(node.left) + ' ' + node.operator + ' ' + generateNode(node.right) + ')',
+	unsupported: (node) => {
+		throw new Error(`invalid node: ${node.type}`);
+	},
+};

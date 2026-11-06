@@ -1,4 +1,4 @@
-import type { Parsed } from '../../backcode.js';
+import { visitBackcode, type BackcodeVisitor, type Parsed } from '../../backcode.js';
 import * as acorn from 'acorn';
 
 export function generatePhpFunction(name: string, parsed: Parsed): string {
@@ -7,68 +7,41 @@ export function generatePhpFunction(name: string, parsed: Parsed): string {
 }
 
 export function generatePhpStatement(node: acorn.ExpressionStatement): string {
-	return generatePhpNode(node.expression, true);
+	return generatePhpNode(node.expression);
 }
 
-function generatePhpNode(node: acorn.AnyNode, computed: boolean): string {
-	switch (node.type) {
-		case 'Identifier':
-			if (computed) {
-				return `$${node.name}`;
-			} else {
-				return node.name;
-			}
-		case 'Literal':
-			return node.raw!;
-		case 'MemberExpression':
-			return generatePhpMemberExpression(node);
-		case 'UnaryExpression': {
-			const arg = generatePhpNode(node.argument, true);
-			if (node.operator === '!') {
-				return '!backflip_isTruthy(' + arg + ')';
-			}
-			return node.operator + arg;
-		}
-		case 'ConditionalExpression':
-			return '(backflip_isTruthy(' + generatePhpNode(node.test, true) + ') ? ' + generatePhpNode(node.consequent, true) + ' : ' + generatePhpNode(node.alternate, true) + ')';
-		case 'BinaryExpression': {
-			const left = generatePhpNode(node.left, true);
-			const right = generatePhpNode(node.right, true);
-			if (node.operator === '+') {
-				return `backflip_jsPlus(${left}, ${right})`;
-			}
-			if (node.operator === '==') {
-				return `backflip_jsLooseEq(${left}, ${right})`;
-			}
-			if (node.operator === '!=') {
-				return `!backflip_jsLooseEq(${left}, ${right})`;
-			}
-			if (node.operator === '<') {
-				return `backflip_jsLessThan(${left}, ${right})`;
-			}
-			if (node.operator === '>') {
-				return `backflip_jsLessThan(${right}, ${left})`;
-			}
-			if (node.operator === '<=') {
-				return `backflip_jsLessOrEq(${left}, ${right})`;
-			}
-			if (node.operator === '>=') {
-				return `backflip_jsLessOrEq(${right}, ${left})`;
-			}
-			return '(' + left + ' ' + node.operator + ' ' + right + ')';
-		}
-		default:
-			throw new Error(`invalid node: ${node.type}`);
-	}
+function generatePhpNode(node: acorn.AnyNode): string {
+	return visitBackcode(node, phpGenerator);
 }
 
-function generatePhpMemberExpression(node: acorn.MemberExpression): string {
-	const object = generatePhpNode(node.object, true);
-	if (node.computed) {
-		const property = generatePhpNode(node.property, true);
-		return `${object}[${property}]`;
-	} else {
-		const property = generatePhpNode(node.property, false);
-		return `${object}['${property}']`;
-	}
-}
+const phpGenerator: BackcodeVisitor<string> = {
+	Identifier: (node) => `$${node.name}`,
+	Literal: (node) => node.raw!,
+	MemberExpression: (node) => {
+		const object = generatePhpNode(node.object);
+		if (node.computed) return `${object}[${generatePhpNode(node.property)}]`;
+		return `${object}['${(node.property as acorn.Identifier).name}']`;
+	},
+	UnaryExpression: (node) => {
+		const arg = generatePhpNode(node.argument);
+		if (node.operator === '!') return '!backflip_isTruthy(' + arg + ')';
+		return node.operator + arg;
+	},
+	ConditionalExpression: (node) =>
+		'(backflip_isTruthy(' + generatePhpNode(node.test) + ') ? ' + generatePhpNode(node.consequent) + ' : ' + generatePhpNode(node.alternate) + ')',
+	BinaryExpression: (node) => {
+		const left = generatePhpNode(node.left);
+		const right = generatePhpNode(node.right);
+		if (node.operator === '+') return `backflip_jsPlus(${left}, ${right})`;
+		if (node.operator === '==') return `backflip_jsLooseEq(${left}, ${right})`;
+		if (node.operator === '!=') return `!backflip_jsLooseEq(${left}, ${right})`;
+		if (node.operator === '<') return `backflip_jsLessThan(${left}, ${right})`;
+		if (node.operator === '>') return `backflip_jsLessThan(${right}, ${left})`;
+		if (node.operator === '<=') return `backflip_jsLessOrEq(${left}, ${right})`;
+		if (node.operator === '>=') return `backflip_jsLessOrEq(${right}, ${left})`;
+		return '(' + left + ' ' + node.operator + ' ' + right + ')';
+	},
+	unsupported: (node) => {
+		throw new Error(`invalid node: ${node.type}`);
+	},
+};
